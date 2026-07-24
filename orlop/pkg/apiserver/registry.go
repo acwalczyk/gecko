@@ -30,6 +30,7 @@ type StorageFactory func(resourceType string, scheme *runtime.Scheme, gvk runtim
 type ResourceRegistry struct {
 	resources      []ResourceInfo
 	stores         map[string]storage.ResourceStore
+	storageGVKs    map[string]runtimeschema.GroupVersionKind
 	scheme         *runtime.Scheme
 	storageFactory StorageFactory
 	logger         logr.Logger
@@ -57,9 +58,10 @@ func WithLogger(logger logr.Logger) RegistryOption {
 // NewResourceRegistry creates a new resource registry.
 func NewResourceRegistry(scheme *runtime.Scheme, opts ...RegistryOption) *ResourceRegistry {
 	r := &ResourceRegistry{
-		resources: []ResourceInfo{},
-		stores:    make(map[string]storage.ResourceStore),
-		scheme:    scheme,
+		resources:   []ResourceInfo{},
+		stores:      make(map[string]storage.ResourceStore),
+		storageGVKs: make(map[string]runtimeschema.GroupVersionKind),
+		scheme:      scheme,
 		// Default to in-memory storage
 		storageFactory: func(resourceType string, scheme *runtime.Scheme, gvk runtimeschema.GroupVersionKind) (storage.ResourceStore, error) {
 			return memory.NewMemoryStore(resourceType, scheme, gvk), nil
@@ -75,16 +77,22 @@ func NewResourceRegistry(scheme *runtime.Scheme, opts ...RegistryOption) *Resour
 }
 
 // Register adds a resource to the registry and creates its store using the configured storage factory.
+// Multiple versions of the same resource (same plural name) share a single store.
+// The first registered version becomes the storage version.
 func (r *ResourceRegistry) Register(info ResourceInfo) error {
 	r.resources = append(r.resources, info)
 
-	// Create store using the storage factory
+	if _, exists := r.stores[info.Plural]; exists {
+		return nil
+	}
+
 	store, err := r.storageFactory(info.Plural, r.scheme, info.GVK)
 	if err != nil {
 		return fmt.Errorf("failed to create storage for %s: %w", info.Plural, err)
 	}
 
 	r.stores[info.Plural] = store
+	r.storageGVKs[info.Plural] = info.GVK
 	return nil
 }
 
@@ -131,6 +139,11 @@ func (r *ResourceRegistry) CreateHandler(info ResourceInfo) (*handlers.ResourceH
 		r.scheme,
 		r.logger.WithValues("resource", info.Plural),
 	)
+
+	// Set storage GVK for version conversion when serving a non-storage version
+	if storageGVK, ok := r.storageGVKs[info.Plural]; ok && storageGVK != info.GVK {
+		handler.SetStorageGVK(storageGVK)
+	}
 
 	// Create and set apply manager for server-side apply support
 	structural, err := schema.NewStructural(processor.GetValidationSchema())

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	privatev1 "github.com/openshift-online/gecko/orlop/apis/private/test/v1"
+	privatev2 "github.com/openshift-online/gecko/orlop/apis/private/test/v2"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver"
 	"k8s.io/apimachinery/pkg/runtime"
 	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
@@ -26,11 +27,15 @@ var (
 )
 
 func TestMain(m *testing.M) {
-	// Create scheme and register test types
+	// Create scheme and register test types (both v1 and v2)
 	scheme := runtime.NewScheme()
 	privatev1.AddToScheme(scheme)
+	privatev2.AddToScheme(scheme)
 
-	// Define test resources
+	// Define test resources.
+	// v1 is registered first so it becomes the storage version.
+	// v2 uses the same plural name, so it shares the v1 store and
+	// objects are automatically converted between versions.
 	privateResources := []apiserver.ResourceInfo{
 		{
 			GVK: runtimeschema.GroupVersionKind{
@@ -51,6 +56,26 @@ func TestMain(m *testing.M) {
 			Plural:     privatev1.OtherResourceInfo.Plural,
 			Namespaced: true,
 			SchemaYAML: privatev1.OtherSchemaYAML,
+		},
+		{
+			GVK: runtimeschema.GroupVersionKind{
+				Group:   "test.orlop.thetechnick.ninja",
+				Version: "v2",
+				Kind:    "Object",
+			},
+			Plural:     privatev2.ObjectResourceInfo.Plural,
+			Namespaced: true,
+			SchemaYAML: privatev2.ObjectSchemaYAML,
+		},
+		{
+			GVK: runtimeschema.GroupVersionKind{
+				Group:   "test.orlop.thetechnick.ninja",
+				Version: "v2",
+				Kind:    "Other",
+			},
+			Plural:     privatev2.OtherResourceInfo.Plural,
+			Namespaced: true,
+			SchemaYAML: privatev2.OtherSchemaYAML,
 		},
 	}
 

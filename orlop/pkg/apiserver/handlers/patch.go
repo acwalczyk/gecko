@@ -44,6 +44,13 @@ func (h *ResourceHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Convert to serving version so patches operate in the client's schema
+	existing, err = h.convertToServingVersion(existing)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to convert object version: %v", err))
+		return
+	}
+
 	// Read patch body
 	patchBytes, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -158,9 +165,23 @@ func (h *ResourceHandler) processPatchedObject(w http.ResponseWriter, r *http.Re
 	// Set GVK
 	clientObj.GetObjectKind().SetGroupVersionKind(h.gvk)
 
+	// Convert to storage version before storing
+	storeObj, err := h.convertToStorageVersion(clientObj)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to convert object version: %v", err))
+		return
+	}
+
 	// Update object
-	if err := h.store.Update(r.Context(), clientObj); err != nil {
+	if err := h.store.Update(r.Context(), storeObj); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update object: %v", err))
+		return
+	}
+
+	// Convert back to serving version for response
+	responseObj, err := h.convertToServingVersion(storeObj)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to convert response version: %v", err))
 		return
 	}
 
@@ -169,7 +190,7 @@ func (h *ResourceHandler) processPatchedObject(w http.ResponseWriter, r *http.Re
 	// Return updated object
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(clientObj)
+	json.NewEncoder(w).Encode(responseObj)
 }
 
 // jsonPatch applies a JSON Patch (RFC 6902) to the original JSON.
