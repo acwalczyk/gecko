@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -17,7 +18,7 @@ import (
 // It periodically scans all objects and deletes those whose owners no longer exist.
 // When broadcasters implement storage.EventPruner, old events are pruned each cycle.
 type Collector struct {
-	stores         map[string]storage.ResourceStore
+	stores         map[runtimeschema.GroupKind]storage.ResourceStore
 	broadcasters   []storage.EventBroadcaster
 	eventRetention time.Duration
 	interval       time.Duration
@@ -27,7 +28,7 @@ type Collector struct {
 }
 
 // NewCollector creates a new garbage collector.
-func NewCollector(stores map[string]storage.ResourceStore, interval time.Duration, logger logr.Logger) *Collector {
+func NewCollector(stores map[runtimeschema.GroupKind]storage.ResourceStore, interval time.Duration, logger logr.Logger) *Collector {
 	if logger.GetSink() == nil {
 		logger = logr.Discard()
 	}
@@ -94,17 +95,17 @@ func (c *Collector) collectGarbage() {
 
 	ctx := context.Background()
 
-	for resourceType, store := range c.stores {
+	for gk, store := range c.stores {
 		// List all objects in this store
 		list, err := store.List(ctx, storage.ListOptions{})
 		if err != nil {
-			c.logger.Error(err, "Failed to list objects for GC", "resourceType", resourceType)
+			c.logger.Error(err, "Failed to list objects for GC", "groupKind", gk)
 			continue
 		}
 
 		items, err := meta.ExtractList(list)
 		if err != nil {
-			c.logger.Error(err, "Failed to extract list items", "resourceType", resourceType)
+			c.logger.Error(err, "Failed to extract list items", "groupKind", gk)
 			continue
 		}
 

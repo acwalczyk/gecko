@@ -67,7 +67,9 @@ func newObjWithOwnerRef(name, namespace, ownerName, ownerKind, ownerUID string) 
 
 // runOneGCCycle starts the collector and waits long enough for one
 // collectGarbage() call (which runs immediately on Start), then cancels.
-func runOneGCCycle(stores map[string]storage.ResourceStore) {
+var testGK = schema.GroupKind{Group: "test.example.com", Kind: "TestObject"}
+
+func runOneGCCycle(stores map[schema.GroupKind]storage.ResourceStore) {
 	c := NewCollector(stores, time.Hour, logr.Discard())
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -89,8 +91,8 @@ func TestCollector_ObjectWithoutOwnerRefs_NotDeleted(t *testing.T) {
 		t.Fatalf("Create failed: %v", err)
 	}
 
-	stores := map[string]storage.ResourceStore{
-		"objects": store,
+	stores := map[schema.GroupKind]storage.ResourceStore{
+		testGK: store,
 	}
 	runOneGCCycle(stores)
 
@@ -117,8 +119,8 @@ func TestCollector_ObjectWithValidOwnerRef_NotDeleted(t *testing.T) {
 		t.Fatalf("Create dependent failed: %v", err)
 	}
 
-	stores := map[string]storage.ResourceStore{
-		"objects": store,
+	stores := map[schema.GroupKind]storage.ResourceStore{
+		testGK: store,
 	}
 	runOneGCCycle(stores)
 
@@ -139,8 +141,8 @@ func TestCollector_ObjectWithMissingOwnerRef_Deleted(t *testing.T) {
 		t.Fatalf("Create dependent failed: %v", err)
 	}
 
-	stores := map[string]storage.ResourceStore{
-		"objects": store,
+	stores := map[schema.GroupKind]storage.ResourceStore{
+		testGK: store,
 	}
 	runOneGCCycle(stores)
 
@@ -174,9 +176,11 @@ func TestCollector_MultipleStoresScanned(t *testing.T) {
 		t.Fatalf("Create orphan failed: %v", err)
 	}
 
-	stores := map[string]storage.ResourceStore{
-		"kindA": storeA,
-		"kindB": storeB,
+	gkA := schema.GroupKind{Group: "test.example.com", Kind: "KindA"}
+	gkB := schema.GroupKind{Group: "test.example.com", Kind: "KindB"}
+	stores := map[schema.GroupKind]storage.ResourceStore{
+		gkA: storeA,
+		gkB: storeB,
 	}
 	runOneGCCycle(stores)
 
@@ -210,8 +214,8 @@ func (m *mockPrunerBroadcaster) PruneOldEvents(_ context.Context, olderThan time
 
 func TestCollector_PrunesOldEvents(t *testing.T) {
 	store := newTestMemoryStore("objects")
-	stores := map[string]storage.ResourceStore{
-		"objects": store,
+	stores := map[schema.GroupKind]storage.ResourceStore{
+		testGK: store,
 	}
 
 	pruner := &mockPrunerBroadcaster{}
@@ -241,8 +245,8 @@ func TestCollector_PrunesOldEvents(t *testing.T) {
 
 func TestCollector_SkipsBroadcasterWithoutPruner(t *testing.T) {
 	store := newTestMemoryStore("objects")
-	stores := map[string]storage.ResourceStore{
-		"objects": store,
+	stores := map[schema.GroupKind]storage.ResourceStore{
+		testGK: store,
 	}
 
 	broadcaster := memory.NewWatcher(10)
@@ -264,8 +268,8 @@ func TestCollector_SkipsBroadcasterWithoutPruner(t *testing.T) {
 
 func TestCollector_StopEndsCollector(t *testing.T) {
 	store := newTestMemoryStore("objects")
-	stores := map[string]storage.ResourceStore{
-		"objects": store,
+	stores := map[schema.GroupKind]storage.ResourceStore{
+		testGK: store,
 	}
 
 	c := NewCollector(stores, time.Hour, logr.Discard())

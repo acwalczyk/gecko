@@ -2,6 +2,7 @@ package apiserver
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/go-logr/logr"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/apply"
@@ -24,13 +25,21 @@ type ResourceInfo = types.ResourceInfo
 
 // StorageFactory is a function that creates a storage.ResourceStore for a given resource.
 // This allows custom storage backends (PostgreSQL, etc.) to be used instead of the default memory store.
+// The resourceType string is derived from the GroupKind and used for database table/channel naming.
 type StorageFactory func(resourceType string, scheme *runtime.Scheme, gvk runtimeschema.GroupVersionKind) (storage.ResourceStore, error)
+
+// GroupKindResourceType returns a stable string identifier for a GroupKind,
+// used for database table names, channel names, and error messages.
+// Format: "{group}_{kind}" lowercased, e.g. "test.orlop.thetechnick.ninja_object".
+func GroupKindResourceType(gk runtimeschema.GroupKind) string {
+	return strings.ToLower(gk.Group + "_" + gk.Kind)
+}
 
 // ResourceRegistry manages API resource registrations and their stores.
 type ResourceRegistry struct {
 	resources      []ResourceInfo
-	stores         map[string]storage.ResourceStore
-	storageGVKs    map[string]runtimeschema.GroupVersionKind
+	stores         map[runtimeschema.GroupKind]storage.ResourceStore
+	storageGVKs    map[runtimeschema.GroupKind]runtimeschema.GroupVersionKind
 	scheme         *runtime.Scheme
 	storageFactory StorageFactory
 	logger         logr.Logger
@@ -59,8 +68,8 @@ func WithLogger(logger logr.Logger) RegistryOption {
 func NewResourceRegistry(scheme *runtime.Scheme, opts ...RegistryOption) *ResourceRegistry {
 	r := &ResourceRegistry{
 		resources:   []ResourceInfo{},
-		stores:      make(map[string]storage.ResourceStore),
-		storageGVKs: make(map[string]runtimeschema.GroupVersionKind),
+		stores:      make(map[runtimeschema.GroupKind]storage.ResourceStore),
+		storageGVKs: make(map[runtimeschema.GroupKind]runtimeschema.GroupVersionKind),
 		scheme:      scheme,
 		// Default to in-memory storage
 		storageFactory: func(resourceType string, scheme *runtime.Scheme, gvk runtimeschema.GroupVersionKind) (storage.ResourceStore, error) {
@@ -82,27 +91,29 @@ func NewResourceRegistry(scheme *runtime.Scheme, opts ...RegistryOption) *Resour
 func (r *ResourceRegistry) Register(info ResourceInfo) error {
 	r.resources = append(r.resources, info)
 
-	if _, exists := r.stores[info.Plural]; exists {
+	gk := info.GVK.GroupKind()
+	if _, exists := r.stores[gk]; exists {
 		return nil
 	}
 
-	store, err := r.storageFactory(info.Plural, r.scheme, info.GVK)
+	resourceType := GroupKindResourceType(gk)
+	store, err := r.storageFactory(resourceType, r.scheme, info.GVK)
 	if err != nil {
-		return fmt.Errorf("failed to create storage for %s: %w", info.Plural, err)
+		return fmt.Errorf("failed to create storage for %s: %w", resourceType, err)
 	}
 
-	r.stores[info.Plural] = store
-	r.storageGVKs[info.Plural] = info.GVK
+	r.stores[gk] = store
+	r.storageGVKs[gk] = info.GVK
 	return nil
 }
 
-// GetStore returns the store for a given resource plural name.
-func (r *ResourceRegistry) GetStore(plural string) storage.ResourceStore {
-	return r.stores[plural]
+// GetStore returns the store for a given GroupKind.
+func (r *ResourceRegistry) GetStore(gk runtimeschema.GroupKind) storage.ResourceStore {
+	return r.stores[gk]
 }
 
-// GetStores returns all stores indexed by resource plural name.
-func (r *ResourceRegistry) GetStores() map[string]storage.ResourceStore {
+// GetStores returns all stores indexed by GroupKind.
+func (r *ResourceRegistry) GetStores() map[runtimeschema.GroupKind]storage.ResourceStore {
 	return r.stores
 }
 
@@ -119,9 +130,10 @@ func (r *ResourceRegistry) GetResources() []ResourceInfo {
 // CreateHandler creates a ResourceHandler for the given resource info.
 func (r *ResourceRegistry) CreateHandler(info ResourceInfo) (*handlers.ResourceHandler, error) {
 	// Get store for this resource
-	store := r.GetStore(info.Plural)
+	gk := info.GVK.GroupKind()
+	store := r.GetStore(gk)
 	if store == nil {
-		return nil, fmt.Errorf("no store found for resource %s", info.Plural)
+		return nil, fmt.Errorf("no store found for resource %s", gk)
 	}
 
 	// Create schema processor
@@ -141,7 +153,7 @@ func (r *ResourceRegistry) CreateHandler(info ResourceInfo) (*handlers.ResourceH
 	)
 
 	// Set storage GVK for version conversion when serving a non-storage version
-	if storageGVK, ok := r.storageGVKs[info.Plural]; ok && storageGVK != info.GVK {
+	if storageGVK, ok := r.storageGVKs[gk]; ok && storageGVK != info.GVK {
 		handler.SetStorageGVK(storageGVK)
 	}
 
@@ -165,9 +177,10 @@ func (r *ResourceRegistry) CreateHandler(info ResourceInfo) (*handlers.ResourceH
 // CreateConvertingHandler creates a ConvertingResourceHandler for the given resource info.
 func (r *ResourceRegistry) CreateConvertingHandler(converter interface{}, privateScheme *runtime.Scheme, info ResourceInfo) (interface{}, error) {
 	// Get store for this resource
-	store := r.GetStore(info.Plural)
+	gk := info.GVK.GroupKind()
+	store := r.GetStore(gk)
 	if store == nil {
-		return nil, fmt.Errorf("no store found for resource %s", info.Plural)
+		return nil, fmt.Errorf("no store found for resource %s", gk)
 	}
 
 	// Create schema processor

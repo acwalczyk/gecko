@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -77,26 +78,27 @@ func main() {
 
 	// Create stores and broadcasters for all resources
 	ctx := context.Background()
-	stores := make(map[string]storage.ResourceStore)
+	stores := make(map[runtimeschema.GroupKind]storage.ResourceStore)
 	var broadcasters []storage.EventBroadcaster
 	for _, res := range resources {
+		resourceType := strings.ToLower(res.GVK.Group + "_" + res.GVK.Kind)
 		broadcaster, err := postgres.NewPostgresBroadcaster(ctx, postgres.PostgresBroadcasterConfig{
 			DB:          db,
 			ConnString:  connStr,
-			ChannelName: "events_" + res.Plural,
-			TableName:   "event_log_" + res.Plural,
+			ChannelName: "events_" + resourceType,
+			TableName:   "event_log_" + resourceType,
 			Scheme:      scheme,
 			GVK:         res.GVK,
 		})
 		if err != nil {
-			logger.Error(err, "Failed to create broadcaster", "resource", res.Plural)
+			logger.Error(err, "Failed to create broadcaster", "groupKind", res.GVK.GroupKind())
 			os.Exit(1)
 		}
 		broadcasters = append(broadcasters, broadcaster)
 
 		config := postgres.PostgresStoreConfig{
 			DB:           db,
-			ResourceType: res.Plural,
+			ResourceType: resourceType,
 			Scheme:       scheme,
 			GVK:          res.GVK,
 			Broadcaster:  broadcaster,
@@ -104,11 +106,11 @@ func main() {
 
 		store, err := postgres.NewPostgresStore(ctx, config)
 		if err != nil {
-			logger.Error(err, "Failed to create store", "resource", res.Plural)
+			logger.Error(err, "Failed to create store", "groupKind", res.GVK.GroupKind())
 			os.Exit(1)
 		}
-		stores[res.Plural] = store
-		logger.Info("Created store for resource", "resource", res.Plural)
+		stores[res.GVK.GroupKind()] = store
+		logger.Info("Created store for resource", "groupKind", res.GVK.GroupKind())
 	}
 
 	// Create and start garbage collector
