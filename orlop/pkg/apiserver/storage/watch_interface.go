@@ -1,9 +1,18 @@
 package storage
 
 import (
+	"context"
+	"time"
+
 	"k8s.io/apimachinery/pkg/labels"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
+
+// EventPruner is an optional interface that EventBroadcaster implementations
+// can support to delete old events from persistent storage.
+type EventPruner interface {
+	PruneOldEvents(ctx context.Context, olderThan time.Duration) error
+}
 
 // EventBroadcaster defines the interface for broadcasting watch events.
 // Implementations can use in-memory channels, database change streams,

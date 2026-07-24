@@ -22,6 +22,7 @@ import (
 func main() {
 	var (
 		interval       time.Duration
+		eventRetention time.Duration
 		dbHost         string
 		dbPort         int
 		dbName         string
@@ -32,6 +33,7 @@ func main() {
 	)
 
 	flag.DurationVar(&interval, "interval", 30*time.Second, "garbage collection interval")
+	flag.DurationVar(&eventRetention, "event-retention", 24*time.Hour, "how long to retain resource events before pruning")
 	flag.StringVar(&dbHost, "db-host", "localhost", "PostgreSQL host")
 	flag.IntVar(&dbPort, "db-port", 5432, "PostgreSQL port")
 	flag.StringVar(&dbName, "db-name", "orlop", "PostgreSQL database name")
@@ -73,15 +75,31 @@ func main() {
 
 	logger.Info("Connected to database")
 
-	// Create stores for all resources
+	// Create stores and broadcasters for all resources
 	ctx := context.Background()
 	stores := make(map[string]storage.ResourceStore)
+	var broadcasters []storage.EventBroadcaster
 	for _, res := range resources {
+		broadcaster, err := postgres.NewPostgresBroadcaster(ctx, postgres.PostgresBroadcasterConfig{
+			DB:          db,
+			ConnString:  connStr,
+			ChannelName: "events_" + res.Plural,
+			TableName:   "event_log_" + res.Plural,
+			Scheme:      scheme,
+			GVK:         res.GVK,
+		})
+		if err != nil {
+			logger.Error(err, "Failed to create broadcaster", "resource", res.Plural)
+			os.Exit(1)
+		}
+		broadcasters = append(broadcasters, broadcaster)
+
 		config := postgres.PostgresStoreConfig{
 			DB:           db,
 			ResourceType: res.Plural,
 			Scheme:       scheme,
 			GVK:          res.GVK,
+			Broadcaster:  broadcaster,
 		}
 
 		store, err := postgres.NewPostgresStore(ctx, config)
@@ -95,6 +113,8 @@ func main() {
 
 	// Create and start garbage collector
 	collector := gc.NewCollector(stores, interval, logger)
+	collector.SetBroadcasters(broadcasters)
+	collector.SetEventRetention(eventRetention)
 
 	// Setup signal handling
 	ctx, cancel := context.WithCancel(context.Background())

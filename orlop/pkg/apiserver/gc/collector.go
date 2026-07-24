@@ -15,12 +15,15 @@ import (
 
 // Collector implements garbage collection for objects with owner references.
 // It periodically scans all objects and deletes those whose owners no longer exist.
+// When broadcasters implement storage.EventPruner, old events are pruned each cycle.
 type Collector struct {
-	stores   map[string]storage.ResourceStore
-	interval time.Duration
-	logger   logr.Logger
-	stopCh   chan struct{}
-	stopOnce sync.Once
+	stores         map[string]storage.ResourceStore
+	broadcasters   []storage.EventBroadcaster
+	eventRetention time.Duration
+	interval       time.Duration
+	logger         logr.Logger
+	stopCh         chan struct{}
+	stopOnce       sync.Once
 }
 
 // NewCollector creates a new garbage collector.
@@ -29,11 +32,25 @@ func NewCollector(stores map[string]storage.ResourceStore, interval time.Duratio
 		logger = logr.Discard()
 	}
 	return &Collector{
-		stores:   stores,
-		interval: interval,
-		logger:   logger,
-		stopCh:   make(chan struct{}),
+		stores:         stores,
+		eventRetention: 24 * time.Hour,
+		interval:       interval,
+		logger:         logger,
+		stopCh:         make(chan struct{}),
 	}
+}
+
+// SetBroadcasters configures the broadcasters whose old events should be
+// pruned during garbage collection. Only broadcasters that implement
+// storage.EventPruner will have their events pruned.
+func (c *Collector) SetBroadcasters(broadcasters []storage.EventBroadcaster) {
+	c.broadcasters = broadcasters
+}
+
+// SetEventRetention configures how long events are retained before pruning.
+// Defaults to 24 hours.
+func (c *Collector) SetEventRetention(d time.Duration) {
+	c.eventRetention = d
 }
 
 // Start begins the garbage collection loop in a background goroutine.
@@ -151,11 +168,26 @@ func (c *Collector) collectGarbage() {
 		}
 	}
 
+	c.pruneEvents(ctx)
+
 	duration := time.Since(startTime)
 	c.logger.Info("Garbage collection cycle complete",
 		"duration", duration,
 		"checked", checked,
 		"deleted", deleted)
+}
+
+// pruneEvents calls PruneOldEvents on each broadcaster that supports it.
+func (c *Collector) pruneEvents(ctx context.Context) {
+	for _, b := range c.broadcasters {
+		pruner, ok := b.(storage.EventPruner)
+		if !ok {
+			continue
+		}
+		if err := pruner.PruneOldEvents(ctx, c.eventRetention); err != nil {
+			c.logger.Error(err, "Failed to prune old events")
+		}
+	}
 }
 
 // ownerExists checks if an owner object still exists in storage.

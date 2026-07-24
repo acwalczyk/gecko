@@ -196,6 +196,72 @@ func TestCollector_MultipleStoresScanned(t *testing.T) {
 	}
 }
 
+type mockPrunerBroadcaster struct {
+	storage.EventBroadcaster
+	pruneCalled   bool
+	pruneOlderThan time.Duration
+}
+
+func (m *mockPrunerBroadcaster) PruneOldEvents(_ context.Context, olderThan time.Duration) error {
+	m.pruneCalled = true
+	m.pruneOlderThan = olderThan
+	return nil
+}
+
+func TestCollector_PrunesOldEvents(t *testing.T) {
+	store := newTestMemoryStore("objects")
+	stores := map[string]storage.ResourceStore{
+		"objects": store,
+	}
+
+	pruner := &mockPrunerBroadcaster{}
+	retention := 12 * time.Hour
+
+	c := NewCollector(stores, time.Hour, logr.Discard())
+	c.SetBroadcasters([]storage.EventBroadcaster{pruner})
+	c.SetEventRetention(retention)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		c.Start(ctx)
+		close(done)
+	}()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	if !pruner.pruneCalled {
+		t.Error("PruneOldEvents was not called on broadcaster that implements EventPruner")
+	}
+	if pruner.pruneOlderThan != retention {
+		t.Errorf("PruneOldEvents called with %v, want %v", pruner.pruneOlderThan, retention)
+	}
+}
+
+func TestCollector_SkipsBroadcasterWithoutPruner(t *testing.T) {
+	store := newTestMemoryStore("objects")
+	stores := map[string]storage.ResourceStore{
+		"objects": store,
+	}
+
+	broadcaster := memory.NewWatcher(10)
+
+	c := NewCollector(stores, time.Hour, logr.Discard())
+	c.SetBroadcasters([]storage.EventBroadcaster{broadcaster})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		c.Start(ctx)
+		close(done)
+	}()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+	// No panic or error means the non-pruner broadcaster was safely skipped
+}
+
 func TestCollector_StopEndsCollector(t *testing.T) {
 	store := newTestMemoryStore("objects")
 	stores := map[string]storage.ResourceStore{
