@@ -60,9 +60,9 @@ func (h *ResourceHandler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 		existingMap["status"] = status
 	}
 
-	// Convert back to typed object
+	// Convert back to typed object in storage version
 	updatedJSON, _ := json.Marshal(existingMap)
-	obj, err := h.scheme.New(h.gvk)
+	obj, err := h.storageVersionSchemeNew()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create object: %v", err))
 		return
@@ -73,8 +73,8 @@ func (h *ResourceHandler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	clientObj := obj.(client.Object)
 
-	// Set GVK
-	clientObj.GetObjectKind().SetGroupVersionKind(h.gvk)
+	// Set GVK to storage version
+	clientObj.GetObjectKind().SetGroupVersionKind(h.effectiveStorageGVK())
 
 	// Update in storage
 	if err := h.store.Update(r.Context(), clientObj); err != nil {
@@ -89,12 +89,19 @@ func (h *ResourceHandler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Convert to serving version for response
+	responseObj, err := h.convertToServingVersion(clientObj)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to convert response version: %v", err))
+		return
+	}
+
 	h.logger.Info("Updated status", "kind", h.gvk.Kind, "namespace", namespace, "name", name)
 
 	// Return updated object
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(clientObj)
+	json.NewEncoder(w).Encode(responseObj)
 }
 
 // getResourceVersionFromMap extracts resource version from metadata map.

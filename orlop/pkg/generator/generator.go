@@ -444,24 +444,42 @@ func (g *Generator) processAggregatorFile(inputPath, outputPath string) error {
 		return err
 	}
 
-	// Add localSchemeBuilder by text manipulation (easier than AST manipulation for formatting)
-	content := buf.String()
-	content = strings.Replace(content,
-		"var AddToSchemes runtime.SchemeBuilder",
-		"var (\n\t// AddToSchemes may be used to add all resources defined in the project to a Scheme.\n\tAddToSchemes runtime.SchemeBuilder",
-		1)
+	// Wrap the AddToSchemes var declaration in a var() block and add localSchemeBuilder.
+	// We locate the "var AddToSchemes" line and the closing "}" of its composite literal,
+	// then rebuild that section so it works regardless of how many versions are registered.
+	lines := strings.Split(buf.String(), "\n")
+	var out []string
+	i := 0
+	for i < len(lines) {
+		line := lines[i]
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "var AddToSchemes ") {
+			// Strip the "var " prefix since we'll wrap in a var() block
+			decl := strings.TrimPrefix(trimmed, "var ")
+			out = append(out, "var (")
+			out = append(out, "\t"+decl)
+			i++
+			// Copy all lines until the closing "}" of the SchemeBuilder literal
+			for i < len(lines) {
+				inner := lines[i]
+				innerTrimmed := strings.TrimSpace(inner)
+				i++
+				if innerTrimmed == "}" {
+					out = append(out, "\t}")
+					break
+				}
+				out = append(out, "\t\t"+innerTrimmed)
+			}
+			out = append(out, "")
+			out = append(out, "\tlocalSchemeBuilder = &AddToSchemes")
+			out = append(out, ")")
+		} else {
+			out = append(out, line)
+			i++
+		}
+	}
 
-	// Close the var block and add localSchemeBuilder
-	content = strings.Replace(content,
-		"// AddToSchemes may be used to add all resources defined in the project to a Scheme.\n\tAddToSchemes runtime.SchemeBuilder = runtime.SchemeBuilder{",
-		"AddToSchemes runtime.SchemeBuilder = runtime.SchemeBuilder{",
-		1)
-	content = strings.Replace(content,
-		"\tv1.SchemeBuilder.AddToScheme,\n}",
-		"\tv1.SchemeBuilder.AddToScheme,\n\t}\n\n\t// localSchemeBuilder is used for registration of conversion functions\n\tlocalSchemeBuilder = &AddToSchemes\n)",
-		1)
-
-	return os.WriteFile(outputPath, []byte(content), 0644)
+	return os.WriteFile(outputPath, []byte(strings.Join(out, "\n")), 0644)
 }
 
 func (g *Generator) rewriteImports(file *ast.File) {
@@ -480,9 +498,11 @@ func (g *Generator) rewriteImports(file *ast.File) {
 			// Get the import path without quotes
 			importPath := strings.Trim(importSpec.Path.Value, "\"")
 
-			// Replace /apis/internal/ with /apis/public/
-			if strings.Contains(importPath, "/apis/internal/") {
-				newPath := strings.Replace(importPath, "/apis/internal/", "/apis/public/", 1)
+			// Replace private API import path with public API import path
+			privatePrefix := g.modulePath + "/" + g.inputDir + "/"
+			publicPrefix := g.modulePath + "/" + g.outputDir + "/"
+			if strings.HasPrefix(importPath, privatePrefix) {
+				newPath := publicPrefix + strings.TrimPrefix(importPath, privatePrefix)
 				importSpec.Path.Value = "\"" + newPath + "\""
 			}
 		}

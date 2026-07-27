@@ -31,8 +31,8 @@ func SetupAuthentication(registry *apiserver.ResourceRegistry, logger logr.Logge
 		}
 	}
 
-	serviceAccountStore := registry.GetStore("serviceaccounts")
-	secretStore := registry.GetStore("secrets")
+	serviceAccountStore := registry.GetStore(authResources[0].GVK.GroupKind())
+	secretStore := registry.GetStore(authResources[1].GVK.GroupKind())
 
 	authenticator := authn.NewAuthenticator(serviceAccountStore, secretStore)
 	middleware := authn.NewMiddleware(authenticator, logger)
@@ -67,10 +67,10 @@ func SetupRBAC(registry *apiserver.ResourceRegistry, logger logr.Logger) (func(h
 		}
 	}
 
-	roleStore := registry.GetStore("roles")
-	roleBindingStore := registry.GetStore("rolebindings")
-	clusterRoleStore := registry.GetStore("clusterroles")
-	clusterRoleBindingStore := registry.GetStore("clusterrolebindings")
+	roleStore := registry.GetStore(rbacResources[0].GVK.GroupKind())
+	roleBindingStore := registry.GetStore(rbacResources[1].GVK.GroupKind())
+	clusterRoleStore := registry.GetStore(rbacResources[2].GVK.GroupKind())
+	clusterRoleBindingStore := registry.GetStore(rbacResources[3].GVK.GroupKind())
 
 	authorizer := rbac.NewAuthorizer(
 		roleStore,

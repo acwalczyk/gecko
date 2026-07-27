@@ -32,6 +32,7 @@ type ResourceHandler struct {
 	store        storage.ResourceStore
 	processor    *schema.Processor
 	gvk          runtimeschema.GroupVersionKind
+	storageGVK   runtimeschema.GroupVersionKind // zero value = no version conversion
 	resourceType string
 	scheme       *runtime.Scheme
 	applyManager *apply.Manager // Optional: for server-side apply support
@@ -150,8 +151,15 @@ func (h *ResourceHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Convert to storage version before storing
+	storeObj, err := h.convertToStorageVersion(clientObj)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to convert object version: %v", err))
+		return
+	}
+
 	// Store object
-	if err := h.store.Create(r.Context(), clientObj); err != nil {
+	if err := h.store.Create(r.Context(), storeObj); err != nil {
 		h.logger.Error(err, "Create failed", "kind", h.gvk.Kind, "namespace", namespace, "name", accessor.GetName())
 		if errors.IsAlreadyExists(err) {
 			writeError(w, http.StatusConflict, err.Error())
@@ -161,13 +169,19 @@ func (h *ResourceHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	name = accessor.GetName()
-	h.logger.Info("Created", "kind", h.gvk.Kind, "namespace", namespace, "name", name)
+	// Convert back to serving version for response
+	responseObj, err := h.convertToServingVersion(storeObj)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to convert response version: %v", err))
+		return
+	}
+
+	h.logger.Info("Created", "kind", h.gvk.Kind, "namespace", namespace, "name", responseObj.GetName())
 
 	// Return created object
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(clientObj)
+	json.NewEncoder(w).Encode(responseObj)
 }
 
 // Get handles GET requests to retrieve a single resource.
@@ -184,6 +198,12 @@ func (h *ResourceHandler) Get(w http.ResponseWriter, r *http.Request) {
 		} else {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get object: %v", err))
 		}
+		return
+	}
+
+	obj, err = h.convertToServingVersion(obj)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to convert object version: %v", err))
 		return
 	}
 
@@ -265,6 +285,12 @@ func (h *ResourceHandler) List(w http.ResponseWriter, r *http.Request) {
 			h.logger.Error(err, "List failed", "kind", h.gvk.Kind, "namespace", namespace)
 		}
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to list objects: %v", err))
+		return
+	}
+
+	list, err = h.convertListToServingVersion(list)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to convert list version: %v", err))
 		return
 	}
 
@@ -432,8 +458,15 @@ func (h *ResourceHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Convert to storage version before storing
+	storeObj, err := h.convertToStorageVersion(clientObj)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to convert object version: %v", err))
+		return
+	}
+
 	// Update object
-	if err := h.store.Update(r.Context(), clientObj); err != nil {
+	if err := h.store.Update(r.Context(), storeObj); err != nil {
 		h.logger.Error(err, "Update failed", "kind", h.gvk.Kind, "namespace", namespace, "name", name)
 		if errors.IsNotFound(err) {
 			writeError(w, http.StatusNotFound, err.Error())
@@ -445,12 +478,19 @@ func (h *ResourceHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Convert back to serving version for response
+	responseObj, err := h.convertToServingVersion(storeObj)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to convert response version: %v", err))
+		return
+	}
+
 	h.logger.Info("Updated", "kind", h.gvk.Kind, "namespace", namespace, "name", name)
 
 	// Return updated object
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(clientObj)
+	json.NewEncoder(w).Encode(responseObj)
 }
 
 // Patch handles PATCH requests to partially update a resource.
@@ -512,6 +552,13 @@ func (h *ResourceHandler) ApplyPatch(w http.ResponseWriter, r *http.Request) {
 	}
 	accessor.SetNamespace(namespace)
 
+	// Convert to storage version before storing
+	storeObj, err := h.convertToStorageVersion(result)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to convert object version: %v", err))
+		return
+	}
+
 	// Save to storage (create or update)
 	if existing == nil {
 		// This is a create via apply
@@ -519,27 +566,37 @@ func (h *ResourceHandler) ApplyPatch(w http.ResponseWriter, r *http.Request) {
 		accessor.SetCreationTimestamp(metav1.Time{Time: time.Now()})
 		accessor.SetGeneration(1)
 
-		if err := h.store.Create(r.Context(), result); err != nil {
+		if err := h.store.Create(r.Context(), storeObj); err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create object: %v", err))
 			return
 		}
 
-		// Return created object
+		responseObj, err := h.convertToServingVersion(storeObj)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to convert response version: %v", err))
+			return
+		}
+
 		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(result)
+		json.NewEncoder(w).Encode(responseObj)
 		h.logger.Info("Created via apply", "namespace", namespace, "name", name, "fieldManager", fieldManager)
 	} else {
 		// This is an update via apply
-		if err := h.store.Update(r.Context(), result); err != nil {
+		if err := h.store.Update(r.Context(), storeObj); err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update object: %v", err))
 			return
 		}
 
-		// Return updated object
+		responseObj, err := h.convertToServingVersion(storeObj)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to convert response version: %v", err))
+			return
+		}
+
 		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(result)
+		json.NewEncoder(w).Encode(responseObj)
 		h.logger.Info("Updated via apply", "namespace", namespace, "name", name, "fieldManager", fieldManager, "force", force)
 	}
 }
@@ -619,8 +676,8 @@ func (h *ResourceHandler) Delete(w http.ResponseWriter, r *http.Request) {
 			now := metav1.Now()
 			accessor.SetDeletionTimestamp(&now)
 
-			// Set GVK for update
-			existing.GetObjectKind().SetGroupVersionKind(h.gvk)
+			// Set GVK for update (use storage version when conversion is active)
+			existing.GetObjectKind().SetGroupVersionKind(h.effectiveStorageGVK())
 
 			// Update the object with deletionTimestamp
 			if err := h.store.Update(r.Context(), existing); err != nil {
@@ -638,10 +695,17 @@ func (h *ResourceHandler) Delete(w http.ResponseWriter, r *http.Request) {
 			h.logger.V(1).Info("Already marked for deletion", "kind", h.gvk.Kind, "namespace", namespace, "name", name, "finalizers", finalizers)
 		}
 
+		// Convert to serving version for response
+		responseObj, err := h.convertToServingVersion(existing)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to convert response version: %v", err))
+			return
+		}
+
 		// Return the object with deletionTimestamp (whether just set or already present)
 		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(existing)
+		json.NewEncoder(w).Encode(responseObj)
 		return
 	}
 

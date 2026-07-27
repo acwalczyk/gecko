@@ -7,6 +7,7 @@ import (
 
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // handleWatch implements the Kubernetes watch protocol
@@ -36,8 +37,15 @@ func (h *ResourceHandler) handleWatch(w http.ResponseWriter, r *http.Request, op
 		return
 	}
 
-	// Stream watch events (no transformation needed for direct resources)
-	streamWatch(ctx, streamer, eventCh, config, opts, h.store, nil)
+	// Convert objects to serving version when storage version differs
+	var transformer objectTransformer
+	if h.needsConversion() {
+		transformer = func(obj client.Object) (interface{}, error) {
+			return h.convertToServingVersion(obj)
+		}
+	}
+
+	streamWatch(ctx, streamer, eventCh, config, opts, h.store, transformer)
 }
 
 

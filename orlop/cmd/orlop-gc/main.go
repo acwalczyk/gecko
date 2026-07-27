@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 func main() {
 	var (
 		interval       time.Duration
+		eventRetention time.Duration
 		dbHost         string
 		dbPort         int
 		dbName         string
@@ -32,6 +34,7 @@ func main() {
 	)
 
 	flag.DurationVar(&interval, "interval", 30*time.Second, "garbage collection interval")
+	flag.DurationVar(&eventRetention, "event-retention", 24*time.Hour, "how long to retain resource events before pruning")
 	flag.StringVar(&dbHost, "db-host", "localhost", "PostgreSQL host")
 	flag.IntVar(&dbPort, "db-port", 5432, "PostgreSQL port")
 	flag.StringVar(&dbName, "db-name", "orlop", "PostgreSQL database name")
@@ -73,28 +76,47 @@ func main() {
 
 	logger.Info("Connected to database")
 
-	// Create stores for all resources
+	// Create stores and broadcasters for all resources
 	ctx := context.Background()
-	stores := make(map[string]storage.ResourceStore)
+	stores := make(map[runtimeschema.GroupKind]storage.ResourceStore)
+	var broadcasters []storage.EventBroadcaster
 	for _, res := range resources {
+		resourceType := strings.ToLower(res.GVK.Group + "_" + res.GVK.Kind)
+		broadcaster, err := postgres.NewPostgresBroadcaster(ctx, postgres.PostgresBroadcasterConfig{
+			DB:          db,
+			ConnString:  connStr,
+			ChannelName: "events_" + resourceType,
+			TableName:   "event_log_" + resourceType,
+			Scheme:      scheme,
+			GVK:         res.GVK,
+		})
+		if err != nil {
+			logger.Error(err, "Failed to create broadcaster", "groupKind", res.GVK.GroupKind())
+			os.Exit(1)
+		}
+		broadcasters = append(broadcasters, broadcaster)
+
 		config := postgres.PostgresStoreConfig{
 			DB:           db,
-			ResourceType: res.Plural,
+			ResourceType: resourceType,
 			Scheme:       scheme,
 			GVK:          res.GVK,
+			Broadcaster:  broadcaster,
 		}
 
 		store, err := postgres.NewPostgresStore(ctx, config)
 		if err != nil {
-			logger.Error(err, "Failed to create store", "resource", res.Plural)
+			logger.Error(err, "Failed to create store", "groupKind", res.GVK.GroupKind())
 			os.Exit(1)
 		}
-		stores[res.Plural] = store
-		logger.Info("Created store for resource", "resource", res.Plural)
+		stores[res.GVK.GroupKind()] = store
+		logger.Info("Created store for resource", "groupKind", res.GVK.GroupKind())
 	}
 
 	// Create and start garbage collector
 	collector := gc.NewCollector(stores, interval, logger)
+	collector.SetBroadcasters(broadcasters)
+	collector.SetEventRetention(eventRetention)
 
 	// Setup signal handling
 	ctx, cancel := context.WithCancel(context.Background())

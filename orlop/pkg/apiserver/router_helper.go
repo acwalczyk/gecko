@@ -12,9 +12,10 @@ import (
 // but the public registry's schema and types.
 func createConvertingHandlerWithSharedStore(publicRegistry *ResourceRegistry, privateRegistry *ResourceRegistry, converter *conversion.Converter, privateScheme *runtime.Scheme, publicRes ResourceInfo) (interface{}, error) {
 	// Get store from private registry (shared storage)
-	store := privateRegistry.GetStore(publicRes.Plural)
+	gk := publicRes.GVK.GroupKind()
+	store := privateRegistry.GetStore(gk)
 	if store == nil {
-		return nil, fmt.Errorf("no store found for resource %s in private registry", publicRes.Plural)
+		return nil, fmt.Errorf("no store found for resource %s in private registry", gk)
 	}
 
 	// Create schema processor from public resource schema

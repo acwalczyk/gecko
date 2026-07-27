@@ -429,5 +429,8 @@ func (b *PostgresBroadcaster) PruneOldEvents(ctx context.Context, olderThan time
 	return nil
 }
 
-// Verify PostgresBroadcaster implements storage.EventBroadcaster.
-var _ storage.EventBroadcaster = (*PostgresBroadcaster)(nil)
+// Verify PostgresBroadcaster implements storage.EventBroadcaster and storage.EventPruner.
+var (
+	_ storage.EventBroadcaster = (*PostgresBroadcaster)(nil)
+	_ storage.EventPruner      = (*PostgresBroadcaster)(nil)
+)

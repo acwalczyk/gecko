@@ -67,7 +67,9 @@ func newObjWithOwnerRef(name, namespace, ownerName, ownerKind, ownerUID string) 
 
 // runOneGCCycle starts the collector and waits long enough for one
 // collectGarbage() call (which runs immediately on Start), then cancels.
-func runOneGCCycle(stores map[string]storage.ResourceStore) {
+var testGK = schema.GroupKind{Group: "test.example.com", Kind: "TestObject"}
+
+func runOneGCCycle(stores map[schema.GroupKind]storage.ResourceStore) {
 	c := NewCollector(stores, time.Hour, logr.Discard())
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -89,8 +91,8 @@ func TestCollector_ObjectWithoutOwnerRefs_NotDeleted(t *testing.T) {
 		t.Fatalf("Create failed: %v", err)
 	}
 
-	stores := map[string]storage.ResourceStore{
-		"objects": store,
+	stores := map[schema.GroupKind]storage.ResourceStore{
+		testGK: store,
 	}
 	runOneGCCycle(stores)
 
@@ -117,8 +119,8 @@ func TestCollector_ObjectWithValidOwnerRef_NotDeleted(t *testing.T) {
 		t.Fatalf("Create dependent failed: %v", err)
 	}
 
-	stores := map[string]storage.ResourceStore{
-		"objects": store,
+	stores := map[schema.GroupKind]storage.ResourceStore{
+		testGK: store,
 	}
 	runOneGCCycle(stores)
 
@@ -139,8 +141,8 @@ func TestCollector_ObjectWithMissingOwnerRef_Deleted(t *testing.T) {
 		t.Fatalf("Create dependent failed: %v", err)
 	}
 
-	stores := map[string]storage.ResourceStore{
-		"objects": store,
+	stores := map[schema.GroupKind]storage.ResourceStore{
+		testGK: store,
 	}
 	runOneGCCycle(stores)
 
@@ -174,9 +176,11 @@ func TestCollector_MultipleStoresScanned(t *testing.T) {
 		t.Fatalf("Create orphan failed: %v", err)
 	}
 
-	stores := map[string]storage.ResourceStore{
-		"kindA": storeA,
-		"kindB": storeB,
+	gkA := schema.GroupKind{Group: "test.example.com", Kind: "KindA"}
+	gkB := schema.GroupKind{Group: "test.example.com", Kind: "KindB"}
+	stores := map[schema.GroupKind]storage.ResourceStore{
+		gkA: storeA,
+		gkB: storeB,
 	}
 	runOneGCCycle(stores)
 
@@ -196,10 +200,76 @@ func TestCollector_MultipleStoresScanned(t *testing.T) {
 	}
 }
 
+type mockPrunerBroadcaster struct {
+	storage.EventBroadcaster
+	pruneCalled   bool
+	pruneOlderThan time.Duration
+}
+
+func (m *mockPrunerBroadcaster) PruneOldEvents(_ context.Context, olderThan time.Duration) error {
+	m.pruneCalled = true
+	m.pruneOlderThan = olderThan
+	return nil
+}
+
+func TestCollector_PrunesOldEvents(t *testing.T) {
+	store := newTestMemoryStore("objects")
+	stores := map[schema.GroupKind]storage.ResourceStore{
+		testGK: store,
+	}
+
+	pruner := &mockPrunerBroadcaster{}
+	retention := 12 * time.Hour
+
+	c := NewCollector(stores, time.Hour, logr.Discard())
+	c.SetBroadcasters([]storage.EventBroadcaster{pruner})
+	c.SetEventRetention(retention)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		c.Start(ctx)
+		close(done)
+	}()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	if !pruner.pruneCalled {
+		t.Error("PruneOldEvents was not called on broadcaster that implements EventPruner")
+	}
+	if pruner.pruneOlderThan != retention {
+		t.Errorf("PruneOldEvents called with %v, want %v", pruner.pruneOlderThan, retention)
+	}
+}
+
+func TestCollector_SkipsBroadcasterWithoutPruner(t *testing.T) {
+	store := newTestMemoryStore("objects")
+	stores := map[schema.GroupKind]storage.ResourceStore{
+		testGK: store,
+	}
+
+	broadcaster := memory.NewWatcher(10)
+
+	c := NewCollector(stores, time.Hour, logr.Discard())
+	c.SetBroadcasters([]storage.EventBroadcaster{broadcaster})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		c.Start(ctx)
+		close(done)
+	}()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+	// No panic or error means the non-pruner broadcaster was safely skipped
+}
+
 func TestCollector_StopEndsCollector(t *testing.T) {
 	store := newTestMemoryStore("objects")
-	stores := map[string]storage.ResourceStore{
-		"objects": store,
+	stores := map[schema.GroupKind]storage.ResourceStore{
+		testGK: store,
 	}
 
 	c := NewCollector(stores, time.Hour, logr.Discard())
