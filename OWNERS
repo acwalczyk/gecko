@@ -1,0 +1,13 @@
+required_reviewers:
+  - gcp-hcp
+
+approvers:
+  - apahim
+  - cblecker
+  - ckandag
+  - cristianoveiga
+  - floresroger
+  - gbarabasz
+  - jimdaga
+  - patjlm
+  - thetechnick
