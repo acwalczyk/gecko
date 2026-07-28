@@ -544,7 +544,7 @@ func TestReconcile_MWStatusNil_RequeuesPending(t *testing.T) {
 
 	notFoundErr := apierrors.NewNotFound(
 		schema.GroupResource{Group: "work.open-cluster-management.io", Resource: "manifestworks"},
-		"np-test-nodepool-adapter",
+		"np-test-nodepool-controller",
 	)
 	tr := &errTransport{getStatusErr: notFoundErr}
 	r, storeClient := buildReconciler(t, np, cluster, tr, nil, nil, nil)

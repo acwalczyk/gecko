@@ -104,7 +104,7 @@ type Config struct {
 //	config := &Config{
 //	    MaestroServerAddr: "https://maestro.example.com:8000",
 //	    GRPCServerAddr:    "maestro-grpc.example.com:8090",
-//	    SourceID:          "hyperfleet-adapter",
+//	    SourceID:          "gecko-controllers",
 //	    CAFile:            "/etc/maestro/certs/ca.crt",
 //	    ClientCertFile:    "/etc/maestro/certs/client.crt",
 //	    ClientKeyFile:     "/etc/maestro/certs/client.key",

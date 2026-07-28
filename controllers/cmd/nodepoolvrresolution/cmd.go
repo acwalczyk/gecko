@@ -19,11 +19,11 @@ func NewCommand(rf *rootflags.RootFlags) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "nodepool-vr",
-		Short: "Run the nodepool version-resolution adapter",
+		Short: "Run the nodepool version-resolution controller",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
-			log, err := rf.NewLogger("nodepool-vr-adapter")
+			log, err := rf.NewLogger("nodepool-vr-controller")
 			if err != nil {
 				return fmt.Errorf("create logger: %w", err)
 			}

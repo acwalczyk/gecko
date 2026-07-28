@@ -48,7 +48,7 @@ func TestBuild_CorrectName(t *testing.T) {
 	input := testInput()
 	mw, err := manifest.Build(input)
 	require.NoError(t, err)
-	require.Equal(t, "cluster-abc-hc-adapter", mw.Name)
+	require.Equal(t, "cluster-abc-hc-controller", mw.Name)
 }
 
 func TestBuild_FiveManifests(t *testing.T) {
@@ -211,7 +211,7 @@ func TestBuild_Labels(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, input.ClusterID, mw.Labels["hyperfleet.io/cluster-id"])
-	require.Equal(t, "hc-adapter", mw.Labels["hyperfleet.io/adapter"])
+	require.Equal(t, "hc-controller", mw.Labels["hyperfleet.io/controller"])
 	require.Equal(t, "hosted-cluster", mw.Labels["hyperfleet.io/component"])
 }
 

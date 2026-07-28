@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	adapterName         = "version-resolution-adapter"
+	adapterName         = "version-resolution-controller"
 	defaultChannelGroup = "candidate"
 	requeueStable       = 5 * time.Minute
 )

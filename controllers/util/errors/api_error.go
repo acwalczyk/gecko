@@ -12,7 +12,7 @@ import (
 // -----------------------------------------------------------------------------
 
 // APIError represents an error from an HTTP API call with detailed context.
-// This allows the adapter runtime to capture and handle request errors properly.
+// This allows the controller runtime to capture and handle request errors properly.
 type APIError struct {
 	// Err is the underlying error
 	Err error

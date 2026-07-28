@@ -1,4 +1,4 @@
-// Package nodepool implements the nodepool adapter reconciler.
+// Package nodepool implements the nodepool controller reconciler.
 package nodepool
 
 import (
@@ -21,12 +21,12 @@ import (
 )
 
 const (
-	adapterName       = "nodepool-adapter"
+	adapterName       = "nodepool-controller"
 	requeuePending    = 15 * time.Second
 	requeueStable     = 5 * time.Minute
 )
 
-// Reconciler implements the nodepool adapter reconciliation loop.
+// Reconciler implements the nodepool controller reconciliation loop.
 type Reconciler struct {
 	transport transport.Client
 	log       logger.Logger
@@ -42,7 +42,7 @@ func New(transport transport.Client, log logger.Logger, c client.Client) *Reconc
 	}
 }
 
-// Reconcile runs the nodepool adapter loop for one nodepool event.
+// Reconcile runs the nodepool controller loop for one nodepool event.
 // req.Namespace = project namespace, req.Name = nodepoolID.
 func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	nodepoolID := req.Name

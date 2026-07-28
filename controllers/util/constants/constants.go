@@ -27,19 +27,19 @@ const (
 	// Format: "hyperfleet.io/cluster-id"
 	LabelClusterID = "hyperfleet.io/cluster-id"
 
-	// AnnotationAdapter is the annotation key for adapter identification.
-	// Identifies which adapter created or manages the resource.
-	// Format: "hyperfleet.io/adapter"
-	AnnotationAdapter = "hyperfleet.io/adapter"
+	// AnnotationController is the annotation key for controller identification.
+	// Identifies which controller created or manages the resource.
+	// Format: "hyperfleet.io/controller"
+	AnnotationController = "hyperfleet.io/controller"
 
-	// LabelAdapter is the label key for adapter identification.
-	// Used for label-based filtering and selection of resources by adapter.
-	// Format: "hyperfleet.io/adapter"
-	LabelAdapter = "hyperfleet.io/adapter"
+	// LabelController is the label key for controller identification.
+	// Used for label-based filtering and selection of resources by controller.
+	// Format: "hyperfleet.io/controller"
+	LabelController = "hyperfleet.io/controller"
 
 	// AnnotationManagedBy identifies the entity managing the resource.
 	// Format: "hyperfleet.io/managed-by"
-	// Example value: "hyperfleet-adapter"
+	// Example value: "gecko-controllers"
 	AnnotationManagedBy = "hyperfleet.io/managed-by"
 
 	// LabelManagedBy is the label key for managed-by identification.
@@ -48,7 +48,7 @@ const (
 
 	// AnnotationCreatedBy identifies the entity that created the resource.
 	// Format: "hyperfleet.io/created-by"
-	// Example value: "hyperfleet-adapter"
+	// Example value: "gecko-controllers"
 	AnnotationCreatedBy = "hyperfleet.io/created-by"
 )
 

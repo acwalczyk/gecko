@@ -10,7 +10,7 @@ import (
 
 	maestroclient "github.com/openshift-online/gecko/controllers/client/maestro"
 	maestrotransport "github.com/openshift-online/gecko/controllers/client/transport/maestro"
-	hcadapter "github.com/openshift-online/gecko/controllers/hc"
+	hc "github.com/openshift-online/gecko/controllers/hc"
 	"github.com/openshift-online/gecko/controllers/rootflags"
 )
 
@@ -29,11 +29,11 @@ func NewCommand(rf *rootflags.RootFlags) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "hc",
-		Short: "Run the hosted-cluster (hc) adapter",
+		Short: "Run the hosted-cluster (hc) controller",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
-			log, err := rf.NewLogger("hc-adapter")
+			log, err := rf.NewLogger("hc-controller")
 			if err != nil {
 				return fmt.Errorf("create logger: %w", err)
 			}
@@ -57,7 +57,7 @@ func NewCommand(rf *rootflags.RootFlags) *cobra.Command {
 				return fmt.Errorf("create manager: %w", err)
 			}
 
-			rec := hcadapter.New(transport, log, mgr.GetClient())
+			rec := hc.New(transport, log, mgr.GetClient())
 
 			if err := ctrl.NewControllerManagedBy(mgr).
 				For(&privatev1.Cluster{}).
@@ -72,8 +72,8 @@ func NewCommand(rf *rootflags.RootFlags) *cobra.Command {
 
 	cmd.Flags().StringVar(&mf.grpcAddr, "maestro-grpc-addr", "maestro-grpc.hyperfleet.svc.cluster.local:8090", "Maestro gRPC server address")
 	cmd.Flags().StringVar(&mf.httpAddr, "maestro-http-addr", "http://maestro.hyperfleet.svc.cluster.local:8000", "Maestro HTTP API server address")
-	cmd.Flags().StringVar(&mf.sourceID, "maestro-source-id", "hc-adapter", "Maestro source ID")
-	cmd.Flags().StringVar(&mf.clientID, "maestro-client-id", "hc-adapter-client", "Maestro client ID")
+	cmd.Flags().StringVar(&mf.sourceID, "maestro-source-id", "hc-controller", "Maestro source ID")
+	cmd.Flags().StringVar(&mf.clientID, "maestro-client-id", "hc-controller-client", "Maestro client ID")
 	cmd.Flags().BoolVar(&mf.insecure, "maestro-insecure", true, "Disable TLS verification for Maestro connections")
 
 	return cmd

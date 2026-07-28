@@ -8,12 +8,12 @@ import (
 const (
 	// Prefix used for error code strings
 	// Example:
-	//   ErrorCodePrefix = "hyperfleet-adapter"
-	//   results in: hyperfleet-adapter-1
-	ErrorCodePrefix = "hyperfleet-adapter"
+	//   ErrorCodePrefix = "gecko-controllers"
+	//   results in: gecko-controllers-1
+	ErrorCodePrefix = "gecko-controllers"
 
 	// HREF for API errors
-	ErrorHref = "/api/hyperfleet-adapter/v1/errors/"
+	ErrorHref = "/api/gecko-controllers/v1/errors/"
 
 	// NotFound occurs when a record is not found in the database
 	ErrorNotFound ServiceErrorCode = 1
@@ -45,8 +45,8 @@ const (
 	// General occurs when an error fails to match any other error code
 	ErrorGeneral ServiceErrorCode = 10
 
-	// AdapterConfigNotFound occurs when adapter configuration is not found
-	ErrorAdapterConfigNotFound ServiceErrorCode = 11
+	// ControllerConfigNotFound occurs when controller configuration is not found
+	ErrorControllerConfigNotFound ServiceErrorCode = 11
 
 	// BrokerConnectionError occurs when there's an error connecting to the message broker
 	ErrorBrokerConnectionError ServiceErrorCode = 12
@@ -123,8 +123,8 @@ func Errors() ServiceErrors {
 			Code: ErrorGeneral, Reason: "Unspecified error", HTTPCode: http.StatusInternalServerError,
 		},
 		ServiceError{
-			Code:     ErrorAdapterConfigNotFound,
-			Reason:   "Adapter configuration not found",
+			Code:     ErrorControllerConfigNotFound,
+			Reason:   "Controller configuration not found",
 			HTTPCode: http.StatusNotFound,
 		},
 		ServiceError{
@@ -254,8 +254,8 @@ func BadRequest(reason string, values ...interface{}) *ServiceError {
 	return New(ErrorBadRequest, reason, values...)
 }
 
-func AdapterConfigNotFound(reason string, values ...interface{}) *ServiceError {
-	return New(ErrorAdapterConfigNotFound, reason, values...)
+func ControllerConfigNotFound(reason string, values ...interface{}) *ServiceError {
+	return New(ErrorControllerConfigNotFound, reason, values...)
 }
 
 func BrokerConnectionError(reason string, values ...interface{}) *ServiceError {

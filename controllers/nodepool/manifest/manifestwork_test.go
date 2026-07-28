@@ -30,12 +30,12 @@ func TestBuild_HappyPath(t *testing.T) {
 	require.NotNil(t, mw)
 
 	// ManifestWork name
-	require.Equal(t, "np-001-nodepool-adapter", mw.Name)
+	require.Equal(t, "np-001-nodepool-controller", mw.Name)
 
 	// Labels
 	require.Equal(t, "cluster-abc", mw.Labels["hyperfleet.io/cluster-id"])
 	require.Equal(t, "np-001", mw.Labels["hyperfleet.io/nodepool-id"])
-	require.Equal(t, "nodepool-adapter", mw.Labels["hyperfleet.io/adapter"])
+	require.Equal(t, "nodepool-controller", mw.Labels["hyperfleet.io/controller"])
 	require.Equal(t, "node-pool", mw.Labels["hyperfleet.io/component"])
 
 	// Generation annotation
@@ -58,7 +58,7 @@ func TestBuild_HappyPath(t *testing.T) {
 	metaLabels := meta["labels"].(map[string]any)
 	require.Equal(t, "cluster-abc", metaLabels["hyperfleet.io/cluster-id"])
 	require.Equal(t, "np-001", metaLabels["hyperfleet.io/nodepool-id"])
-	require.Equal(t, "nodepool-adapter", metaLabels["hyperfleet.io/managed-by"])
+	require.Equal(t, "nodepool-controller", metaLabels["hyperfleet.io/managed-by"])
 
 	metaAnnotations := meta["annotations"].(map[string]any)
 	require.Equal(t, "3", metaAnnotations["hyperfleet.io/generation"])

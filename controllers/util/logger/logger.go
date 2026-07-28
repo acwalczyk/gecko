@@ -69,7 +69,7 @@ type Config struct {
 	// Writer is an optional custom io.Writer for log output.
 	// If set, Output is ignored. Useful for testing (e.g., bytes.Buffer).
 	Writer io.Writer
-	// Component is the component name (e.g., "adapter", "sentinel")
+	// Component is the component name (e.g., "controller", "sentinel")
 	Component string
 	// Version is the component version
 	Version string
@@ -81,7 +81,7 @@ func DefaultConfig() Config {
 		Level:     "info",
 		Format:    FormatJSON,
 		Output:    "stdout",
-		Component: "adapter",
+		Component: "controller",
 		Version:   "unknown",
 	}
 }

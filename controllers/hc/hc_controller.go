@@ -1,4 +1,4 @@
-// Package hc implements the hc-adapter reconciler for managing HostedClusters via ManifestWork.
+// Package hc implements the hc-controller reconciler for managing HostedClusters via ManifestWork.
 package hc
 
 import (
@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	adapterName = "hc-adapter"
+	adapterName = "hc-controller"
 
 	requeuePending = 15 * time.Second
 	requeueStable  = 5 * time.Minute
@@ -29,7 +29,7 @@ const (
 	hostedClusterManifestIndex = 3
 )
 
-// Reconciler implements the hc-adapter reconcile loop.
+// Reconciler implements the hc-controller reconcile loop.
 type Reconciler struct {
 	transport transport.Client
 	log       logger.Logger
@@ -45,10 +45,10 @@ func New(transport transport.Client, log logger.Logger, c client.Client) *Reconc
 	}
 }
 
-// Reconcile runs the hc-adapter loop for one cluster event.
+// Reconcile runs the hc-controller loop for one cluster event.
 func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	clusterID := req.Name
-	log := r.log.With("adapter", adapterName).With("cluster_id", clusterID)
+	log := r.log.With("controller", adapterName).With("cluster_id", clusterID)
 
 	var cluster privatev1.Cluster
 	if err := r.client.Get(ctx, req.NamespacedName, &cluster); err != nil {
@@ -180,10 +180,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 
 	if !conditions.IsTrue(cluster.Status.Conditions, "ManifestWorkApplied") {
-		log.Infof(ctx, "hc-adapter: cluster %s MW not yet applied, requeueing after %s", clusterID, requeuePending)
+		log.Infof(ctx, "hc-controller: cluster %s MW not yet applied, requeueing after %s", clusterID, requeuePending)
 		return reconcile.Result{RequeueAfter: requeuePending}, nil
 	}
-	log.Infof(ctx, "hc-adapter: cluster %s reconciled, requeueing after %s", clusterID, requeueStable)
+	log.Infof(ctx, "hc-controller: cluster %s reconciled, requeueing after %s", clusterID, requeueStable)
 	return reconcile.Result{RequeueAfter: requeueStable}, nil
 }
 

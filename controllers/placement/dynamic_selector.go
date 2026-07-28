@@ -58,7 +58,7 @@ func (r *realSMClient) accessSecretVersion(ctx context.Context, name string) ([]
 
 // DynamicSelector discovers eligible management clusters and DNS zones at
 // selection time by cross-checking Secret Manager secrets against Maestro
-// consumers, mirroring the logic of the YAML placement adapter's Job script.
+// consumers, mirroring the logic of the YAML placement controller's Job script.
 //
 // MC discovery:
 //  1. List SM secrets with label maestro-consumer-name:* → candidate MC names

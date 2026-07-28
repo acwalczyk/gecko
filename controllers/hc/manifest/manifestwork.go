@@ -1,4 +1,4 @@
-// Package manifest provides the ManifestWork builder for the hc-adapter.
+// Package manifest provides the ManifestWork builder for the hc-controller.
 package manifest
 
 import (
@@ -84,10 +84,10 @@ func Build(input Input) (*workv1.ManifestWork, error) {
 			Kind:       "ManifestWork",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name: fmt.Sprintf("%s-hc-adapter", input.ClusterID),
+			Name: fmt.Sprintf("%s-hc-controller", input.ClusterID),
 			Labels: map[string]string{
-				"hyperfleet.io/cluster-id": input.ClusterID,
-				"hyperfleet.io/adapter":    "hc-adapter",
+				"hyperfleet.io/cluster-id":  input.ClusterID,
+				"hyperfleet.io/controller":  "hc-controller",
 				"hyperfleet.io/component":  "hosted-cluster",
 			},
 			Annotations: map[string]string{
@@ -171,7 +171,7 @@ func buildNamespace(input Input, clusterNS string) (workv1.Manifest, error) {
 			"labels": map[string]any{
 				"hyperfleet.io/cluster-id":   input.ClusterID,
 				"hyperfleet.io/cluster-name": input.ClusterName,
-				"hyperfleet.io/managed-by":   "hc-adapter",
+				"hyperfleet.io/managed-by":   "hc-controller",
 				"hyperfleet.io/resource-type": "namespace",
 			},
 			"annotations": map[string]any{
@@ -231,7 +231,7 @@ func buildCertificate(input Input, clusterNS string) (workv1.Manifest, error) {
 			"namespace": clusterNS,
 			"labels": map[string]any{
 				"hyperfleet.io/cluster-id":    input.ClusterID,
-				"hyperfleet.io/managed-by":    "hc-adapter",
+				"hyperfleet.io/managed-by":    "hc-controller",
 				"hyperfleet.io/resource-type": "certificate",
 			},
 			"annotations": map[string]any{
@@ -288,7 +288,7 @@ func buildHostedCluster(input Input, clusterNS string) (workv1.Manifest, error) 
 			"namespace": clusterNS,
 			"labels": map[string]any{
 				"hyperfleet.io/cluster-id":    input.ClusterID,
-				"hyperfleet.io/managed-by":    "hc-adapter",
+				"hyperfleet.io/managed-by":    "hc-controller",
 				"hyperfleet.io/resource-type": "hosted-cluster",
 			},
 			"annotations": annotations,
@@ -488,7 +488,7 @@ kubectl --kubeconfig=/kubeconfig/kubeconfig get clusterrolebinding redhat-domain
 			"namespace": hcNS,
 			"labels": map[string]any{
 				"hyperfleet.io/cluster-id":    input.ClusterID,
-				"hyperfleet.io/managed-by":    "hc-adapter",
+				"hyperfleet.io/managed-by":    "hc-controller",
 				"hyperfleet.io/resource-type": "rbac-setup",
 				"job":                         "rbac-setup",
 			},

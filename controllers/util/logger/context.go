@@ -40,8 +40,8 @@ const (
 	K8sNamespaceKey = "k8s_namespace"
 	K8sResultKey    = "k8s_result"
 
-	// Adapter-specific fields
-	AdapterKey            = "adapter"
+	// Controller-specific fields
+	ControllerKey         = "controller"
 	ObservedGenerationKey = "observed_generation"
 	SubscriptionKey       = "subscription"
 
@@ -127,9 +127,9 @@ func WithK8sResult(ctx context.Context, result string) context.Context {
 	return WithLogField(ctx, K8sResultKey, result)
 }
 
-// WithAdapter returns a context with the adapter name set
-func WithAdapter(ctx context.Context, adapter string) context.Context {
-	return WithLogField(ctx, AdapterKey, adapter)
+// WithController returns a context with the controller name set
+func WithController(ctx context.Context, controller string) context.Context {
+	return WithLogField(ctx, ControllerKey, controller)
 }
 
 // WithObservedGeneration returns a context with the observed generation set

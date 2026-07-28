@@ -435,7 +435,7 @@ func TestReconcile_MWStatusNil_RequeuesPending(t *testing.T) {
 
 	notFoundErr := apierrors.NewNotFound(
 		schema.GroupResource{Group: "work.open-cluster-management.io", Resource: "manifestworks"},
-		"cluster-abc-hc-adapter",
+		"cluster-abc-hc-controller",
 	)
 	tr := &errTransport{getStatusErr: notFoundErr}
 	r, storeClient := buildReconciler(t, cluster, nil, tr, nil)
@@ -454,7 +454,7 @@ func TestReconcile_MWStatusNil_RequeuesPending(t *testing.T) {
 // and the ManifestWork has been applied successfully.
 func TestReconcile_HappyPath(t *testing.T) {
 	clusterID := "cluster-abc"
-	mwName := clusterID + "-hc-adapter"
+	mwName := clusterID + "-hc-controller"
 	mcName := "mc-cluster-1"
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
@@ -485,7 +485,7 @@ func TestReconcile_HappyPath(t *testing.T) {
 // version fields from HC status feedback are written to cluster.Status.HostedClusterResult.
 func TestReconcile_HCFeedback_SetsHostedClusterResult(t *testing.T) {
 	clusterID := "cluster-abc"
-	mwName := clusterID + "-hc-adapter"
+	mwName := clusterID + "-hc-controller"
 	mcName := "mc-cluster-1"
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
@@ -523,7 +523,7 @@ func TestReconcile_HCFeedback_SetsHostedClusterResult(t *testing.T) {
 // This also exercises the mwCondition default return path.
 func TestReconcile_MWNoAppliedCondition_RequeuesPending(t *testing.T) {
 	clusterID := "cluster-abc"
-	mwName := clusterID + "-hc-adapter"
+	mwName := clusterID + "-hc-controller"
 	mcName := "mc-cluster-1"
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
@@ -542,7 +542,7 @@ func TestReconcile_MWNoAppliedCondition_RequeuesPending(t *testing.T) {
 // explicitly False, the reconciler requeues with the pending interval.
 func TestReconcile_MWNotApplied_RequeuesPending(t *testing.T) {
 	clusterID := "cluster-abc"
-	mwName := clusterID + "-hc-adapter"
+	mwName := clusterID + "-hc-controller"
 	mcName := "mc-cluster-1"
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
@@ -566,7 +566,7 @@ func TestReconcile_MWNotApplied_RequeuesPending(t *testing.T) {
 // Status.Update is not called.
 func TestReconcile_ApplyConditions_Idempotent(t *testing.T) {
 	clusterID := "cluster-abc"
-	mwName := clusterID + "-hc-adapter"
+	mwName := clusterID + "-hc-controller"
 	mcName := "mc-cluster-1"
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
@@ -596,7 +596,7 @@ func TestReconcile_ApplyConditions_Idempotent(t *testing.T) {
 // Status.Update after applyStatusConditions is silently swallowed.
 func TestReconcile_StatusUpdateConflict_ReturnsNoError(t *testing.T) {
 	clusterID := "cluster-abc"
-	mwName := clusterID + "-hc-adapter"
+	mwName := clusterID + "-hc-controller"
 	mcName := "mc-cluster-1"
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
@@ -621,7 +621,7 @@ func TestReconcile_StatusUpdateConflict_ReturnsNoError(t *testing.T) {
 // extracted from ServiceAccountsRef and passed through to the manifest build.
 func TestReconcile_WithServiceAccountsRef(t *testing.T) {
 	clusterID := "cluster-wif"
-	mwName := clusterID + "-hc-adapter"
+	mwName := clusterID + "-hc-controller"
 	mcName := "mc-cluster-1"
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
@@ -659,7 +659,7 @@ func TestReconcile_WithServiceAccountsRef(t *testing.T) {
 // Status.Update after applyStatusConditions is propagated.
 func TestReconcile_StatusUpdateError_ReturnsError(t *testing.T) {
 	clusterID := "cluster-abc"
-	mwName := clusterID + "-hc-adapter"
+	mwName := clusterID + "-hc-controller"
 	mcName := "mc-cluster-1"
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")

@@ -1,4 +1,4 @@
-// Package manifest provides the ManifestWork builder for the nodepool adapter.
+// Package manifest provides the ManifestWork builder for the nodepool controller.
 package manifest
 
 import (
@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	adapterName   = "nodepool-adapter"
+	adapterName   = "nodepool-controller"
 	componentName = "node-pool"
 
 	// DefaultDiskSizeGB is the default disk size in GB for GCP node pool boot disks.
@@ -143,7 +143,7 @@ func Build(input Input) (*workv1.ManifestWork, error) {
 			Labels: map[string]string{
 				"hyperfleet.io/cluster-id":  input.ClusterID,
 				"hyperfleet.io/nodepool-id": input.NodePoolID,
-				"hyperfleet.io/adapter":     adapterName,
+				"hyperfleet.io/controller":  adapterName,
 				"hyperfleet.io/component":   componentName,
 			},
 			Annotations: map[string]string{

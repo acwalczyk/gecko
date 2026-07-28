@@ -18,11 +18,11 @@ func NewCommand(rf *rootflags.RootFlags) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "version-resolution",
-		Short: "Run the version-resolution adapter",
+		Short: "Run the version-resolution controller",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
-			log, err := rf.NewLogger("version-resolution-adapter")
+			log, err := rf.NewLogger("version-resolution-controller")
 			if err != nil {
 				return fmt.Errorf("create logger: %w", err)
 			}

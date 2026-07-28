@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	adapterName         = "nodepool-vr-adapter"
+	adapterName         = "nodepool-vr-controller"
 	defaultChannelGroup = "candidate"
 	requeueStable       = 5 * time.Minute
 )

@@ -10,7 +10,7 @@ import (
 
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 
-	placementadapter "github.com/openshift-online/gecko/controllers/placement"
+	placement "github.com/openshift-online/gecko/controllers/placement"
 	"github.com/openshift-online/gecko/controllers/rootflags"
 )
 
@@ -28,7 +28,7 @@ func NewCommand(rf *rootflags.RootFlags) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "placement",
-		Short: "Run the placement adapter",
+		Short: "Run the placement controller",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if v := envOr("SECRETMANAGER_PROJECT", ""); v != "" && !cmd.Flags().Changed("secretmanager-project") {
 				smProject = v
@@ -39,13 +39,13 @@ func NewCommand(rf *rootflags.RootFlags) *cobra.Command {
 
 			ctx := cmd.Context()
 
-			log, err := rf.NewLogger("placement-adapter")
+			log, err := rf.NewLogger("placement-controller")
 			if err != nil {
 				return fmt.Errorf("create logger: %w", err)
 			}
 
-			var selector placementadapter.Selector
-			var candidates []placementadapter.Candidate
+			var selector placement.Selector
+			var candidates []placement.Candidate
 
 			if smProject != "" {
 				smClient, err := secretmanager.NewClient(ctx)
@@ -53,17 +53,17 @@ func NewCommand(rf *rootflags.RootFlags) *cobra.Command {
 					return fmt.Errorf("create secret manager client: %w", err)
 				}
 				defer smClient.Close() //nolint:errcheck
-				selector = placementadapter.NewDynamicSelector(smClient, smProject, maestroHTTPAddr)
+				selector = placement.NewDynamicSelector(smClient, smProject, maestroHTTPAddr)
 			} else {
-				candidates = make([]placementadapter.Candidate, 0, len(candidateNames))
+				candidates = make([]placement.Candidate, 0, len(candidateNames))
 				for i, name := range candidateNames {
-					c := placementadapter.Candidate{Name: name}
+					c := placement.Candidate{Name: name}
 					if i < len(baseDomains) {
 						c.BaseDomains = []string{baseDomains[i]}
 					}
 					candidates = append(candidates, c)
 				}
-				selector = placementadapter.NewRoundRobinSelector()
+				selector = placement.NewRoundRobinSelector()
 			}
 
 			scheme := rootflags.NewScheme()
@@ -72,7 +72,7 @@ func NewCommand(rf *rootflags.RootFlags) *cobra.Command {
 				return fmt.Errorf("create manager: %w", err)
 			}
 
-			rec := placementadapter.NewReconciler(selector, candidates, log, mgr.GetClient())
+			rec := placement.NewReconciler(selector, candidates, log, mgr.GetClient())
 
 			if err := ctrl.NewControllerManagedBy(mgr).
 				For(&privatev1.Cluster{}).

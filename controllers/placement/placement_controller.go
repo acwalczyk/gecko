@@ -17,11 +17,11 @@ import (
 )
 
 const (
-	adapterName  = "placement-adapter"
+	adapterName  = "placement-controller"
 	requeueStable = 5 * time.Minute
 )
 
-// Reconciler implements the placement adapter reconcile loop.
+// Reconciler implements the placement controller reconcile loop.
 type Reconciler struct {
 	client     client.Client
 	selector   Selector
