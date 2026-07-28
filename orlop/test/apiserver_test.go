@@ -123,6 +123,27 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
+func TestHealthEndpoints(t *testing.T) {
+	for _, endpoint := range []string{"/healthz", "/readyz"} {
+		t.Run(endpoint, func(t *testing.T) {
+			resp, err := http.Get(baseURL + endpoint)
+			if err != nil {
+				t.Fatalf("GET %s failed: %v", endpoint, err)
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK {
+				t.Errorf("expected 200, got %d", resp.StatusCode)
+			}
+
+			body, _ := io.ReadAll(resp.Body)
+			if string(body) != "ok" {
+				t.Errorf("expected body %q, got %q", "ok", string(body))
+			}
+		})
+	}
+}
+
 func TestObjectCRUD(t *testing.T) {
 	namespace := "default"
 	name := "test-object"

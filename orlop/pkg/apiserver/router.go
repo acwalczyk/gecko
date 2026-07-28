@@ -11,6 +11,17 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
+func registerHealthEndpoints(r chi.Router) {
+	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	})
+	r.Get("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	})
+}
+
 // setupRouter configures the HTTP router with all endpoints.
 func setupRouter(registry *ResourceRegistry, corsOrigins []string, customMiddleware []func(http.Handler) http.Handler) (chi.Router, error) {
 	r := chi.NewRouter()
@@ -19,6 +30,8 @@ func setupRouter(registry *ResourceRegistry, corsOrigins []string, customMiddlew
 	r.Use(middleware.CORS(middleware.CORSOptions{
 		AllowedOrigins: corsOrigins,
 	}))
+
+	registerHealthEndpoints(r)
 
 	for _, mw := range customMiddleware {
 		r.Use(mw)
@@ -144,6 +157,8 @@ func setupConvertingRouter(publicRegistry *ResourceRegistry, privateRegistry *Re
 	r.Use(middleware.CORS(middleware.CORSOptions{
 		AllowedOrigins: corsOrigins,
 	}))
+
+	registerHealthEndpoints(r)
 
 	for _, mw := range customMiddleware {
 		r.Use(mw)
