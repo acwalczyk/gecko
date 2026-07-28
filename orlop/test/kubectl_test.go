@@ -81,18 +81,13 @@ users:
 	// Create a custom editor script that modifies the object
 	editorScript := filepath.Join(tmpDir, "editor.sh")
 	editorContent := `#!/bin/bash
-# This script simulates editing the object
+# This script simulates editing the object.
+# Use a temp file for portability (macOS sed -i requires '' arg, GNU does not).
 FILE="$1"
-
-# Show what we're editing for debugging
-cat "$FILE" > /tmp/kubectl-edit-before.yaml
-
-# Use sed to replace the value - be more specific to avoid breaking YAML
-sed -i 's/publicField: original-value/publicField: kubectl-edited-value/g' "$FILE"
-sed -i 's/publicField: nested-original/publicField: kubectl-nested-edited/g' "$FILE"
-
-# Show result
-cat "$FILE" > /tmp/kubectl-edit-after.yaml
+TMPFILE="${FILE}.tmp"
+sed 's/publicField: original-value/publicField: kubectl-edited-value/g' "$FILE" \
+  | sed 's/publicField: nested-original/publicField: kubectl-nested-edited/g' > "$TMPFILE"
+mv "$TMPFILE" "$FILE"
 `
 
 	if err := os.WriteFile(editorScript, []byte(editorContent), 0755); err != nil {

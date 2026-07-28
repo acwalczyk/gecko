@@ -4,6 +4,12 @@ import (
 	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
 )
 
+// ParentResourceInfo describes a parent resource for nested routing.
+type ParentResourceInfo struct {
+	Plural  string
+	IDField string
+}
+
 // ResourceInfo describes a single API resource type.
 type ResourceInfo struct {
 	// GVK is the GroupVersionKind for this resource
@@ -16,4 +22,6 @@ type ResourceInfo struct {
 	Namespaced bool
 	// SchemaYAML is the OpenAPI v3 schema in YAML format
 	SchemaYAML string
+	// ParentResource optionally defines a parent resource for nested routing.
+	ParentResource *ParentResourceInfo
 }

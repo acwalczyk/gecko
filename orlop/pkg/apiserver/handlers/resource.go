@@ -79,6 +79,11 @@ func (h *ResourceHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := validateParentOnCreate(r.Context(), objMap); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	// Validate cross-namespace owner references before schema processing
 	if err := validateOwnerReferencesFromMap(namespace, objMap); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid ownerReferences: %v", err))
@@ -201,6 +206,11 @@ func (h *ResourceHandler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !validateParentOwnership(r.Context(), obj) {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+
 	obj, err = h.convertToServingVersion(obj)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to convert object version: %v", err))
@@ -251,6 +261,8 @@ func (h *ResourceHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	opts.ShardSelector = shardSelector
+
+	applyParentFilterToListOpts(r.Context(), &opts)
 
 	// Parse limit parameter
 	if limitStr := r.URL.Query().Get(constants.QueryParamLimit); limitStr != "" {
@@ -340,6 +352,11 @@ func (h *ResourceHandler) Update(w http.ResponseWriter, r *http.Request) {
 		} else {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get existing object: %v", err))
 		}
+		return
+	}
+
+	if !validateParentOwnership(r.Context(), existing) {
+		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
 
@@ -619,6 +636,11 @@ func (h *ResourceHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		} else {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get object: %v", err))
 		}
+		return
+	}
+
+	if !validateParentOwnership(r.Context(), existing) {
+		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
 

@@ -44,6 +44,11 @@ func (h *ResourceHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !validateParentOwnership(r.Context(), existing) {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+
 	// Convert to serving version so patches operate in the client's schema
 	existing, err = h.convertToServingVersion(existing)
 	if err != nil {

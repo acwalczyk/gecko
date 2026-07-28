@@ -36,6 +36,11 @@ func (h *ResourceHandler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !validateParentOwnership(r.Context(), existing) {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+
 	// Check resource version
 	updateRV, _ := getResourceVersionFromMap(updateMap)
 	existingAccessor, err := meta.Accessor(existing)

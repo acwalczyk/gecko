@@ -75,6 +75,11 @@ func (h *ConvertingResourceHandler) Create(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	if err := validateParentOnCreate(r.Context(), objMap); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	if err := validateOwnerReferencesFromMap(namespace, objMap); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid ownerReferences: %v", err))
 		return
@@ -198,6 +203,11 @@ func (h *ConvertingResourceHandler) Get(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	if !validateParentOwnership(r.Context(), privateObj) {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+
 	// Convert to public
 	publicObj, err := h.converter.PrivateToPublic(privateObj)
 	if err != nil {
@@ -230,6 +240,8 @@ func (h *ConvertingResourceHandler) List(w http.ResponseWriter, r *http.Request)
 	if labelSelectorStr := r.URL.Query().Get(constants.QueryParamLabelSelector); labelSelectorStr != "" {
 		opts.LabelSelector = labelSelectorStr
 	}
+
+	applyParentFilterToListOpts(r.Context(), &opts)
 
 	// Check if this is a watch request
 	if r.URL.Query().Get(constants.QueryParamWatch) == "true" {
@@ -356,6 +368,11 @@ func (h *ConvertingResourceHandler) Update(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	if !validateParentOwnership(r.Context(), existingPrivate) {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+
 	// Parse request body
 	var objMap map[string]interface{}
 	if err := json.NewDecoder(r.Body).Decode(&objMap); err != nil {
@@ -472,6 +489,11 @@ func (h *ConvertingResourceHandler) Patch(w http.ResponseWriter, r *http.Request
 		} else {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get object: %v", err))
 		}
+		return
+	}
+
+	if !validateParentOwnership(r.Context(), existingPrivate) {
+		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
 
@@ -615,6 +637,11 @@ func (h *ConvertingResourceHandler) Delete(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	if !validateParentOwnership(r.Context(), existing) {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+
 	if v, ok := existing.(types.CustomValidator); ok {
 		if err := v.ValidateDelete(r.Context()); err != nil {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("validation failed: %v", err))
@@ -670,6 +697,11 @@ func (h *ConvertingResourceHandler) UpdateStatus(w http.ResponseWriter, r *http.
 		} else {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get object: %v", err))
 		}
+		return
+	}
+
+	if !validateParentOwnership(r.Context(), existingPrivate) {
+		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
 

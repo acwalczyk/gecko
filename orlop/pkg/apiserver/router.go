@@ -71,10 +71,12 @@ func setupRouter(registry *ResourceRegistry, corsOrigins []string, customMiddlew
 			}
 
 			// Namespaced resources: LIST across all namespaces + CRUD under /namespaces/{namespace}
-			var namespacedHandlers []struct {
+			type namespacedEntry struct {
+				res     ResourceInfo
 				plural  string
 				handler *handlers.ResourceHandler
 			}
+			var namespacedHandlers []namespacedEntry
 			for _, res := range resources {
 				if !res.Namespaced {
 					continue
@@ -84,10 +86,7 @@ func setupRouter(registry *ResourceRegistry, corsOrigins []string, customMiddlew
 					continue
 				}
 				r.Get("/"+res.Plural, handler.List)
-				namespacedHandlers = append(namespacedHandlers, struct {
-					plural  string
-					handler *handlers.ResourceHandler
-				}{res.Plural, handler})
+				namespacedHandlers = append(namespacedHandlers, namespacedEntry{res, res.Plural, handler})
 			}
 			if len(namespacedHandlers) > 0 {
 				r.Route("/namespaces/{namespace}", func(r chi.Router) {
@@ -99,6 +98,23 @@ func setupRouter(registry *ResourceRegistry, corsOrigins []string, customMiddlew
 						r.Patch("/"+nh.plural+"/{name}", nh.handler.Patch)
 						r.Delete("/"+nh.plural+"/{name}", nh.handler.Delete)
 						r.Put("/"+nh.plural+"/{name}/status", nh.handler.UpdateStatus)
+
+						if nh.res.ParentResource != nil {
+							parentPlural := nh.res.ParentResource.Plural
+							idField := nh.res.ParentResource.IDField
+							childPlural := nh.plural
+							handler := nh.handler
+							r.Route("/"+parentPlural+"/{parentID}/"+childPlural, func(r chi.Router) {
+								r.Use(parentFilterMiddleware(idField, "parentID"))
+								r.Post("/", handler.Create)
+								r.Get("/", handler.List)
+								r.Get("/{name}", handler.Get)
+								r.Put("/{name}", handler.Update)
+								r.Patch("/{name}", handler.Patch)
+								r.Delete("/{name}", handler.Delete)
+								r.Put("/{name}/status", handler.UpdateStatus)
+							})
+						}
 					}
 				})
 			}
@@ -181,10 +197,12 @@ func setupConvertingRouter(publicRegistry *ResourceRegistry, privateRegistry *Re
 			}
 
 			// Namespaced resources: LIST across all namespaces + CRUD under /namespaces/{namespace}
-			var namespacedHandlers []struct {
+			type convertingEntry struct {
+				res     ResourceInfo
 				plural  string
 				handler *handlers.ConvertingResourceHandler
 			}
+			var namespacedHandlers []convertingEntry
 			for _, res := range resources {
 				if !res.Namespaced {
 					continue
@@ -195,10 +213,7 @@ func setupConvertingRouter(publicRegistry *ResourceRegistry, privateRegistry *Re
 				}
 				handler := handlerInterface.(*handlers.ConvertingResourceHandler)
 				r.Get("/"+res.Plural, handler.List)
-				namespacedHandlers = append(namespacedHandlers, struct {
-					plural  string
-					handler *handlers.ConvertingResourceHandler
-				}{res.Plural, handler})
+				namespacedHandlers = append(namespacedHandlers, convertingEntry{res, res.Plural, handler})
 			}
 			if len(namespacedHandlers) > 0 {
 				r.Route("/namespaces/{namespace}", func(r chi.Router) {
@@ -210,6 +225,23 @@ func setupConvertingRouter(publicRegistry *ResourceRegistry, privateRegistry *Re
 						r.Patch("/"+nh.plural+"/{name}", nh.handler.Patch)
 						r.Delete("/"+nh.plural+"/{name}", nh.handler.Delete)
 						r.Put("/"+nh.plural+"/{name}/status", nh.handler.UpdateStatus)
+
+						if nh.res.ParentResource != nil {
+							parentPlural := nh.res.ParentResource.Plural
+							idField := nh.res.ParentResource.IDField
+							childPlural := nh.plural
+							handler := nh.handler
+							r.Route("/"+parentPlural+"/{parentID}/"+childPlural, func(r chi.Router) {
+								r.Use(parentFilterMiddleware(idField, "parentID"))
+								r.Post("/", handler.Create)
+								r.Get("/", handler.List)
+								r.Get("/{name}", handler.Get)
+								r.Put("/{name}", handler.Update)
+								r.Patch("/{name}", handler.Patch)
+								r.Delete("/{name}", handler.Delete)
+								r.Put("/{name}/status", handler.UpdateStatus)
+							})
+						}
 					}
 				})
 			}

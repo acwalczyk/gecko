@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
@@ -627,6 +628,11 @@ func (s *PostgresStore) Watch(ctx context.Context, opts storage.ListOptions, res
 					}
 				}
 
+				// Filter by field filters
+				if len(opts.FieldFilters) > 0 && !matchesFieldFilters(clientObj, opts.FieldFilters) {
+					continue
+				}
+
 				select {
 				case outCh <- event:
 				case <-stopCh:
@@ -642,6 +648,37 @@ func (s *PostgresStore) Watch(ctx context.Context, opts storage.ListOptions, res
 	}
 
 	return outCh, stopFunc, nil
+}
+
+func matchesFieldFilters(obj client.Object, filters map[string]string) bool {
+	data, err := json.Marshal(obj)
+	if err != nil {
+		return false
+	}
+	var objMap map[string]interface{}
+	if err := json.Unmarshal(data, &objMap); err != nil {
+		return false
+	}
+	for path, expected := range filters {
+		if fieldValueFromMap(objMap, path) != expected {
+			return false
+		}
+	}
+	return true
+}
+
+func fieldValueFromMap(m map[string]interface{}, path string) string {
+	parts := strings.Split(path, ".")
+	current := interface{}(m)
+	for _, part := range parts {
+		cm, ok := current.(map[string]interface{})
+		if !ok {
+			return ""
+		}
+		current = cm[part]
+	}
+	s, _ := current.(string)
+	return s
 }
 
 // isDuplicateKeyError checks if the error is a duplicate key constraint violation.
@@ -701,6 +738,7 @@ func (s *PostgresStore) buildListQuery(opts storage.ListOptions, filterValue str
 	qb.WhereNamespace(opts.Namespace)
 	qb.WhereLabelSelector(labelSelector)
 	qb.WhereShardSelector(opts.ShardSelector)
+	qb.WhereFieldFilters(opts.FieldFilters)
 	qb.WhereContinueToken(continueToken)
 
 	// Add context filter if configured
