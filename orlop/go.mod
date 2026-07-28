@@ -1,6 +1,6 @@
 module github.com/openshift-online/gecko/orlop
 
-go 1.26.4
+go 1.26.0
 
 require (
 	github.com/evanphx/json-patch/v5 v5.9.11
