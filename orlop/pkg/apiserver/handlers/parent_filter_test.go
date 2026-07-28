@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 func TestParentFilter_ContextRoundTrip(t *testing.T) {
@@ -12,7 +13,7 @@ func TestParentFilter_ContextRoundTrip(t *testing.T) {
 	pf := ParentFilter{IDField: "spec.clusterID", ID: "c1"}
 	ctx = WithParentFilter(ctx, pf)
 
-	got := parentFilterFromContext(ctx)
+	got := ParentFilterFromContext(ctx)
 	if got == nil {
 		t.Fatal("expected parent filter in context, got nil")
 	}
@@ -23,7 +24,7 @@ func TestParentFilter_ContextRoundTrip(t *testing.T) {
 
 func TestParentFilter_MissingContext(t *testing.T) {
 	ctx := context.Background()
-	got := parentFilterFromContext(ctx)
+	got := ParentFilterFromContext(ctx)
 	if got != nil {
 		t.Fatalf("expected nil, got %+v", got)
 	}
@@ -88,6 +89,51 @@ func TestValidateParentOnCreate(t *testing.T) {
 		}
 		if err := validateParentOnCreate(context.Background(), objMap); err != nil {
 			t.Fatalf("expected no error without parent filter, got %v", err)
+		}
+	})
+}
+
+func TestValidateParentOwnership(t *testing.T) {
+	t.Run("matching object returns true", func(t *testing.T) {
+		ctx := WithParentFilter(context.Background(), ParentFilter{IDField: "spec.clusterID", ID: "c1"})
+		obj := &unstructured.Unstructured{}
+		obj.SetUnstructuredContent(map[string]interface{}{
+			"spec": map[string]interface{}{"clusterID": "c1"},
+		})
+		if !validateParentOwnership(ctx, obj) {
+			t.Fatal("expected true for matching object")
+		}
+	})
+
+	t.Run("mismatched object returns false", func(t *testing.T) {
+		ctx := WithParentFilter(context.Background(), ParentFilter{IDField: "spec.clusterID", ID: "c2"})
+		obj := &unstructured.Unstructured{}
+		obj.SetUnstructuredContent(map[string]interface{}{
+			"spec": map[string]interface{}{"clusterID": "c1"},
+		})
+		if validateParentOwnership(ctx, obj) {
+			t.Fatal("expected false for mismatched object")
+		}
+	})
+
+	t.Run("no parent filter returns true", func(t *testing.T) {
+		obj := &unstructured.Unstructured{}
+		obj.SetUnstructuredContent(map[string]interface{}{
+			"spec": map[string]interface{}{"clusterID": "c1"},
+		})
+		if !validateParentOwnership(context.Background(), obj) {
+			t.Fatal("expected true when no parent filter in context")
+		}
+	})
+
+	t.Run("missing field returns false", func(t *testing.T) {
+		ctx := WithParentFilter(context.Background(), ParentFilter{IDField: "spec.clusterID", ID: "c1"})
+		obj := &unstructured.Unstructured{}
+		obj.SetUnstructuredContent(map[string]interface{}{
+			"spec": map[string]interface{}{},
+		})
+		if validateParentOwnership(ctx, obj) {
+			t.Fatal("expected false for missing field")
 		}
 	})
 }

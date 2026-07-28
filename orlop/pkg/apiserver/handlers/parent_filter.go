@@ -23,7 +23,8 @@ func WithParentFilter(ctx context.Context, pf ParentFilter) context.Context {
 	return context.WithValue(ctx, parentFilterKey{}, pf)
 }
 
-func parentFilterFromContext(ctx context.Context) *ParentFilter {
+// ParentFilterFromContext retrieves the ParentFilter from the given context, or nil if absent.
+func ParentFilterFromContext(ctx context.Context) *ParentFilter {
 	pf, ok := ctx.Value(parentFilterKey{}).(ParentFilter)
 	if !ok {
 		return nil
@@ -32,7 +33,7 @@ func parentFilterFromContext(ctx context.Context) *ParentFilter {
 }
 
 func applyParentFilterToListOpts(ctx context.Context, opts *storage.ListOptions) {
-	pf := parentFilterFromContext(ctx)
+	pf := ParentFilterFromContext(ctx)
 	if pf == nil {
 		return
 	}
@@ -43,7 +44,7 @@ func applyParentFilterToListOpts(ctx context.Context, opts *storage.ListOptions)
 }
 
 func validateParentOnCreate(ctx context.Context, objMap map[string]interface{}) error {
-	pf := parentFilterFromContext(ctx)
+	pf := ParentFilterFromContext(ctx)
 	if pf == nil {
 		return nil
 	}
@@ -54,7 +55,7 @@ func validateParentOnCreate(ctx context.Context, objMap map[string]interface{}) 
 }
 
 func validateParentOwnership(ctx context.Context, obj client.Object) bool {
-	pf := parentFilterFromContext(ctx)
+	pf := ParentFilterFromContext(ctx)
 	if pf == nil {
 		return true
 	}
