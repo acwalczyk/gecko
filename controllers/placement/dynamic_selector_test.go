@@ -44,9 +44,9 @@ func (m *mockSMLookup) accessSecretVersion(_ context.Context, name string) ([]by
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
 const (
-	filterMCNames  = "labels.maestro-consumer-name:*"
-	filterArgoCD   = `labels.infra-type:region name:argocd-cluster`
-	testProject    = "my-project"
+	filterMCNames = "labels.maestro-consumer-name:*"
+	filterArgoCD  = `labels.infra-type:region name:argocd-cluster`
+	testProject   = "my-project"
 )
 
 // smSecret builds a minimal secretmanagerpb.Secret with the given name and labels.

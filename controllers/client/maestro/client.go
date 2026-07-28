@@ -13,11 +13,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/openshift-online/gecko/controllers/util/manifest"
 	"github.com/openshift-online/gecko/controllers/client/transportclient"
 	"github.com/openshift-online/gecko/controllers/util/constants"
 	apperrors "github.com/openshift-online/gecko/controllers/util/errors"
 	"github.com/openshift-online/gecko/controllers/util/logger"
+	"github.com/openshift-online/gecko/controllers/util/manifest"
 	"github.com/openshift-online/gecko/controllers/util/version"
 	"github.com/openshift-online/maestro/pkg/api/openapi"
 	"github.com/openshift-online/maestro/pkg/client/cloudevents/grpcsource"

@@ -13,9 +13,9 @@ import (
 
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 
+	"github.com/openshift-online/gecko/controllers/client/transport"
 	"github.com/openshift-online/gecko/controllers/hc/manifest"
 	"github.com/openshift-online/gecko/controllers/util/conditions"
-	"github.com/openshift-online/gecko/controllers/client/transport"
 	"github.com/openshift-online/gecko/controllers/util/logger"
 )
 

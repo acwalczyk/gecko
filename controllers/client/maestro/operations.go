@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/openshift-online/gecko/controllers/util/manifest"
 	"github.com/openshift-online/gecko/controllers/util/constants"
 	apperrors "github.com/openshift-online/gecko/controllers/util/errors"
 	"github.com/openshift-online/gecko/controllers/util/logger"
+	"github.com/openshift-online/gecko/controllers/util/manifest"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"

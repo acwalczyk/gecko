@@ -11,8 +11,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	workv1 "open-cluster-management.io/api/work/v1"
 
-	"github.com/openshift-online/gecko/controllers/util/manifest"
 	"github.com/openshift-online/gecko/controllers/util/constants"
+	"github.com/openshift-online/gecko/controllers/util/manifest"
 )
 
 // ─── test helpers ─────────────────────────────────────────────────────────────
@@ -118,32 +118,32 @@ func TestCompareGenerations_Operations(t *testing.T) {
 		wantExistingGen int64
 	}{
 		{
-			name:            "resource does not exist → create",
+			name:   "resource does not exist → create",
 			newGen: 5, existingGen: 0, exists: false,
 			wantOp: manifest.OperationCreate, wantNewGen: 5, wantExistingGen: 0,
 		},
 		{
-			name:            "exists=false with non-zero existing arg → existing zeroed in decision",
+			name:   "exists=false with non-zero existing arg → existing zeroed in decision",
 			newGen: 3, existingGen: 7, exists: false,
 			wantOp: manifest.OperationCreate, wantNewGen: 3, wantExistingGen: 0,
 		},
 		{
-			name:            "generations match → skip",
+			name:   "generations match → skip",
 			newGen: 4, existingGen: 4, exists: true,
 			wantOp: manifest.OperationSkip, wantNewGen: 4, wantExistingGen: 4,
 		},
 		{
-			name:            "both zero → skip (equal)",
+			name:   "both zero → skip (equal)",
 			newGen: 0, existingGen: 0, exists: true,
 			wantOp: manifest.OperationSkip, wantNewGen: 0, wantExistingGen: 0,
 		},
 		{
-			name:            "new generation higher → update",
+			name:   "new generation higher → update",
 			newGen: 5, existingGen: 3, exists: true,
 			wantOp: manifest.OperationUpdate, wantNewGen: 5, wantExistingGen: 3,
 		},
 		{
-			name:            "new generation lower (rollback) → update",
+			name:   "new generation lower (rollback) → update",
 			newGen: 2, existingGen: 5, exists: true,
 			wantOp: manifest.OperationUpdate, wantNewGen: 2, wantExistingGen: 5,
 		},

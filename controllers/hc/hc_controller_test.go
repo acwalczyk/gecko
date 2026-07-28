@@ -12,15 +12,15 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	workv1 "open-cluster-management.io/api/work/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	workv1 "open-cluster-management.io/api/work/v1"
 
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 
-	"github.com/openshift-online/gecko/controllers/hc"
 	"github.com/openshift-online/gecko/controllers/client/transport"
 	"github.com/openshift-online/gecko/controllers/client/transport/mock"
+	"github.com/openshift-online/gecko/controllers/hc"
 	"github.com/openshift-online/gecko/controllers/util/logger"
 )
 

@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/openshift-online/gecko/controllers/util/manifest"
 	"github.com/openshift-online/gecko/controllers/util/constants"
+	"github.com/openshift-online/gecko/controllers/util/manifest"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	workv1 "open-cluster-management.io/api/work/v1"
 )

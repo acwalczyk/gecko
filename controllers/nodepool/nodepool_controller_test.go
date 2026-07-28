@@ -12,9 +12,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	workv1 "open-cluster-management.io/api/work/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	workv1 "open-cluster-management.io/api/work/v1"
 
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 
@@ -405,8 +405,8 @@ func TestReconcile_VRNotReady_StatusUpdateError(t *testing.T) {
 }
 
 func TestReconcile_VRVersionMismatch(t *testing.T) {
-	np := testNodePool("4.15.0")           // VR resolved to 4.15.0
-	np.Spec.Release.Version = "4.16.0"    // but spec wants 4.16.0
+	np := testNodePool("4.15.0")       // VR resolved to 4.15.0
+	np.Spec.Release.Version = "4.16.0" // but spec wants 4.16.0
 	cluster := testCluster(true, true)
 
 	tr := mock.New()

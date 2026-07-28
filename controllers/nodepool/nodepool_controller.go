@@ -14,16 +14,16 @@ import (
 
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 
+	"github.com/openshift-online/gecko/controllers/client/transport"
 	"github.com/openshift-online/gecko/controllers/nodepool/manifest"
 	"github.com/openshift-online/gecko/controllers/util/conditions"
-	"github.com/openshift-online/gecko/controllers/client/transport"
 	"github.com/openshift-online/gecko/controllers/util/logger"
 )
 
 const (
-	adapterName       = "nodepool-controller"
-	requeuePending    = 15 * time.Second
-	requeueStable     = 5 * time.Minute
+	adapterName    = "nodepool-controller"
+	requeuePending = 15 * time.Second
+	requeueStable  = 5 * time.Minute
 )
 
 // Reconciler implements the nodepool controller reconciliation loop.
@@ -291,7 +291,6 @@ func (r *Reconciler) applyStatusConditions(np *privatev1.NodePool, mwStatus *tra
 	})
 	return a || b || c
 }
-
 
 // defaultReplicas is the hardcoded default for this POC.
 const defaultReplicas = int32(1)

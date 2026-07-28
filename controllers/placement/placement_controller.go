@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	adapterName  = "placement-controller"
+	adapterName   = "placement-controller"
 	requeueStable = 5 * time.Minute
 )
 

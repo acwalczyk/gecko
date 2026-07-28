@@ -14,9 +14,9 @@ import (
 
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 
-	"github.com/openshift-online/gecko/controllers/versionresolution"
 	"github.com/openshift-online/gecko/controllers/util/conditions"
 	"github.com/openshift-online/gecko/controllers/util/logger"
+	"github.com/openshift-online/gecko/controllers/versionresolution"
 )
 
 const (

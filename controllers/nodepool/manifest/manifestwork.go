@@ -24,10 +24,10 @@ const (
 
 	defaultReplicas = int32(1)
 
-	hypershiftGroup   = "hypershift.openshift.io"
-	nodepoolResource  = "nodepools"
+	hypershiftGroup    = "hypershift.openshift.io"
+	nodepoolResource   = "nodepools"
 	nodepoolAPIVersion = "hypershift.openshift.io/v1beta1"
-	nodepoolKind      = "NodePool"
+	nodepoolKind       = "NodePool"
 )
 
 // Input holds all parameters for building the NodePool ManifestWork.
@@ -89,7 +89,7 @@ func Build(input Input) (*workv1.ManifestWork, error) {
 			"labels": map[string]any{
 				"hyperfleet.io/cluster-id":  input.ClusterID,
 				"hyperfleet.io/nodepool-id": input.NodePoolID,
-				"hyperfleet.io/managed-by": adapterName,
+				"hyperfleet.io/managed-by":  adapterName,
 			},
 			"annotations": map[string]any{
 				"hyperfleet.io/generation": genStr,

@@ -86,8 +86,8 @@ func Build(input Input) (*workv1.ManifestWork, error) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: fmt.Sprintf("%s-hc-controller", input.ClusterID),
 			Labels: map[string]string{
-				"hyperfleet.io/cluster-id":  input.ClusterID,
-				"hyperfleet.io/controller":  "hc-controller",
+				"hyperfleet.io/cluster-id": input.ClusterID,
+				"hyperfleet.io/controller": "hc-controller",
 				"hyperfleet.io/component":  "hosted-cluster",
 			},
 			Annotations: map[string]string{
@@ -169,9 +169,9 @@ func buildNamespace(input Input, clusterNS string) (workv1.Manifest, error) {
 		"metadata": map[string]any{
 			"name": clusterNS,
 			"labels": map[string]any{
-				"hyperfleet.io/cluster-id":   input.ClusterID,
-				"hyperfleet.io/cluster-name": input.ClusterName,
-				"hyperfleet.io/managed-by":   "hc-controller",
+				"hyperfleet.io/cluster-id":    input.ClusterID,
+				"hyperfleet.io/cluster-name":  input.ClusterName,
+				"hyperfleet.io/managed-by":    "hc-controller",
 				"hyperfleet.io/resource-type": "namespace",
 			},
 			"annotations": map[string]any{
@@ -269,7 +269,7 @@ func buildHostedCluster(input Input, clusterNS string) (workv1.Manifest, error) 
 	oauthHostname := fmt.Sprintf("oauth.%s-%s.%s", input.ClusterName, input.Slug, input.BaseDomain)
 
 	annotations := map[string]any{
-		"hyperfleet.io/generation": genStr,
+		"hyperfleet.io/generation":                                      genStr,
 		"hypershift.openshift.io/pod-security-admission-label-override": "baseline",
 		"hypershift.openshift.io/skip-kas-conflict-san-validation":      "true",
 	}
