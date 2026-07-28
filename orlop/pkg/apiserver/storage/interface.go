@@ -18,6 +18,10 @@ type ListOptions struct {
 	// ShardSelector specifies which shard of results to return.
 	// Nil means return all results (no sharding).
 	ShardSelector *ShardSelector
+
+	// FieldFilters specifies field-based filtering. Keys are dot-separated
+	// JSON paths (e.g., "spec.clusterID"), values are expected string values.
+	FieldFilters map[string]string
 }
 
 // ShardSelector represents a shard selection for list/watch operations.

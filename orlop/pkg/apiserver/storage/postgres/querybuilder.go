@@ -147,6 +147,26 @@ func (qb *QueryBuilder) buildShardHashSQL() string {
 	return strings.Join(parts, " | ")
 }
 
+// WhereFieldFilters adds field-based filtering using JSONB path queries.
+// Keys are dot-separated JSON paths (e.g., "spec.clusterID"), values are
+// expected string values. Path parts come from server config, not user
+// input; values are parameterized.
+func (qb *QueryBuilder) WhereFieldFilters(filters map[string]string) *QueryBuilder {
+	for path, value := range filters {
+		parts := strings.Split(path, ".")
+		jsonbExpr := "data"
+		for i, part := range parts {
+			if i == len(parts)-1 {
+				jsonbExpr += fmt.Sprintf("->>'%s'", part)
+			} else {
+				jsonbExpr += fmt.Sprintf("->'%s'", part)
+			}
+		}
+		qb.Where(fmt.Sprintf("%s = $%d", jsonbExpr, qb.argNum), value)
+	}
+	return qb
+}
+
 // WhereContinueToken adds pagination filtering based on continue token.
 func (qb *QueryBuilder) WhereContinueToken(token *storage.ContinueToken) *QueryBuilder {
 	if token == nil {

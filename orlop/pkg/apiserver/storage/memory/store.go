@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -302,6 +303,11 @@ func (s *MemoryStore) List(ctx context.Context, opts storage.ListOptions) (clien
 			}
 		}
 
+		// Filter by field filters
+		if len(opts.FieldFilters) > 0 && !matchesFieldFilters(obj, opts.FieldFilters) {
+			continue
+		}
+
 		// Check if we've reached the limit
 		if int64(len(items)) >= limit {
 			remainingAfterLimit++
@@ -561,6 +567,14 @@ func (s *MemoryStore) Watch(ctx context.Context, opts storage.ListOptions, resou
 					}
 				}
 
+				// Filter by field filters
+				if len(opts.FieldFilters) > 0 {
+					clientObj, ok := event.Object.(client.Object)
+					if !ok || !matchesFieldFilters(clientObj, opts.FieldFilters) {
+						continue
+					}
+				}
+
 				// Send filtered event
 				select {
 				case outCh <- event:
@@ -576,6 +590,37 @@ func (s *MemoryStore) Watch(ctx context.Context, opts storage.ListOptions, resou
 	}
 
 	return outCh, stopFunc, nil
+}
+
+func matchesFieldFilters(obj client.Object, filters map[string]string) bool {
+	data, err := json.Marshal(obj)
+	if err != nil {
+		return false
+	}
+	var objMap map[string]interface{}
+	if err := json.Unmarshal(data, &objMap); err != nil {
+		return false
+	}
+	for path, expected := range filters {
+		if fieldValueFromMap(objMap, path) != expected {
+			return false
+		}
+	}
+	return true
+}
+
+func fieldValueFromMap(m map[string]interface{}, path string) string {
+	parts := strings.Split(path, ".")
+	current := interface{}(m)
+	for _, part := range parts {
+		cm, ok := current.(map[string]interface{})
+		if !ok {
+			return ""
+		}
+		current = cm[part]
+	}
+	s, _ := current.(string)
+	return s
 }
 
 // int64Ptr returns a pointer to an int64 value.

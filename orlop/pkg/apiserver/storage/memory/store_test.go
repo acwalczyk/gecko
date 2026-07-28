@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -777,4 +778,126 @@ func TestMemoryStore_ContextFilter(t *testing.T) {
 			t.Error("Expected error when context filter key is missing")
 		}
 	})
+}
+
+func TestMemoryStore_FieldFilters(t *testing.T) {
+	t.Run("list filters by field value", func(t *testing.T) {
+		store := newTestStore()
+		ctx := context.Background()
+
+		store.Create(ctx, newTestObject(withName("np1"), withNamespace("default"),
+			withSpec(map[string]interface{}{"clusterID": "c1"})))
+		store.Create(ctx, newTestObject(withName("np2"), withNamespace("default"),
+			withSpec(map[string]interface{}{"clusterID": "c2"})))
+		store.Create(ctx, newTestObject(withName("np3"), withNamespace("default"),
+			withSpec(map[string]interface{}{"clusterID": "c1"})))
+
+		list, err := store.List(ctx, storage.ListOptions{
+			Namespace:    "default",
+			FieldFilters: map[string]string{"spec.clusterID": "c1"},
+		})
+		if err != nil {
+			t.Fatalf("List() failed: %v", err)
+		}
+
+		items, _ := extractItems(list)
+		if len(items) != 2 {
+			t.Fatalf("expected 2 items, got %d", len(items))
+		}
+	})
+
+	t.Run("list with nested field path", func(t *testing.T) {
+		store := newTestStore()
+		ctx := context.Background()
+
+		store.Create(ctx, newTestObject(withName("np1"), withNamespace("default"),
+			withSpec(map[string]interface{}{"platform": map[string]interface{}{"type": "aws"}})))
+		store.Create(ctx, newTestObject(withName("np2"), withNamespace("default"),
+			withSpec(map[string]interface{}{"platform": map[string]interface{}{"type": "gcp"}})))
+
+		list, err := store.List(ctx, storage.ListOptions{
+			Namespace:    "default",
+			FieldFilters: map[string]string{"spec.platform.type": "aws"},
+		})
+		if err != nil {
+			t.Fatalf("List() failed: %v", err)
+		}
+
+		items, _ := extractItems(list)
+		if len(items) != 1 {
+			t.Fatalf("expected 1 item, got %d", len(items))
+		}
+	})
+
+	t.Run("list with empty field filters returns all", func(t *testing.T) {
+		store := newTestStore()
+		ctx := context.Background()
+
+		store.Create(ctx, newTestObject(withName("np1"), withNamespace("default"),
+			withSpec(map[string]interface{}{"clusterID": "c1"})))
+		store.Create(ctx, newTestObject(withName("np2"), withNamespace("default"),
+			withSpec(map[string]interface{}{"clusterID": "c2"})))
+
+		list, err := store.List(ctx, storage.ListOptions{
+			Namespace:    "default",
+			FieldFilters: map[string]string{},
+		})
+		if err != nil {
+			t.Fatalf("List() failed: %v", err)
+		}
+
+		items, _ := extractItems(list)
+		if len(items) != 2 {
+			t.Fatalf("expected 2 items, got %d", len(items))
+		}
+	})
+
+	t.Run("watch filters by field value", func(t *testing.T) {
+		store := newTestStore()
+		ctx := context.Background()
+
+		eventCh, stop, err := store.Watch(ctx, storage.ListOptions{
+			Namespace:    "default",
+			FieldFilters: map[string]string{"spec.clusterID": "c1"},
+		}, "0")
+		if err != nil {
+			t.Fatalf("Watch() failed: %v", err)
+		}
+		defer stop()
+
+		// Create matching object
+		store.Create(ctx, newTestObject(withName("np1"), withNamespace("default"),
+			withSpec(map[string]interface{}{"clusterID": "c1"})))
+		// Create non-matching object
+		store.Create(ctx, newTestObject(withName("np2"), withNamespace("default"),
+			withSpec(map[string]interface{}{"clusterID": "c2"})))
+
+		event := <-eventCh
+		if event.Type != storage.EventAdded {
+			t.Fatalf("expected ADDED event, got %s", event.Type)
+		}
+		eventObj := event.Object.(client.Object)
+		if eventObj.GetName() != "np1" {
+			t.Fatalf("expected event for np1, got %s", eventObj.GetName())
+		}
+
+		// Verify no more events (the c2 object should have been filtered)
+		select {
+		case ev := <-eventCh:
+			t.Fatalf("unexpected event: %v", ev)
+		default:
+		}
+	})
+}
+
+func extractItems(list client.ObjectList) ([]client.Object, error) {
+	items, err := meta.ExtractList(list)
+	if err != nil {
+		return nil, err
+	}
+	var result []client.Object
+	for _, item := range items {
+		result = append(result, item.(client.Object))
+	}
+	return result, nil
 }
