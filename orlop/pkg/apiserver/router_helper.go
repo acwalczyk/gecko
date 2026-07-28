@@ -2,7 +2,9 @@ package apiserver
 
 import (
 	"fmt"
+	"net/http"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/conversion"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/handlers"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -37,4 +39,15 @@ func createConvertingHandlerWithSharedStore(publicRegistry *ResourceRegistry, pr
 	)
 
 	return handler, nil
+}
+
+func parentFilterMiddleware(idField, urlParam string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			parentID := chi.URLParam(r, urlParam)
+			pf := handlers.ParentFilter{IDField: idField, ID: parentID}
+			ctx := handlers.WithParentFilter(r.Context(), pf)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
 }
