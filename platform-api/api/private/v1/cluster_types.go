@@ -2,166 +2,189 @@ package v1
 
 import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-// Cluster is the Schema for the clusters API
 // +kubebuilder:object:root=true
+// +kubebuilder:resource:scope=Namespaced
 // +kubebuilder:subresource:status
 type Cluster struct {
-	metav1.TypeMeta `json:",inline"`
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	// metadata is a standard object metadata
-	// +optional
-	metav1.ObjectMeta `json:"metadata,omitzero"`
-
-	// spec defines the desired state of Cluster
-	// +required
 	// +orlop:public
-	Spec ClusterSpec `json:"spec"`
-
-	// status defines the observed state of Cluster
-	// +optional
+	Spec ClusterSpec `json:"spec,omitempty"`
 	// +orlop:public
-	Status ClusterStatus `json:"status,omitzero"`
+	Status ClusterStatus `json:"status,omitempty"`
 }
 
-// ClusterSpec defines the desired state of a Cluster.
-type ClusterSpec struct {
-	// infraID is the unique infrastructure identifier for this cluster.
-	// +required
-	// +orlop:public
-	InfraID string `json:"infraID"`
+// +kubebuilder:object:root=true
+type ClusterList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
 
-	// issuerURL is the OIDC issuer URL for the cluster.
-	// +optional
+	// +orlop:public
+	Items []Cluster `json:"items"`
+}
+
+// ClusterSpec is user-defined input only.
+type ClusterSpec struct {
+	// +orlop:public
+	InfraID string `json:"infraID,omitempty"`
 	// +orlop:public
 	IssuerURL string `json:"issuerURL,omitempty"`
-
-	// platform specifies the underlying infrastructure provider configuration.
-	// +required
 	// +orlop:public
-	Platform PlatformSpec `json:"platform"`
-
-	// release specifies the target release for the cluster.
-	// +required
+	Platform ClusterPlatformSpec `json:"platform"`
 	// +orlop:public
 	Release ReleaseSpec `json:"release"`
-
-	// networking defines the networking configuration for the cluster.
-	// +optional
 	// +orlop:public
-	Networking *ClusterNetworkingSpec `json:"networking,omitempty"`
-
-	// dns defines the DNS configuration for the cluster.
-	// +optional
+	Networking NetworkingSpec `json:"networking"`
 	// +orlop:public
 	DNS *DNSSpec `json:"dns,omitempty"`
 }
 
-// ClusterStatus defines the observed state of a Cluster.
-type ClusterStatus struct {
-	// conditions represent the latest available observations of a cluster's current state.
-	// +optional
+type ClusterPlatformSpec struct {
 	// +orlop:public
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
-
-	// placementResult holds the result of the placement decision.
-	// +optional
-	// +orlop:public
-	PlacementResult *PlacementResult `json:"placementResult,omitempty"`
-
-	// hostedClusterResult holds the result of the hosted cluster provisioning.
-	// +optional
-	// +orlop:public
-	HostedClusterResult *HostedClusterResult `json:"hostedClusterResult,omitempty"`
-
-	// versionResolution holds the resolved version information.
-	// +optional
-	VersionResolution *VersionResolution `json:"versionResolution,omitempty"`
-}
-
-// PlatformSpec specifies the underlying infrastructure provider configuration.
-type PlatformSpec struct {
-	// type is the infrastructure provider type (e.g. "GCP", "AWS").
-	// +required
-	// +orlop:public
+	// +kubebuilder:validation:Enum=GCP
 	Type string `json:"type"`
+	// +orlop:public
+	GCP *GCPClusterPlatform `json:"gcp,omitempty"`
 }
 
-// ReleaseSpec defines the target release for a cluster or node pool.
+type GCPClusterPlatform struct {
+	// +orlop:public
+	ProjectID string `json:"projectID,omitempty"`
+	// +orlop:public
+	Region string `json:"region,omitempty"`
+	// +orlop:public
+	Network string `json:"network,omitempty"`
+	// +orlop:public
+	Subnet string `json:"subnet,omitempty"`
+	// +orlop:public
+	// +kubebuilder:validation:Enum=PublicAndPrivate;Private
+	EndpointAccess string `json:"endpointAccess,omitempty"`
+	// +orlop:public
+	// +kubebuilder:validation:Required
+	WorkloadIdentity WorkloadIdentitySpec `json:"workloadIdentity"`
+	// +orlop:public
+	ResourceLabels []GCPResourceLabel `json:"resourceLabels,omitempty"`
+}
+
+type WorkloadIdentitySpec struct {
+	// +orlop:public
+	PoolID string `json:"poolID,omitempty"`
+	// +orlop:public
+	ProjectNumber string `json:"projectNumber,omitempty"`
+	// +orlop:public
+	ProviderID string `json:"providerID,omitempty"`
+	// +orlop:public
+	ServiceAccountsRef *ServiceAccountsRef `json:"serviceAccountsRef,omitempty"`
+}
+
+type ServiceAccountsRef struct {
+	// +orlop:public
+	NodePoolEmail string `json:"nodePoolEmail,omitempty"`
+	// +orlop:public
+	ControlPlaneEmail string `json:"controlPlaneEmail,omitempty"`
+	// +orlop:public
+	CloudControllerEmail string `json:"cloudControllerEmail,omitempty"`
+	// +orlop:public
+	StorageEmail string `json:"storageEmail,omitempty"`
+	// +orlop:public
+	ImageRegistryEmail string `json:"imageRegistryEmail,omitempty"`
+	// +orlop:public
+	NetworkEmail string `json:"networkEmail,omitempty"`
+}
+
+// GCPResourceLabel is a label applied to GCP resources created for the cluster.
+type GCPResourceLabel struct {
+	// +orlop:public
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	Key string `json:"key"`
+	// +orlop:public
+	// +kubebuilder:validation:MaxLength=63
+	Value string `json:"value"`
+}
+
+// ReleaseSpec defines the target OCP release version.
+// The version-resolution adapter resolves Version+ChannelGroup to a release image pullspec.
 type ReleaseSpec struct {
-	// image is the release image pullspec.
-	// +required
 	// +orlop:public
-	Image string `json:"image"`
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Version string `json:"version"`
+	// +orlop:public
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	ChannelGroup string `json:"channelGroup"`
 }
 
-// ClusterNetworkingSpec defines the networking configuration.
-type ClusterNetworkingSpec struct {
-	// clusterNetwork is the list of IP address pools for pod IPs.
-	// +optional
+type NetworkingSpec struct {
 	// +orlop:public
-	ClusterNetwork []NetworkRange `json:"clusterNetwork,omitempty"`
-
-	// serviceNetwork is the list of IP address pools for service IPs.
-	// +optional
+	MachineNetwork []MachineNetworkEntry `json:"machineNetwork,omitempty"`
 	// +orlop:public
-	ServiceNetwork []NetworkRange `json:"serviceNetwork,omitempty"`
-
-	// networkType is the CNI plugin type (e.g. "OVNKubernetes").
-	// +optional
+	ClusterNetwork []ClusterNetworkEntry `json:"clusterNetwork,omitempty"`
 	// +orlop:public
+	ServiceNetwork []string `json:"serviceNetwork,omitempty"`
+	// +orlop:public
+	// +kubebuilder:validation:Enum=OVNKubernetes;Other
+	// +kubebuilder:default=OVNKubernetes
 	NetworkType string `json:"networkType,omitempty"`
 }
 
-// NetworkRange defines a network CIDR range.
-type NetworkRange struct {
-	// cidr is the IP address range in CIDR notation.
-	// +required
+type MachineNetworkEntry struct {
 	// +orlop:public
 	CIDR string `json:"cidr"`
 }
 
-// DNSSpec defines the DNS configuration for the cluster.
+type ClusterNetworkEntry struct {
+	// +orlop:public
+	CIDR string `json:"cidr,omitempty"`
+	// +orlop:public
+	HostPrefix int32 `json:"hostPrefix,omitempty"`
+}
+
 type DNSSpec struct {
-	// baseDomain is the base DNS domain for the cluster.
-	// +required
 	// +orlop:public
-	BaseDomain string `json:"baseDomain"`
+	BaseDomain string `json:"baseDomain,omitempty"`
 }
 
-// PlacementResult holds the result of the placement decision.
+// ClusterStatus is written by controllers only.
+type ClusterStatus struct {
+	// +orlop:public
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// PlacementResult is written by the placement controller.
+	// +orlop:public
+	PlacementResult *PlacementResult `json:"placementResult,omitempty"`
+
+	// HostedClusterResult is written by the hc-adapter.
+	// +orlop:public
+	HostedClusterResult *HostedClusterResult `json:"hostedClusterResult,omitempty"`
+
+	// VersionResolution is written by the version-resolution controller.
+	// Not exposed on the public API.
+	VersionResolution *VersionResolutionResult `json:"versionResolution,omitempty"`
+}
+
+// PlacementResult holds the placement controller's output.
 type PlacementResult struct {
-	// managementCluster is the name of the management cluster where this cluster is placed.
-	// +optional
-	// +orlop:public
-	ManagementCluster string `json:"managementCluster,omitempty"`
+	ManagementClusterName string `json:"managementClusterName,omitempty"`
+	BaseDomain            string `json:"baseDomain,omitempty"`
 }
 
-// HostedClusterResult holds the result of the hosted cluster provisioning.
+// VersionResolutionResult holds the VR controller's output.
+type VersionResolutionResult struct {
+	ReleaseImage   string `json:"releaseImage,omitempty"`
+	ReleaseVersion string `json:"releaseVersion,omitempty"`
+	ReleaseChannel string `json:"releaseChannel,omitempty"`
+}
+
+// HostedClusterResult holds the hc-adapter's output from ManifestWork status feedback.
+// This field is read-only — populated by the hc-adapter only.
 type HostedClusterResult struct {
-	// kubeconfig is the kubeconfig for accessing the hosted cluster.
-	// +optional
 	// +orlop:public
-	Kubeconfig string `json:"kubeconfig,omitempty"`
-}
-
-// VersionResolution holds the resolved version information.
-type VersionResolution struct {
-	// resolvedImage is the fully-resolved release image pullspec.
-	// +optional
-	ResolvedImage string `json:"resolvedImage,omitempty"`
-
-	// resolvedVersion is the resolved OCP version string.
-	// +optional
-	ResolvedVersion string `json:"resolvedVersion,omitempty"`
-}
-
-// ClusterList contains a list of Cluster
-// +kubebuilder:object:root=true
-type ClusterList struct {
-	metav1.TypeMeta `json:",inline"`
-	metav1.ListMeta `json:"metadata,omitzero"`
+	APIEndpoint string `json:"apiEndpoint,omitempty"`
 	// +orlop:public
-	Items []Cluster `json:"items"`
+	Version string `json:"version,omitempty"`
 }
 
 func init() { register(&Cluster{}, &ClusterList{}) }

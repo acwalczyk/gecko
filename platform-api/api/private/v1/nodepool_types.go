@@ -2,136 +2,109 @@ package v1
 
 import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-// NodePool is the Schema for the nodepools API
 // +kubebuilder:object:root=true
+// +kubebuilder:resource:scope=Namespaced
 // +kubebuilder:subresource:status
 type NodePool struct {
-	metav1.TypeMeta `json:",inline"`
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	// metadata is a standard object metadata
-	// +optional
-	metav1.ObjectMeta `json:"metadata,omitzero"`
-
-	// spec defines the desired state of NodePool
-	// +required
 	// +orlop:public
-	Spec NodePoolSpec `json:"spec"`
-
-	// status defines the observed state of NodePool
-	// +optional
+	Spec NodePoolSpec `json:"spec,omitempty"`
 	// +orlop:public
-	Status NodePoolStatus `json:"status,omitzero"`
+	Status NodePoolStatus `json:"status,omitempty"`
 }
 
-// NodePoolSpec defines the desired state of a NodePool.
-type NodePoolSpec struct {
-	// clusterID is the ID of the parent cluster this node pool belongs to.
-	// +required
-	// +orlop:public
-	ClusterID string `json:"clusterID"`
-
-	// platform specifies the infrastructure provider configuration for nodes.
-	// +required
-	// +orlop:public
-	Platform NodePoolPlatformSpec `json:"platform"`
-
-	// release specifies the target release for the node pool.
-	// +required
-	// +orlop:public
-	Release ReleaseSpec `json:"release"`
-
-	// nodeCount is the desired number of nodes. Mutually exclusive with autoscaling.
-	// +optional
-	// +orlop:public
-	NodeCount *int32 `json:"nodeCount,omitempty"`
-
-	// autoscaling defines autoscaling configuration for the node pool.
-	// +optional
-	// +orlop:public
-	Autoscaling *NodePoolAutoscaling `json:"autoscaling,omitempty"`
-
-	// nodeLabels are labels applied to all nodes in the pool.
-	// +optional
-	// +orlop:public
-	NodeLabels map[string]string `json:"nodeLabels,omitempty"`
-
-	// taints are taints applied to all nodes in the pool.
-	// +optional
-	// +orlop:public
-	Taints []Taint `json:"taints,omitempty"`
-}
-
-// NodePoolStatus defines the observed state of a NodePool.
-type NodePoolStatus struct {
-	// conditions represent the latest available observations of a node pool's current state.
-	// +optional
-	// +orlop:public
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
-
-	// versionResolution holds the resolved version information.
-	// +optional
-	VersionResolution *VersionResolution `json:"versionResolution,omitempty"`
-}
-
-// NodePoolPlatformSpec specifies the platform-specific configuration for nodes.
-type NodePoolPlatformSpec struct {
-	// type is the infrastructure provider type (e.g. "GCP", "AWS").
-	// +required
-	// +orlop:public
-	Type string `json:"type"`
-
-	// gcp is the GCP-specific configuration. Required when type is "GCP".
-	// +optional
-	// +orlop:public
-	GCP *GCPNodePoolSpec `json:"gcp,omitempty"`
-}
-
-// GCPNodePoolSpec defines GCP-specific node pool configuration.
-type GCPNodePoolSpec struct {
-	// instanceType is the GCP machine type (e.g. "n2-standard-4").
-	// +required
-	// +orlop:public
-	InstanceType string `json:"instanceType"`
-}
-
-// NodePoolAutoscaling defines autoscaling parameters for a node pool.
-type NodePoolAutoscaling struct {
-	// min is the minimum number of nodes.
-	// +required
-	// +orlop:public
-	Min int32 `json:"min"`
-
-	// max is the maximum number of nodes.
-	// +required
-	// +orlop:public
-	Max int32 `json:"max"`
-}
-
-// Taint defines a Kubernetes taint.
-type Taint struct {
-	// key is the taint key.
-	// +required
-	// +orlop:public
-	Key string `json:"key"`
-
-	// value is the taint value.
-	// +optional
-	// +orlop:public
-	Value string `json:"value,omitempty"`
-
-	// effect is the taint effect (NoSchedule, PreferNoSchedule, NoExecute).
-	// +required
-	// +orlop:public
-	Effect string `json:"effect"`
-}
-
-// NodePoolList contains a list of NodePool
 // +kubebuilder:object:root=true
 type NodePoolList struct {
 	metav1.TypeMeta `json:",inline"`
-	metav1.ListMeta `json:"metadata,omitzero"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+
 	// +orlop:public
 	Items []NodePool `json:"items"`
+}
+
+// +kubebuilder:validation:XValidation:rule="!has(self.nodeCount) || !has(self.autoscaling)",message="nodeCount and autoscaling are mutually exclusive"
+type NodePoolSpec struct {
+	// +orlop:public
+	// +kubebuilder:validation:Required
+	ClusterID string `json:"clusterID"`
+	// +orlop:public
+	Platform NodePoolPlatformSpec `json:"platform"`
+	// +orlop:public
+	Release ReleaseSpec `json:"release"`
+	// +orlop:public
+	// +kubebuilder:validation:Minimum=0
+	NodeCount *int32 `json:"nodeCount,omitempty"`
+	// +orlop:public
+	Autoscaling *AutoscalingSpec `json:"autoscaling,omitempty"`
+	// +orlop:public
+	NodeLabels map[string]string `json:"nodeLabels,omitempty"`
+	// +orlop:public
+	Taints []TaintSpec `json:"taints,omitempty"`
+}
+
+type NodePoolPlatformSpec struct {
+	// +orlop:public
+	// +kubebuilder:validation:Enum=GCP
+	Type string `json:"type"`
+	// +orlop:public
+	GCP *GCPNodePoolPlatform `json:"gcp,omitempty"`
+}
+
+type GCPNodePoolPlatform struct {
+	// +orlop:public
+	MachineType string `json:"machineType,omitempty"`
+	// +orlop:public
+	// +kubebuilder:validation:Minimum=20
+	DiskSizeGB int64 `json:"diskSizeGB,omitempty"`
+	// +orlop:public
+	// +kubebuilder:validation:Enum=pd-standard;pd-ssd;pd-balanced
+	DiskType string `json:"diskType,omitempty"`
+	// +orlop:public
+	Zone string `json:"zone,omitempty"`
+	// +orlop:public
+	Subnet string `json:"subnet,omitempty"`
+	// +orlop:public
+	// +kubebuilder:validation:Enum=Standard;Spot;Preemptible
+	ProvisioningModel string `json:"provisioningModel,omitempty"`
+	// +orlop:public
+	// +kubebuilder:validation:Enum=MIGRATE;TERMINATE
+	OnHostMaintenance string `json:"onHostMaintenance,omitempty"`
+	// +orlop:public
+	ResourceLabels []GCPResourceLabel `json:"resourceLabels,omitempty"`
+	// +orlop:public
+	NetworkTags []string `json:"networkTags,omitempty"`
+}
+
+type TaintSpec struct {
+	// +orlop:public
+	Key string `json:"key"`
+	// +orlop:public
+	Value string `json:"value,omitempty"`
+	// +orlop:public
+	// +kubebuilder:validation:Enum=NoSchedule;PreferNoSchedule;NoExecute
+	Effect string `json:"effect"`
+}
+
+// +kubebuilder:validation:XValidation:rule="self.max >= self.min",message="max must be greater than or equal to min"
+type AutoscalingSpec struct {
+	// +orlop:public
+	// +kubebuilder:validation:Minimum=0
+	Min *int32 `json:"min,omitempty"`
+	// +orlop:public
+	// +kubebuilder:validation:Minimum=1
+	Max int32 `json:"max"`
+}
+
+// NodePoolStatus is written by controllers only.
+type NodePoolStatus struct {
+	// +orlop:public
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// VersionResolution is written by the nodepool-vr controller.
+	// Not exposed on the public API.
+	VersionResolution *VersionResolutionResult `json:"versionResolution,omitempty"`
 }
 
 func init() { register(&NodePool{}, &NodePoolList{}) }

@@ -1,4 +1,3 @@
-description: Cluster is the Schema for the clusters API
 properties:
   apiVersion:
     description: |-
@@ -18,26 +17,31 @@ properties:
   metadata:
     type: object
   spec:
-    description: ClusterSpec defines the desired state of a Cluster.
+    description: ClusterSpec is user-defined input only.
     properties:
       dns:
-        description: DNSSpec defines the DNS configuration for the cluster.
         properties:
           baseDomain:
             type: string
-        required:
-        - baseDomain
         type: object
       infraID:
         type: string
       issuerURL:
         type: string
       networking:
-        description: ClusterNetworkingSpec defines the networking configuration.
         properties:
           clusterNetwork:
             items:
-              description: NetworkRange defines a network CIDR range.
+              properties:
+                cidr:
+                  type: string
+                hostPrefix:
+                  format: int32
+                  type: integer
+              type: object
+            type: array
+          machineNetwork:
+            items:
               properties:
                 cidr:
                   type: string
@@ -46,43 +50,106 @@ properties:
               type: object
             type: array
           networkType:
+            default: OVNKubernetes
+            enum:
+            - OVNKubernetes
+            - Other
             type: string
           serviceNetwork:
             items:
-              description: NetworkRange defines a network CIDR range.
-              properties:
-                cidr:
-                  type: string
-              required:
-              - cidr
-              type: object
+              type: string
             type: array
         type: object
       platform:
-        description: PlatformSpec specifies the underlying infrastructure provider
-          configuration.
         properties:
+          gcp:
+            properties:
+              endpointAccess:
+                enum:
+                - PublicAndPrivate
+                - Private
+                type: string
+              network:
+                type: string
+              projectID:
+                type: string
+              region:
+                type: string
+              resourceLabels:
+                items:
+                  description: GCPResourceLabel is a label applied to GCP resources
+                    created for the cluster.
+                  properties:
+                    key:
+                      maxLength: 63
+                      minLength: 1
+                      type: string
+                    value:
+                      maxLength: 63
+                      type: string
+                  required:
+                  - key
+                  - value
+                  type: object
+                type: array
+              subnet:
+                type: string
+              workloadIdentity:
+                properties:
+                  poolID:
+                    type: string
+                  projectNumber:
+                    type: string
+                  providerID:
+                    type: string
+                  serviceAccountsRef:
+                    properties:
+                      cloudControllerEmail:
+                        type: string
+                      controlPlaneEmail:
+                        type: string
+                      imageRegistryEmail:
+                        type: string
+                      networkEmail:
+                        type: string
+                      nodePoolEmail:
+                        type: string
+                      storageEmail:
+                        type: string
+                    type: object
+                type: object
+            required:
+            - workloadIdentity
+            type: object
           type:
+            enum:
+            - GCP
             type: string
         required:
         - type
         type: object
       release:
-        description: ReleaseSpec defines the target release for a cluster or node
-          pool.
+        description: |-
+          ReleaseSpec defines the target OCP release version.
+          The version-resolution adapter resolves Version+ChannelGroup to a release image pullspec.
         properties:
-          image:
+          channelGroup:
+            minLength: 1
+            type: string
+          version:
+            minLength: 1
             type: string
         required:
-        - image
+        - channelGroup
+        - version
         type: object
     required:
-    - infraID
+    - networking
     - platform
     - release
     type: object
   status:
-    description: ClusterStatus defines the observed state of a Cluster.
+    description: ClusterStatus is written by controllers only.
     properties:
       conditions:
         items:
@@ -141,18 +208,17 @@ properties:
           type: object
         type: array
       hostedClusterResult:
-        description: HostedClusterResult holds the result of the hosted cluster provisioning.
+        description: |-
+          HostedClusterResult holds the hc-adapter's output from ManifestWork status feedback.
+          This field is read-only — populated by the hc-adapter only.
         properties:
-          kubeconfig:
+          apiEndpoint:
+            type: string
+          version:
             type: string
         type: object
       placementResult:
-        description: PlacementResult holds the result of the placement decision.
-        properties:
-          managementCluster:
-            type: string
+        description: PlacementResult holds the placement controller's output.
         type: object
     type: object
-required:
-- spec
 type: object
