@@ -2,151 +2,164 @@ package v1
 
 import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-// Cluster is the Schema for the clusters API
 // +kubebuilder:object:root=true
+// +kubebuilder:resource:scope=Namespaced
 // +kubebuilder:subresource:status
 type Cluster struct {
-	metav1.TypeMeta `json:",inline"`
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	// metadata is a standard object metadata
-	// +optional
-	metav1.ObjectMeta `json:"metadata,omitzero"`
+	Spec ClusterSpec `json:"spec,omitempty"`
 
-	// spec defines the desired state of Cluster
-	// +required
-
-	Spec ClusterSpec `json:"spec"`
-
-	// status defines the observed state of Cluster
-	// +optional
-
-	Status ClusterStatus `json:"status,omitzero"`
+	Status ClusterStatus `json:"status,omitempty"`
 }
 
-// ClusterSpec defines the desired state of a Cluster.
+// +kubebuilder:object:root=true
+type ClusterList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+
+	Items []Cluster `json:"items"`
+}
+
+// ClusterSpec is user-defined input only.
 type ClusterSpec struct {
-	// infraID is the unique infrastructure identifier for this cluster.
-	// +required
-
-	InfraID string `json:"infraID"`
-
-	// issuerURL is the OIDC issuer URL for the cluster.
-	// +optional
+	InfraID string `json:"infraID,omitempty"`
 
 	IssuerURL string `json:"issuerURL,omitempty"`
 
-	// platform specifies the underlying infrastructure provider configuration.
-	// +required
-
-	Platform PlatformSpec `json:"platform"`
-
-	// release specifies the target release for the cluster.
-	// +required
+	Platform ClusterPlatformSpec `json:"platform"`
 
 	Release ReleaseSpec `json:"release"`
 
-	// networking defines the networking configuration for the cluster.
-	// +optional
-
-	Networking *ClusterNetworkingSpec `json:"networking,omitempty"`
-
-	// dns defines the DNS configuration for the cluster.
-	// +optional
+	Networking NetworkingSpec `json:"networking"`
 
 	DNS *DNSSpec `json:"dns,omitempty"`
 }
 
-// ClusterStatus defines the observed state of a Cluster.
-type ClusterStatus struct {
-	// conditions represent the latest available observations of a cluster's current state.
-	// +optional
+type ClusterPlatformSpec struct {
 
+	// +kubebuilder:validation:Enum=GCP
+	Type string `json:"type"`
+
+	GCP *GCPClusterPlatform `json:"gcp,omitempty"`
+}
+
+type GCPClusterPlatform struct {
+	ProjectID string `json:"projectID,omitempty"`
+
+	Region string `json:"region,omitempty"`
+
+	Network string `json:"network,omitempty"`
+
+	Subnet string `json:"subnet,omitempty"`
+
+	// +kubebuilder:validation:Enum=PublicAndPrivate;Private
+	EndpointAccess string `json:"endpointAccess,omitempty"`
+
+	// +kubebuilder:validation:Required
+	WorkloadIdentity WorkloadIdentitySpec `json:"workloadIdentity"`
+
+	ResourceLabels []GCPResourceLabel `json:"resourceLabels,omitempty"`
+}
+
+type WorkloadIdentitySpec struct {
+	PoolID string `json:"poolID,omitempty"`
+
+	ProjectNumber string `json:"projectNumber,omitempty"`
+
+	ProviderID string `json:"providerID,omitempty"`
+
+	ServiceAccountsRef *ServiceAccountsRef `json:"serviceAccountsRef,omitempty"`
+}
+
+type ServiceAccountsRef struct {
+	NodePoolEmail string `json:"nodePoolEmail,omitempty"`
+
+	ControlPlaneEmail string `json:"controlPlaneEmail,omitempty"`
+
+	CloudControllerEmail string `json:"cloudControllerEmail,omitempty"`
+
+	StorageEmail string `json:"storageEmail,omitempty"`
+
+	ImageRegistryEmail string `json:"imageRegistryEmail,omitempty"`
+
+	NetworkEmail string `json:"networkEmail,omitempty"`
+}
+
+// GCPResourceLabel is a label applied to GCP resources created for the cluster.
+type GCPResourceLabel struct {
+
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	Key string `json:"key"`
+
+	// +kubebuilder:validation:MaxLength=63
+	Value string `json:"value"`
+}
+
+// ReleaseSpec defines the target OCP release version.
+// The version-resolution adapter resolves Version+ChannelGroup to a release image pullspec.
+type ReleaseSpec struct {
+
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Version string `json:"version"`
+
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	ChannelGroup string `json:"channelGroup"`
+}
+
+type NetworkingSpec struct {
+	MachineNetwork []MachineNetworkEntry `json:"machineNetwork,omitempty"`
+
+	ClusterNetwork []ClusterNetworkEntry `json:"clusterNetwork,omitempty"`
+
+	ServiceNetwork []string `json:"serviceNetwork,omitempty"`
+
+	// +kubebuilder:validation:Enum=OVNKubernetes;Other
+	// +kubebuilder:default=OVNKubernetes
+	NetworkType string `json:"networkType,omitempty"`
+}
+
+type MachineNetworkEntry struct {
+	CIDR string `json:"cidr"`
+}
+
+type ClusterNetworkEntry struct {
+	CIDR string `json:"cidr,omitempty"`
+
+	HostPrefix int32 `json:"hostPrefix,omitempty"`
+}
+
+type DNSSpec struct {
+	BaseDomain string `json:"baseDomain,omitempty"`
+}
+
+// ClusterStatus is written by controllers only.
+type ClusterStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
-	// placementResult holds the result of the placement decision.
-	// +optional
+	// PlacementResult is written by the placement controller.
 
 	PlacementResult *PlacementResult `json:"placementResult,omitempty"`
 
-	// hostedClusterResult holds the result of the hosted cluster provisioning.
-	// +optional
+	// HostedClusterResult is written by the hc-adapter.
 
 	HostedClusterResult *HostedClusterResult `json:"hostedClusterResult,omitempty"`
 }
 
-// PlatformSpec specifies the underlying infrastructure provider configuration.
-type PlatformSpec struct {
-	// type is the infrastructure provider type (e.g. "GCP", "AWS").
-	// +required
-
-	Type string `json:"type"`
-}
-
-// ReleaseSpec defines the target release for a cluster or node pool.
-type ReleaseSpec struct {
-	// image is the release image pullspec.
-	// +required
-
-	Image string `json:"image"`
-}
-
-// ClusterNetworkingSpec defines the networking configuration.
-type ClusterNetworkingSpec struct {
-	// clusterNetwork is the list of IP address pools for pod IPs.
-	// +optional
-
-	ClusterNetwork []NetworkRange `json:"clusterNetwork,omitempty"`
-
-	// serviceNetwork is the list of IP address pools for service IPs.
-	// +optional
-
-	ServiceNetwork []NetworkRange `json:"serviceNetwork,omitempty"`
-
-	// networkType is the CNI plugin type (e.g. "OVNKubernetes").
-	// +optional
-
-	NetworkType string `json:"networkType,omitempty"`
-}
-
-// NetworkRange defines a network CIDR range.
-type NetworkRange struct {
-	// cidr is the IP address range in CIDR notation.
-	// +required
-
-	CIDR string `json:"cidr"`
-}
-
-// DNSSpec defines the DNS configuration for the cluster.
-type DNSSpec struct {
-	// baseDomain is the base DNS domain for the cluster.
-	// +required
-
-	BaseDomain string `json:"baseDomain"`
-}
-
-// PlacementResult holds the result of the placement decision.
+// PlacementResult holds the placement controller's output.
 type PlacementResult struct {
-	// managementCluster is the name of the management cluster where this cluster is placed.
-	// +optional
-
-	ManagementCluster string `json:"managementCluster,omitempty"`
 }
 
-// HostedClusterResult holds the result of the hosted cluster provisioning.
+// HostedClusterResult holds the hc-adapter's output from ManifestWork status feedback.
+// This field is read-only — populated by the hc-adapter only.
 type HostedClusterResult struct {
-	// kubeconfig is the kubeconfig for accessing the hosted cluster.
-	// +optional
+	APIEndpoint string `json:"apiEndpoint,omitempty"`
 
-	Kubeconfig string `json:"kubeconfig,omitempty"`
-}
-
-// ClusterList contains a list of Cluster
-// +kubebuilder:object:root=true
-type ClusterList struct {
-	metav1.TypeMeta `json:",inline"`
-	metav1.ListMeta `json:"metadata,omitzero"`
-
-	Items []Cluster `json:"items"`
+	Version string `json:"version,omitempty"`
 }
 
 func init() { register(&Cluster{}, &ClusterList{}) }
