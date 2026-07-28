@@ -3,6 +3,7 @@ name: Build and Push platform-api
 on:
   push:
     branches: [main]
+  pull_request:
 
 jobs:
   test:
@@ -20,6 +21,10 @@ jobs:
 
       - name: Test platform-api
         working-directory: platform-api
+        run: go test ./...
+
+      - name: Test controllers
+        working-directory: controllers
         run: go test ./...
 
   build-push:
