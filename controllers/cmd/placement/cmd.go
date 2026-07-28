@@ -11,7 +11,7 @@ import (
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 
 	placement "github.com/openshift-online/gecko/controllers/placement"
-	"github.com/openshift-online/gecko/controllers/rootflags"
+	"github.com/openshift-online/gecko/controllers/util/setup"
 )
 
 func envOr(key, fallback string) string {
@@ -22,7 +22,7 @@ func envOr(key, fallback string) string {
 }
 
 // NewCommand returns the placement subcommand.
-func NewCommand(rf *rootflags.RootFlags) *cobra.Command {
+func NewCommand(rf *setup.RootFlags) *cobra.Command {
 	var candidateNames, baseDomains []string
 	var smProject, maestroHTTPAddr string
 
@@ -66,7 +66,7 @@ func NewCommand(rf *rootflags.RootFlags) *cobra.Command {
 				selector = placement.NewRoundRobinSelector()
 			}
 
-			scheme := rootflags.NewScheme()
+			scheme := setup.NewScheme()
 			mgr, err := rf.NewManager(scheme, log)
 			if err != nil {
 				return fmt.Errorf("create manager: %w", err)

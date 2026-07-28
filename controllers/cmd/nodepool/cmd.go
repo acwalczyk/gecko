@@ -11,7 +11,7 @@ import (
 	maestroclient "github.com/openshift-online/gecko/controllers/client/maestro"
 	maestrotransport "github.com/openshift-online/gecko/controllers/client/transport/maestro"
 	nodepool "github.com/openshift-online/gecko/controllers/nodepool"
-	"github.com/openshift-online/gecko/controllers/rootflags"
+	"github.com/openshift-online/gecko/controllers/util/setup"
 )
 
 // maestroFlags holds Maestro-related flags.
@@ -24,7 +24,7 @@ type maestroFlags struct {
 }
 
 // NewCommand returns the nodepool subcommand.
-func NewCommand(rf *rootflags.RootFlags) *cobra.Command {
+func NewCommand(rf *setup.RootFlags) *cobra.Command {
 	mf := &maestroFlags{}
 
 	cmd := &cobra.Command{
@@ -51,7 +51,7 @@ func NewCommand(rf *rootflags.RootFlags) *cobra.Command {
 
 			transport := maestrotransport.New(mwc, mf.sourceID, log)
 
-			scheme := rootflags.NewScheme()
+			scheme := setup.NewScheme()
 			mgr, err := rf.NewManager(scheme, log)
 			if err != nil {
 				return fmt.Errorf("create manager: %w", err)

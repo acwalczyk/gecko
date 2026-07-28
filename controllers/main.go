@@ -14,7 +14,7 @@ import (
 	cmdnodepoolvrresolution "github.com/openshift-online/gecko/controllers/cmd/nodepoolvrresolution"
 	cmdplacement "github.com/openshift-online/gecko/controllers/cmd/placement"
 	cmdversionresolution "github.com/openshift-online/gecko/controllers/cmd/versionresolution"
-	"github.com/openshift-online/gecko/controllers/rootflags"
+	"github.com/openshift-online/gecko/controllers/util/setup"
 )
 
 func envOr(key, fallback string) string {
@@ -25,7 +25,7 @@ func envOr(key, fallback string) string {
 }
 
 func main() {
-	rf := &rootflags.RootFlags{}
+	rf := &setup.RootFlags{}
 
 	root := &cobra.Command{
 		Use:   "gecko-controllers",

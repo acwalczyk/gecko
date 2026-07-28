@@ -8,12 +8,12 @@ import (
 
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 
-	"github.com/openshift-online/gecko/controllers/rootflags"
+	"github.com/openshift-online/gecko/controllers/util/setup"
 	"github.com/openshift-online/gecko/controllers/versionresolution"
 )
 
 // NewCommand returns the version-resolution subcommand.
-func NewCommand(rf *rootflags.RootFlags) *cobra.Command {
+func NewCommand(rf *setup.RootFlags) *cobra.Command {
 	var cincinnatiURL, arch string
 
 	cmd := &cobra.Command{
@@ -27,7 +27,7 @@ func NewCommand(rf *rootflags.RootFlags) *cobra.Command {
 				return fmt.Errorf("create logger: %w", err)
 			}
 
-			scheme := rootflags.NewScheme()
+			scheme := setup.NewScheme()
 			mgr, err := rf.NewManager(scheme, log)
 			if err != nil {
 				return fmt.Errorf("create manager: %w", err)

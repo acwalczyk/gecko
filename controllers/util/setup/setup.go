@@ -1,4 +1,4 @@
-package rootflags
+package setup
 
 import (
 	"fmt"
