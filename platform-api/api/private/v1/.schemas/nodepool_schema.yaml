@@ -1,4 +1,4 @@
-description: ManagedHostedCluster is the Schema for the managedhostedclusters API
+description: NodePool is the Schema for the nodepools API
 properties:
   apiVersion:
     description: |-
@@ -18,63 +18,97 @@ properties:
   metadata:
     type: object
   spec:
+    description: spec defines the desired state of NodePool
     properties:
-      hostedCluster:
-        description: |-
-          HostedClusterSpec defines the desired state of a HyperShift HostedCluster.
-          These types are a curated subset of the upstream HyperShift API, copied
-          here to avoid a direct Go module dependency on the HyperShift operator.
+      autoscaling:
+        description: autoscaling defines autoscaling configuration for the node pool.
         properties:
-          channel:
-            type: string
-          configuration:
-            description: ClusterConfiguration defines cluster-level configuration.
+          max:
+            description: max is the maximum number of nodes.
+            format: int32
+            type: integer
+          min:
+            description: min is the minimum number of nodes.
+            format: int32
+            type: integer
+        required:
+        - max
+        - min
+        type: object
+      clusterID:
+        description: clusterID is the ID of the parent cluster this node pool belongs
+          to.
+        type: string
+      nodeCount:
+        description: nodeCount is the desired number of nodes. Mutually exclusive
+          with autoscaling.
+        format: int32
+        type: integer
+      nodeLabels:
+        additionalProperties:
+          type: string
+        description: nodeLabels are labels applied to all nodes in the pool.
+        type: object
+      platform:
+        description: platform specifies the infrastructure provider configuration
+          for nodes.
+        properties:
+          gcp:
+            description: gcp is the GCP-specific configuration. Required when type
+              is "GCP".
             properties:
-              authentication:
-                description: AuthenticationConfig defines authentication settings.
-                properties:
-                  oidcProviders:
-                    items:
-                      description: OIDCProvider defines an OIDC identity provider
-                        configuration.
-                      properties:
-                        claimMappings:
-                          description: ClaimMappings defines how OIDC claims map to
-                            Kubernetes identities.
-                          type: object
-                        issuer:
-                          description: OIDCIssuer defines the OIDC issuer endpoint.
-                          type: object
-                        name:
-                          type: string
-                      required:
-                      - claimMappings
-                      - issuer
-                      - name
-                      type: object
-                    type: array
-                  type:
-                    type: string
-                type: object
-            type: object
-          platform:
-            description: PlatformSpec specifies the underlying infrastructure provider
-              configuration.
-            properties:
-              type:
+              instanceType:
+                description: instanceType is the GCP machine type (e.g. "n2-standard-4").
                 type: string
             required:
-            - type
+            - instanceType
             type: object
+          type:
+            description: type is the infrastructure provider type (e.g. "GCP", "AWS").
+            type: string
         required:
-        - platform
+        - type
         type: object
+      release:
+        description: release specifies the target release for the node pool.
+        properties:
+          image:
+            description: image is the release image pullspec.
+            type: string
+        required:
+        - image
+        type: object
+      taints:
+        description: taints are taints applied to all nodes in the pool.
+        items:
+          description: Taint defines a Kubernetes taint.
+          properties:
+            effect:
+              description: effect is the taint effect (NoSchedule, PreferNoSchedule,
+                NoExecute).
+              type: string
+            key:
+              description: key is the taint key.
+              type: string
+            value:
+              description: value is the taint value.
+              type: string
+          required:
+          - effect
+          - key
+          type: object
+        type: array
     required:
-    - hostedCluster
+    - clusterID
+    - platform
+    - release
     type: object
   status:
+    description: status defines the observed state of NodePool
     properties:
       conditions:
+        description: conditions represent the latest available observations of a node
+          pool's current state.
         items:
           description: Condition contains details for one aspect of the current state
             of this API Resource.
@@ -130,6 +164,16 @@ properties:
           - type
           type: object
         type: array
+      versionResolution:
+        description: versionResolution holds the resolved version information.
+        properties:
+          resolvedImage:
+            description: resolvedImage is the fully-resolved release image pullspec.
+            type: string
+          resolvedVersion:
+            description: resolvedVersion is the resolved OCP version string.
+            type: string
+        type: object
     type: object
 required:
 - spec
