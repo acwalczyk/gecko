@@ -148,13 +148,18 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		zone = gcpRegion + "-a"
 	}
 
+	replicas := defaultReplicas
+	if np.Spec.NodeCount != nil {
+		replicas = *np.Spec.NodeCount
+	}
+
 	mw, err := manifest.Build(manifest.Input{
 		NodePoolID:         nodepoolID,
 		NodePoolName:       np.Name,
 		NodePoolGeneration: np.Generation,
 		ClusterID:          clusterID,
 		ClusterName:        cluster.Name,
-		Replicas:           defaultReplicas,
+		Replicas:           replicas,
 		MachineType:        machineType,
 		GCPRegion:          gcpRegion,
 		Zone:               zone,

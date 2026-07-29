@@ -2,6 +2,7 @@ package nodepool
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -448,6 +449,71 @@ func TestReconcile_VRVersionMismatch_StatusUpdateError(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Test cases – platform field defaults
 // ---------------------------------------------------------------------------
+
+// replicasFromManifestWork parses the replica count from the raw JSON in the first manifest.
+func replicasFromManifestWork(t *testing.T, mw *workv1.ManifestWork) int32 {
+	t.Helper()
+	require.NotEmpty(t, mw.Spec.Workload.Manifests)
+	var obj struct {
+		Spec struct {
+			Replicas int32 `json:"replicas"`
+		} `json:"spec"`
+	}
+	require.NoError(t, json.Unmarshal(mw.Spec.Workload.Manifests[0].Raw, &obj))
+	return obj.Spec.Replicas
+}
+
+// TestReconcile_NodeCountHonored verifies that when Spec.NodeCount is set, it is used
+// as the replica count instead of the default.
+func TestReconcile_NodeCountHonored(t *testing.T) {
+	count := int32(3)
+	np := testNodePool("4.16.0")
+	np.Spec.NodeCount = &count
+	cluster := testCluster(true, true)
+
+	mwName := np.Name + "-" + adapterName
+	tr := mock.New()
+	tr.StatusOverrides["mc-us-c1/"+mwName] = &transport.ManifestWorkStatus{
+		Conditions: []metav1.Condition{
+			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
+		},
+		ResourceStatuses: []map[string]string{
+			{"readyCondition": "True", "allNodesHealthyCondition": "True"},
+		},
+	}
+
+	r, _ := buildReconciler(t, np, cluster, tr, nil, nil, nil)
+
+	_, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
+	require.NoError(t, err)
+	require.Len(t, tr.ApplyCalls, 1)
+	require.Equal(t, int32(3), replicasFromManifestWork(t, tr.ApplyCalls[0].Work))
+}
+
+// TestReconcile_DefaultNodeCount verifies that when Spec.NodeCount is nil, defaultReplicas is used.
+func TestReconcile_DefaultNodeCount(t *testing.T) {
+	np := testNodePool("4.16.0")
+	np.Spec.NodeCount = nil
+	cluster := testCluster(true, true)
+
+	mwName := np.Name + "-" + adapterName
+	tr := mock.New()
+	tr.StatusOverrides["mc-us-c1/"+mwName] = &transport.ManifestWorkStatus{
+		Conditions: []metav1.Condition{
+			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
+		},
+		ResourceStatuses: []map[string]string{
+			{"readyCondition": "True", "allNodesHealthyCondition": "True"},
+		},
+	}
+
+	r, _ := buildReconciler(t, np, cluster, tr, nil, nil, nil)
+
+	_, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
+	require.NoError(t, err)
+	require.Len(t, tr.ApplyCalls, 1)
+	require.Equal(t, int32(1), replicasFromManifestWork(t, tr.ApplyCalls[0].Work))
+}
 
 // TestReconcile_DefaultPlatformValues verifies that when the NodePool has no GCP platform
 // spec set, the reconciler applies default machine type, disk size, disk type, and derives
