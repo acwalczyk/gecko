@@ -553,6 +553,12 @@ func TestReconcile_MWStatusNil_RequeuesPending(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, requeuePending, result.RequeueAfter)
 	require.True(t, storeClient.statusWriter.called)
+
+	captured := storeClient.statusWriter.captured.(*privatev1.NodePool)
+	available := meta.FindStatusCondition(captured.Status.Conditions, "NodePoolAvailable")
+	require.NotNil(t, available)
+	require.Equal(t, metav1.ConditionFalse, available.Status)
+	require.Equal(t, "ManifestWorkNotFound", available.Reason)
 }
 
 // ---------------------------------------------------------------------------
@@ -589,6 +595,16 @@ func TestReconcile_HappyPath(t *testing.T) {
 	require.Equal(t, "mc-us-c1", tr.ApplyCalls[0].TargetCluster)
 	require.Equal(t, mwName, tr.ApplyCalls[0].Work.Name)
 	require.True(t, storeClient.statusWriter.called, "expected Status().Update to be called")
+
+	captured := storeClient.statusWriter.captured.(*privatev1.NodePool)
+	available := meta.FindStatusCondition(captured.Status.Conditions, "NodePoolAvailable")
+	require.NotNil(t, available)
+	require.Equal(t, metav1.ConditionTrue, available.Status)
+	require.Equal(t, "NodePoolAvailable", available.Reason)
+	healthy := meta.FindStatusCondition(captured.Status.Conditions, "NodePoolHealthy")
+	require.NotNil(t, healthy)
+	require.Equal(t, metav1.ConditionTrue, healthy.Status)
+	require.Equal(t, "NodePoolHealthy", healthy.Reason)
 }
 
 // TestReconcile_MWNotApplied_RequeuesPending verifies that when Applied=False the
@@ -608,11 +624,21 @@ func TestReconcile_MWNotApplied_RequeuesPending(t *testing.T) {
 		},
 	}
 
-	r, _ := buildReconciler(t, np, cluster, tr, nil, nil, nil)
+	r, storeClient := buildReconciler(t, np, cluster, tr, nil, nil, nil)
 
 	result, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
 	require.NoError(t, err)
 	require.Equal(t, requeuePending, result.RequeueAfter)
+
+	captured := storeClient.statusWriter.captured.(*privatev1.NodePool)
+	available := meta.FindStatusCondition(captured.Status.Conditions, "NodePoolAvailable")
+	require.NotNil(t, available)
+	require.Equal(t, metav1.ConditionFalse, available.Status)
+	require.Equal(t, "NodePoolNotAvailable", available.Reason)
+	healthy := meta.FindStatusCondition(captured.Status.Conditions, "NodePoolHealthy")
+	require.NotNil(t, healthy)
+	require.Equal(t, metav1.ConditionFalse, healthy.Status)
+	require.Equal(t, "NodePoolNotHealthy", healthy.Reason)
 }
 
 // TestReconcile_StatusUpdateConflict_ReturnsNoError verifies that a conflict error on

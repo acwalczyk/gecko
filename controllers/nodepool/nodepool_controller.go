@@ -269,8 +269,15 @@ func (r *Reconciler) applyStatusConditions(np *privatev1.NodePool, mwStatus *tra
 	}
 
 	healthStatus := metav1.ConditionFalse
+	healthReason := "NodePoolNotHealthy"
 	if allNodesHealthy == "True" {
 		healthStatus = metav1.ConditionTrue
+		healthReason = "NodePoolHealthy"
+	}
+
+	availableReason := "NodePoolNotAvailable"
+	if availableStatus == "True" {
+		availableReason = "NodePoolAvailable"
 	}
 
 	a := conditions.Set(&np.Status.Conditions, metav1.Condition{
@@ -282,11 +289,13 @@ func (r *Reconciler) applyStatusConditions(np *privatev1.NodePool, mwStatus *tra
 	b := conditions.Set(&np.Status.Conditions, metav1.Condition{
 		Type:               "NodePoolAvailable",
 		Status:             metav1.ConditionStatus(availableStatus),
+		Reason:             availableReason,
 		ObservedGeneration: gen,
 	})
 	c := conditions.Set(&np.Status.Conditions, metav1.Condition{
 		Type:               "NodePoolHealthy",
 		Status:             healthStatus,
+		Reason:             healthReason,
 		ObservedGeneration: gen,
 	})
 	return a || b || c
