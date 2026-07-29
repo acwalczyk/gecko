@@ -53,6 +53,24 @@ spec:
             {{- if .Values.corsOrigins }}
             - --cors-origins={{ join "," .Values.corsOrigins }}
             {{- end }}
+          {{- if .Values.alloydb.enabled }}
+          env:
+            - name: DB_HOST
+              value: {{ required "alloydb.host is required when alloydb is enabled (set after AlloyDB instance is provisioned)" .Values.alloydb.host | quote }}
+            - name: DB_PORT
+              value: "5432"
+            - name: DB_NAME
+              value: {{ .Values.alloydb.database | quote }}
+            - name: DB_USER
+              value: {{ .Values.alloydb.auth.username | quote }}
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (printf "%s-db" (include "platform-api-server.fullname" .)) .Values.alloydb.auth.existingSecret }}
+                  key: password
+            - name: DB_SSLMODE
+              value: {{ .Values.alloydb.sslMode | quote }}
+          {{- end }}
           ports:
             - containerPort: {{ .Values.service.privatePort }}
               name: private-api

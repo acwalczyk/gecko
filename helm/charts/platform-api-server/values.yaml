@@ -65,3 +65,18 @@ affinity: {}
 podAnnotations: {}
 podLabels: {}
 imagePullSecrets: []
+
+alloydb:
+  enabled: false
+  projectId: ""
+  location: "us-central1"
+  host: ""
+  networkRef: "default"
+  databaseVersion: "POSTGRES_15"
+  cpuCount: 2
+  auth:
+    username: "orlop"
+    password: ""
+    existingSecret: ""
+  database: "orlop"
+  sslMode: "require"

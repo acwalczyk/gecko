@@ -4,6 +4,7 @@ go 1.26.4
 
 require (
 	github.com/go-logr/stdr v1.2.2
+	github.com/lib/pq v1.12.3
 	github.com/openshift-online/gecko/orlop v0.0.0-00010101000000-000000000000
 	k8s.io/apimachinery v0.36.2
 )
