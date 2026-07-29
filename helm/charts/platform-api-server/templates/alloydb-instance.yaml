@@ -1,0 +1,17 @@
+{{- if .Values.alloydb.enabled }}
+apiVersion: alloydb.cnrm.cloud.google.com/v1beta1
+kind: AlloyDBInstance
+metadata:
+  name: {{ include "platform-api-server.fullname" . }}-primary
+  annotations:
+    cnrm.cloud.google.com/project-id: {{ .Values.alloydb.projectId | quote }}
+  labels:
+    {{- include "platform-api-server.labels" . | nindent 4 }}
+spec:
+  clusterRef:
+    name: {{ include "platform-api-server.fullname" . }}
+  instanceTypeRef:
+    name: PRIMARY
+  machineConfig:
+    cpuCount: {{ .Values.alloydb.cpuCount }}
+{{- end }}

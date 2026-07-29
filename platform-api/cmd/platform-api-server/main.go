@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -11,7 +13,9 @@ import (
 	"time"
 
 	"github.com/go-logr/stdr"
+	_ "github.com/lib/pq"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver"
+	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/postgres"
 )
 
 func main() {
@@ -41,6 +45,49 @@ func main() {
 		}
 	}
 
+	// Configure storage backend
+	var storageFactory apiserver.StorageFactory
+	if dbHost := os.Getenv("DB_HOST"); dbHost != "" {
+		dbPort := os.Getenv("DB_PORT")
+		if dbPort == "" {
+			dbPort = "5432"
+		}
+		dbName := os.Getenv("DB_NAME")
+		if dbName == "" {
+			dbName = "orlop"
+		}
+		dbUser := os.Getenv("DB_USER")
+		if dbUser == "" {
+			dbUser = "orlop"
+		}
+		dbPassword := os.Getenv("DB_PASSWORD")
+		dbSSLMode := os.Getenv("DB_SSLMODE")
+		if dbSSLMode == "" {
+			dbSSLMode = "disable"
+		}
+
+		connStr := fmt.Sprintf("host=%s port=%s dbname=%s user=%s password=%s sslmode=%s",
+			dbHost, dbPort, dbName, dbUser, dbPassword, dbSSLMode)
+
+		db, err := sql.Open("postgres", connStr)
+		if err != nil {
+			log.Fatalf("Failed to open database: %v", err)
+		}
+		defer db.Close()
+
+		if err := db.Ping(); err != nil {
+			log.Fatalf("Failed to connect to database: %v", err)
+		}
+
+		log.Printf("Connected to PostgreSQL at %s:%s/%s", dbHost, dbPort, dbName)
+
+		storageFactory = postgres.NewStorageFactory(postgres.StorageFactoryConfig{
+			DB:         db,
+			ConnString: connStr,
+			Context:    context.Background(),
+		})
+	}
+
 	// Create server with resource configuration
 	opts := apiserver.Options{
 		Address: address,
@@ -55,8 +102,9 @@ func main() {
 			Resources: getPublicResources(),
 			Scheme:    getPublicScheme(),
 		},
-		CORSOrigins: origins,
-		Logger:      logger,
+		CORSOrigins:    origins,
+		StorageFactory: storageFactory,
+		Logger:         logger,
 	}
 
 	server, err := apiserver.New(opts)

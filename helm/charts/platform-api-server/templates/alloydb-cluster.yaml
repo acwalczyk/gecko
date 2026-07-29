@@ -1,0 +1,23 @@
+{{- if .Values.alloydb.enabled }}
+apiVersion: alloydb.cnrm.cloud.google.com/v1beta1
+kind: AlloyDBCluster
+metadata:
+  name: {{ include "platform-api-server.fullname" . }}
+  annotations:
+    cnrm.cloud.google.com/project-id: {{ required "alloydb.projectId is required when alloydb is enabled" .Values.alloydb.projectId | quote }}
+  labels:
+    {{- include "platform-api-server.labels" . | nindent 4 }}
+spec:
+  location: {{ .Values.alloydb.location }}
+  databaseVersion: {{ .Values.alloydb.databaseVersion }}
+  networkConfig:
+    networkRef:
+      external: projects/{{ .Values.alloydb.projectId }}/global/networks/{{ .Values.alloydb.networkRef }}
+  initialUser:
+    user: {{ .Values.alloydb.auth.username }}
+    password:
+      valueFrom:
+        secretKeyRef:
+          name: {{ default (printf "%s-db" (include "platform-api-server.fullname" .)) .Values.alloydb.auth.existingSecret }}
+          key: password
+{{- end }}
