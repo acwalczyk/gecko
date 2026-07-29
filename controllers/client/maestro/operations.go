@@ -58,7 +58,10 @@ func (c *Client) CreateManifestWork(
 	created, err := c.workClient.ManifestWorks(consumerName).Create(ctx, work, metav1.CreateOptions{})
 	if err != nil {
 		if isConsumerNotFoundError(err) {
-			return nil, apperrors.NotFound("consumer %q is not registered in Maestro", consumerName)
+			return nil, apierrors.NewNotFound(
+				schema.GroupResource{Group: "work.open-cluster-management.io", Resource: "consumers"},
+				consumerName,
+			)
 		}
 		return nil, apperrors.MaestroError("failed to create ManifestWork %s/%s: %v",
 			consumerName, work.Name, err)
