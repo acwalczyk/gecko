@@ -31,13 +31,36 @@ func New(mwc maestroclient.ManifestWorkClient, sourceID string, log logger.Logge
 	}
 }
 
-// Apply creates or updates a ManifestWork on the target cluster via Maestro.
-func (c *Client) Apply(ctx context.Context, targetCluster string, mw *workv1.ManifestWork) error {
-	_, err := c.mwc.ApplyManifestWork(ctx, targetCluster, mw)
+// Apply creates or updates a ManifestWork on the target cluster via Maestro and returns its current status.
+func (c *Client) Apply(ctx context.Context, targetCluster string, mw *workv1.ManifestWork) (*transport.ManifestWorkStatus, error) {
+	result, err := c.mwc.ApplyManifestWork(ctx, targetCluster, mw)
 	if err != nil {
-		return fmt.Errorf("apply ManifestWork %s/%s: %w", targetCluster, mw.GetName(), err)
+		return nil, fmt.Errorf("apply ManifestWork %s/%s: %w", targetCluster, mw.GetName(), err)
 	}
-	return nil
+	return extractStatus(result.Work), nil
+}
+
+// extractStatus maps a ManifestWork's status into a transport.ManifestWorkStatus.
+func extractStatus(work *workv1.ManifestWork) *transport.ManifestWorkStatus {
+	if work == nil {
+		return nil
+	}
+	conditions := make([]metav1.Condition, len(work.Status.Conditions))
+	copy(conditions, work.Status.Conditions)
+
+	manifests := work.Status.ResourceStatus.Manifests
+	resourceStatuses := make([]map[string]string, len(manifests))
+	for i, mc := range manifests {
+		m := make(map[string]string, len(mc.StatusFeedbacks.Values))
+		for _, v := range mc.StatusFeedbacks.Values {
+			m[v.Name] = feedbackValueToString(v.Value)
+		}
+		resourceStatuses[i] = m
+	}
+	return &transport.ManifestWorkStatus{
+		Conditions:       conditions,
+		ResourceStatuses: resourceStatuses,
+	}
 }
 
 // GetStatus reads back the ManifestWork status from Maestro and maps it into

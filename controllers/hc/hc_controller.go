@@ -155,18 +155,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, fmt.Errorf("%s: build manifest work: %w", adapterName, err)
 	}
 
-	if err := r.transport.Apply(ctx, placement.ManagementClusterName, mw); err != nil {
-		return reconcile.Result{}, fmt.Errorf("%s: apply manifest work: %w", adapterName, err)
-	}
-
-	mwName := mw.Name
-	mwStatus, err := r.transport.GetStatus(ctx, placement.ManagementClusterName, mwName)
+	mwStatus, err := r.transport.Apply(ctx, placement.ManagementClusterName, mw)
 	if err != nil {
-		if apierrors.IsNotFound(err) {
-			mwStatus = nil
-		} else {
-			return reconcile.Result{}, fmt.Errorf("%s: get manifest work status: %w", adapterName, err)
-		}
+		return reconcile.Result{}, fmt.Errorf("%s: apply manifest work: %w", adapterName, err)
 	}
 
 	// Write status conditions — only update if something changed.

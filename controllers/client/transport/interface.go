@@ -18,8 +18,8 @@ type ManifestWorkStatus struct {
 
 // Client abstracts the transport layer (Maestro today, Firestore in future).
 type Client interface {
-	// Apply creates or updates a ManifestWork on the target cluster.
-	Apply(ctx context.Context, targetCluster string, mw *workv1.ManifestWork) error
+	// Apply creates or updates a ManifestWork on the target cluster and returns its current status.
+	Apply(ctx context.Context, targetCluster string, mw *workv1.ManifestWork) (*ManifestWorkStatus, error)
 	// GetStatus reads back the ManifestWork status.
 	GetStatus(ctx context.Context, targetCluster, name string) (*ManifestWorkStatus, error)
 	// Delete removes the ManifestWork from the target cluster.

@@ -130,16 +130,15 @@ func (m *mockStoreClient) IsObjectNamespaced(_ runtime.Object) (bool, error) { r
 
 // errTransport is a transport.Client that returns configurable errors.
 type errTransport struct {
-	applyErr        error
-	getStatusErr    error
-	getStatusResult *transport.ManifestWorkStatus
+	applyErr    error
+	applyResult *transport.ManifestWorkStatus
 }
 
-func (e *errTransport) Apply(_ context.Context, _ string, _ *workv1.ManifestWork) error {
-	return e.applyErr
+func (e *errTransport) Apply(_ context.Context, _ string, _ *workv1.ManifestWork) (*transport.ManifestWorkStatus, error) {
+	return e.applyResult, e.applyErr
 }
 func (e *errTransport) GetStatus(_ context.Context, _, _ string) (*transport.ManifestWorkStatus, error) {
-	return e.getStatusResult, e.getStatusErr
+	return nil, nil
 }
 func (e *errTransport) Delete(_ context.Context, _, _ string) error { return nil }
 
@@ -590,29 +589,14 @@ func TestReconcile_TransportApplyError(t *testing.T) {
 	require.Contains(t, err.Error(), "apply manifest work")
 }
 
-func TestReconcile_TransportGetStatusError(t *testing.T) {
-	np := testNodePool("4.16.0")
-	cluster := testCluster(true, true)
-
-	tr := &errTransport{getStatusErr: fmt.Errorf("grpc unavailable")}
-	r, _ := buildReconciler(t, np, cluster, tr, nil, nil, nil)
-
-	_, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "get manifest work status")
-}
-
 // TestReconcile_MWStatusNil_RequeuesPending verifies that a not-found from GetStatus maps
 // to a nil mwStatus, sets both conditions to False, and requeues with the pending interval.
 func TestReconcile_MWStatusNil_RequeuesPending(t *testing.T) {
 	np := testNodePool("4.16.0")
 	cluster := testCluster(true, true)
 
-	notFoundErr := apierrors.NewNotFound(
-		schema.GroupResource{Group: "work.open-cluster-management.io", Resource: "manifestworks"},
-		"np-test-nodepool-controller",
-	)
-	tr := &errTransport{getStatusErr: notFoundErr}
+	// Apply returns nil status to simulate the ManifestWork not yet having a status.
+	tr := &errTransport{}
 	r, storeClient := buildReconciler(t, np, cluster, tr, nil, nil, nil)
 
 	result, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))

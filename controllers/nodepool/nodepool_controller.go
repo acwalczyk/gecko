@@ -173,20 +173,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 
 	managementCluster := cluster.Status.PlacementResult.ManagementClusterName
-	mwName := fmt.Sprintf("%s-%s", nodepoolID, adapterName)
 
-	if err := r.transport.Apply(ctx, managementCluster, mw); err != nil {
-		return reconcile.Result{}, fmt.Errorf("nodepool reconciler: apply manifest work: %w", err)
-	}
-
-	mwStatus, err := r.transport.GetStatus(ctx, managementCluster, mwName)
+	mwStatus, err := r.transport.Apply(ctx, managementCluster, mw)
 	if err != nil {
-		if apierrors.IsNotFound(err) {
-			log.Infof(ctx, "manifest work %s not found yet, reporting unknown status", mwName)
-			mwStatus = nil
-		} else {
-			return reconcile.Result{}, fmt.Errorf("nodepool reconciler: get manifest work status: %w", err)
-		}
+		return reconcile.Result{}, fmt.Errorf("nodepool reconciler: apply manifest work: %w", err)
 	}
 
 	// Write nodepool status conditions — only update if something changed.

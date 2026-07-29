@@ -117,16 +117,15 @@ func (m *mockStoreClient) IsObjectNamespaced(_ runtime.Object) (bool, error) { r
 
 // errTransport is a transport.Client that returns configurable errors.
 type errTransport struct {
-	applyErr        error
-	getStatusErr    error
-	getStatusResult *transport.ManifestWorkStatus
+	applyErr    error
+	applyResult *transport.ManifestWorkStatus
 }
 
-func (e *errTransport) Apply(_ context.Context, _ string, _ *workv1.ManifestWork) error {
-	return e.applyErr
+func (e *errTransport) Apply(_ context.Context, _ string, _ *workv1.ManifestWork) (*transport.ManifestWorkStatus, error) {
+	return e.applyResult, e.applyErr
 }
 func (e *errTransport) GetStatus(_ context.Context, _, _ string) (*transport.ManifestWorkStatus, error) {
-	return e.getStatusResult, e.getStatusErr
+	return nil, nil
 }
 func (e *errTransport) Delete(_ context.Context, _, _ string) error { return nil }
 
@@ -167,8 +166,8 @@ func buildReadyCluster(clusterID, version string) *privatev1.Cluster {
 			BaseDomain:            "example.com",
 		},
 		VersionResolution: &privatev1.VersionResolutionResult{
-			ReleaseImage:   "quay.io/openshift-release-dev/ocp-release:4.15.0-x86_64",
-			ReleaseVersion: version,
+			ReleaseImage:      "quay.io/openshift-release-dev/ocp-release:4.15.0-x86_64",
+			ReleaseVersion:    version,
 			CincinnatiChannel: "stable-4.15",
 		},
 	}
@@ -414,30 +413,14 @@ func TestReconcile_TransportApplyError(t *testing.T) {
 	require.Contains(t, err.Error(), "apply manifest work")
 }
 
-// TestReconcile_TransportGetStatusError verifies that a non-404 GetStatus error is propagated.
-func TestReconcile_TransportGetStatusError(t *testing.T) {
-	clusterID := "cluster-abc"
-	cluster := buildReadyCluster(clusterID, "4.15.0")
-
-	tr := &errTransport{getStatusErr: fmt.Errorf("grpc unavailable")}
-	r, _ := buildReconciler(t, cluster, nil, tr, nil)
-
-	_, err := r.Reconcile(context.Background(), clusterReq(clusterID))
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "get manifest work status")
-}
-
 // TestReconcile_MWStatusNil_RequeuesPending verifies that a not-found GetStatus maps to
 // nil mwStatus, sets both conditions to False, and requeues with the pending interval.
 func TestReconcile_MWStatusNil_RequeuesPending(t *testing.T) {
 	clusterID := "cluster-abc"
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 
-	notFoundErr := apierrors.NewNotFound(
-		schema.GroupResource{Group: "work.open-cluster-management.io", Resource: "manifestworks"},
-		"cluster-abc-hc-controller",
-	)
-	tr := &errTransport{getStatusErr: notFoundErr}
+	// Apply returns nil status to simulate the ManifestWork not yet having a status.
+	tr := &errTransport{}
 	r, storeClient := buildReconciler(t, cluster, nil, tr, nil)
 
 	result, err := r.Reconcile(context.Background(), clusterReq(clusterID))

@@ -56,8 +56,8 @@ func storeKey(targetCluster, name string) string {
 	return targetCluster + "/" + name
 }
 
-// Apply stores the ManifestWork in memory and records the call.
-func (c *Client) Apply(ctx context.Context, targetCluster string, mw *workv1.ManifestWork) error {
+// Apply stores the ManifestWork in memory, records the call, and returns any configured status override.
+func (c *Client) Apply(ctx context.Context, targetCluster string, mw *workv1.ManifestWork) (*transport.ManifestWorkStatus, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -68,7 +68,11 @@ func (c *Client) Apply(ctx context.Context, targetCluster string, mw *workv1.Man
 
 	key := storeKey(targetCluster, mw.GetName())
 	c.store[key] = mw.DeepCopy()
-	return nil
+
+	if override, ok := c.StatusOverrides[key]; ok {
+		return override, nil
+	}
+	return &transport.ManifestWorkStatus{}, nil
 }
 
 // GetStatus returns the ManifestWork status. If a StatusOverride is set for this key
