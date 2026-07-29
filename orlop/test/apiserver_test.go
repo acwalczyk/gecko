@@ -132,7 +132,8 @@ func TestMain(m *testing.M) {
 		}
 	}()
 
-	// Wait for server to be ready (TLS setup takes longer)
+	// Wait for server to be ready
+	ready := false
 	deadline := time.Now().Add(10 * time.Second)
 	client := &http.Client{
 		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
@@ -143,10 +144,14 @@ func TestMain(m *testing.M) {
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
+				ready = true
 				break
 			}
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+	if !ready {
+		panic("server did not become ready within 10s")
 	}
 
 	// Run tests

@@ -42,6 +42,11 @@ func TestPagination(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to create object: %v", err)
 		}
+		if resp.StatusCode >= 300 {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			t.Fatalf("Failed to create object %d: %s %s", i, resp.Status, string(body))
+		}
 		resp.Body.Close()
 	}
 
@@ -53,8 +58,11 @@ func TestPagination(t *testing.T) {
 		}
 		defer resp.Body.Close()
 
-		var list map[string]interface{}
 		bodyBytes, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("List request failed: %s %s", resp.Status, string(bodyBytes))
+		}
+		var list map[string]interface{}
 		json.Unmarshal(bodyBytes, &list)
 
 		items := list["items"].([]interface{})
