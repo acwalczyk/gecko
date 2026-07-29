@@ -3,6 +3,7 @@ package aggregated
 import (
 	"fmt"
 	"net"
+	"sort"
 	"strings"
 
 	pkgschema "github.com/openshift-online/gecko/orlop/pkg/apiserver/schema"
@@ -159,7 +160,16 @@ func New(c CompletedConfig) (*AggregatedServer, error) {
 	for group, versions := range groups {
 		apiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(group, scheme, parameterCodec, codecs)
 
-		for version, resources := range versions {
+		// Sort versions so the shared store is always created with a
+		// deterministic GVK regardless of map iteration order.
+		sortedVersions := make([]string, 0, len(versions))
+		for v := range versions {
+			sortedVersions = append(sortedVersions, v)
+		}
+		sort.Strings(sortedVersions)
+
+		for _, version := range sortedVersions {
+			resources := versions[version]
 			storageMap := make(map[string]rest.Storage)
 			for _, info := range resources {
 
