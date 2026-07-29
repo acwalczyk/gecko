@@ -589,8 +589,9 @@ func TestReconcile_TransportApplyError(t *testing.T) {
 	require.Contains(t, err.Error(), "apply manifest work")
 }
 
-// TestReconcile_MWStatusNil_RequeuesPending verifies that a not-found from GetStatus maps
-// to a nil mwStatus, sets both conditions to False, and requeues with the pending interval.
+// TestReconcile_MWStatusNil_RequeuesPending verifies that when Apply returns nil status
+// (ManifestWork not yet processed), both conditions are set to False and the reconciler
+// requeues with the pending interval.
 func TestReconcile_MWStatusNil_RequeuesPending(t *testing.T) {
 	np := testNodePool("4.16.0")
 	cluster := testCluster(true, true)
