@@ -84,19 +84,22 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 	version := np.Spec.Release.Version
 
-	// Check already resolved.
-	if np.Status.VersionResolution != nil && np.Status.VersionResolution.ReleaseVersion == version {
-		r.log.Infof(ctx, "nodepool-vr: nodepool %s: version %s already resolved, waiting for next event", nodepoolID, version)
-		return reconcile.Result{}, nil
-	}
-
 	channelGroup := defaultChannelGroup
 	if np.Spec.Release.ChannelGroup != "" {
 		channelGroup = np.Spec.Release.ChannelGroup
 	}
+
 	channel, err := buildChannel(version, channelGroup)
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("nodepool-vr: build channel for nodepool %s: %w", nodepoolID, err)
+	}
+
+	// Check already resolved — both version and channel group must match to skip re-resolution.
+	if vr := np.Status.VersionResolution; vr != nil &&
+		vr.ReleaseVersion == version &&
+		vr.ChannelGroup == channelGroup {
+		r.log.Infof(ctx, "nodepool-vr: nodepool %s: version %s channel %s already resolved, waiting for next event", nodepoolID, version, channelGroup)
+		return reconcile.Result{}, nil
 	}
 	r.log.Infof(ctx, "nodepool-vr: nodepool %s: resolving version %s via channel %s", nodepoolID, version, channel)
 
@@ -122,9 +125,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 	// Write VR result and NodePoolVersionResolved condition to status.
 	np.Status.VersionResolution = &privatev1.VersionResolutionResult{
-		ReleaseImage:   info.Payload,
-		ReleaseVersion: info.Version,
-		ReleaseChannel: channel,
+		ReleaseImage:      info.Payload,
+		ReleaseVersion:    info.Version,
+		CincinnatiChannel: channel,
+		ChannelGroup:      channelGroup,
 	}
 	conditions.Set(&np.Status.Conditions, metav1.Condition{
 		Type:               "NodePoolVersionResolved",

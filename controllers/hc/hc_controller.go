@@ -146,7 +146,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		ImageRegistryEmail:   imageRegistryEmail,
 		NetworkEmail:         networkEmail,
 		ReleaseImage:         vr.ReleaseImage,
-		ReleaseChannel:       vr.ReleaseChannel,
+		ReleaseChannel:       vr.CincinnatiChannel,
 		BaseDomain:           placement.BaseDomain,
 	}
 

@@ -186,7 +186,7 @@ func TestReconciler_AlreadyResolved(t *testing.T) {
 	cluster.Status.VersionResolution = &privatev1.VersionResolutionResult{
 		ReleaseImage:   "quay.io/openshift-release-dev/ocp-release:4.22.0-ec.4-x86_64",
 		ReleaseVersion: "4.22.0-ec.4",
-		ReleaseChannel: "candidate-4.22",
+		CincinnatiChannel: "candidate-4.22",
 	}
 
 	r, storeClient := buildReconciler(t, cluster, cincSrv)

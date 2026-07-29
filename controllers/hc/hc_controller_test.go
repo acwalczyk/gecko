@@ -169,7 +169,7 @@ func buildReadyCluster(clusterID, version string) *privatev1.Cluster {
 		VersionResolution: &privatev1.VersionResolutionResult{
 			ReleaseImage:   "quay.io/openshift-release-dev/ocp-release:4.15.0-x86_64",
 			ReleaseVersion: version,
-			ReleaseChannel: "stable-4.15",
+			CincinnatiChannel: "stable-4.15",
 		},
 	}
 	return c

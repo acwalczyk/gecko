@@ -273,7 +273,7 @@ func TestReconciler_VersionNotSet_StatusUpdateError(t *testing.T) {
 
 func TestReconciler_AlreadyResolved_SkipsWithoutCincinnati(t *testing.T) {
 	np := makeNP("cluster-1", "np-1", "4.15.0")
-	np.Status.VersionResolution = &privatev1.VersionResolutionResult{ReleaseVersion: "4.15.0"}
+	np.Status.VersionResolution = &privatev1.VersionResolutionResult{ReleaseVersion: "4.15.0", ChannelGroup: "candidate"}
 
 	r, store := buildReconciler(t, np, makeCluster("cluster-1"), "", nil, nil, nil)
 	result, err := r.Reconcile(context.Background(), npReq("cluster-1", "np-1"))
@@ -390,7 +390,7 @@ func TestReconciler_ResolvesVersion_WritesStatusAndRequeues(t *testing.T) {
 	require.NotNil(t, updated.Status.VersionResolution)
 	assert.Equal(t, payload, updated.Status.VersionResolution.ReleaseImage)
 	assert.Equal(t, version, updated.Status.VersionResolution.ReleaseVersion)
-	assert.Equal(t, "candidate-4.15", updated.Status.VersionResolution.ReleaseChannel)
+	assert.Equal(t, "candidate-4.15", updated.Status.VersionResolution.CincinnatiChannel)
 
 	require.Len(t, updated.Status.Conditions, 1)
 	cond := updated.Status.Conditions[0]

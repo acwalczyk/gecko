@@ -69,17 +69,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 	version := cluster.Spec.Release.Version
 
-	// Check already resolved.
-	if cluster.Status.VersionResolution != nil && cluster.Status.VersionResolution.ReleaseVersion == version {
-		r.log.Infof(ctx, "vr: cluster %s: version %s already resolved, waiting for next event", clusterID, version)
-		return reconcile.Result{}, nil
-	}
-
 	channelGroup := defaultChannelGroup
 	if cluster.Spec.Release.ChannelGroup != "" {
 		channelGroup = cluster.Spec.Release.ChannelGroup
 	}
 	channel := buildChannel(version, channelGroup)
+
+	// Check already resolved — both version and channel group must match to skip re-resolution.
+	if vr := cluster.Status.VersionResolution; vr != nil &&
+		vr.ReleaseVersion == version &&
+		vr.ChannelGroup == channelGroup {
+		r.log.Infof(ctx, "vr: cluster %s: version %s channel %s already resolved, waiting for next event", clusterID, version, channelGroup)
+		return reconcile.Result{}, nil
+	}
 	r.log.Infof(ctx, "vr: cluster %s: resolving version %s via channel %s", clusterID, version, channel)
 
 	info, err := r.cincinnati.Resolve(ctx, version, channel)
@@ -104,9 +106,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 	// Write VR result and VersionResolved condition to status.
 	cluster.Status.VersionResolution = &privatev1.VersionResolutionResult{
-		ReleaseImage:   info.Payload,
-		ReleaseVersion: info.Version,
-		ReleaseChannel: channel,
+		ReleaseImage:      info.Payload,
+		ReleaseVersion:    info.Version,
+		CincinnatiChannel: channel,
+		ChannelGroup:      channelGroup,
 	}
 	conditions.Set(&cluster.Status.Conditions, metav1.Condition{
 		Type:               "VersionResolved",
