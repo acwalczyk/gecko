@@ -73,7 +73,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	if cluster.Spec.Release.ChannelGroup != "" {
 		channelGroup = cluster.Spec.Release.ChannelGroup
 	}
-	channel := buildChannel(version, channelGroup)
+	channel, err := buildChannel(version, channelGroup)
+	if err != nil {
+		return reconcile.Result{}, fmt.Errorf("vr: build channel for cluster %s: %w", clusterID, err)
+	}
 
 	// Check already resolved — both version and channel group must match to skip re-resolution.
 	if vr := cluster.Status.VersionResolution; vr != nil &&
@@ -131,15 +134,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 // buildChannel constructs the Cincinnati channel name from a version string and channel group.
 // e.g. "4.22.0-ec.4" + "stable" → "stable-4.22"
-func buildChannel(version, channelGroup string) string {
+func buildChannel(version, channelGroup string) (string, error) {
 	parts := strings.Split(version, ".")
-	major := "4"
-	minor := "0"
-	if len(parts) >= 1 {
-		major = parts[0]
+	if len(parts) < 2 {
+		return "", fmt.Errorf("invalid version %q: expected at least major.minor", version)
 	}
-	if len(parts) >= 2 {
-		minor = parts[1]
-	}
-	return fmt.Sprintf("%s-%s.%s", channelGroup, major, minor)
+	return fmt.Sprintf("%s-%s.%s", channelGroup, parts[0], parts[1]), nil
 }

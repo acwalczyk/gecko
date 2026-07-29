@@ -251,14 +251,23 @@ func TestBuildChannel(t *testing.T) {
 	cases := []struct {
 		version string
 		want    string
+		wantErr bool
 	}{
-		{"4.22.0-ec.4", "candidate-4.22"},
-		{"4.16.3", "candidate-4.16"},
-		{"4.15.0", "candidate-4.15"},
+		{"4.22.0-ec.4", "candidate-4.22", false},
+		{"4.16.3", "candidate-4.16", false},
+		{"4.15.0", "candidate-4.15", false},
+		{"invalid", "", true},
+		{"4", "", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.version, func(t *testing.T) {
-			require.Equal(t, tc.want, buildChannel(tc.version, "candidate"))
+			got, err := buildChannel(tc.version, "candidate")
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tc.want, got)
+			}
 		})
 	}
 }
