@@ -1,0 +1,4 @@
+platform-api/platform-api-server
+platform-api/apiserver.local.config/
+deploy/
+**/.git

@@ -1,0 +1,13 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: platform-api-server
+  namespace: gecko-system
+spec:
+  secretName: platform-api-server-tls
+  dnsNames:
+    - platform-api-server.gecko-system.svc
+    - platform-api-server.gecko-system.svc.cluster.local
+  issuerRef:
+    name: selfsigned
+    kind: ClusterIssuer

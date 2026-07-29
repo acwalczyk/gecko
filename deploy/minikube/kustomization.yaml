@@ -1,0 +1,22 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../platform-api/base
+  - service-public-nodeport.yaml
+
+images:
+  - name: platform-api-server
+    newName: localhost/platform-api-server
+
+patches:
+  - target:
+      kind: Deployment
+      name: platform-api-server
+    patch: |
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Never
+      - op: replace
+        path: /spec/template/spec/containers/0/args/2
+        value: --enable-public-api=true
