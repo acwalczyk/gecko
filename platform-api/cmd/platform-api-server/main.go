@@ -15,16 +15,25 @@ import (
 	"github.com/go-logr/stdr"
 	_ "github.com/lib/pq"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver"
+	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
+	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/memory"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/postgres"
+	"k8s.io/apimachinery/pkg/runtime"
+	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 func main() {
 	var (
-		address      string
-		privatePort  int
-		publicPort   int
-		corsOrigins  string
-		enablePublic bool
+		address         string
+		privatePort     int
+		publicPort      int
+		corsOrigins     string
+		enablePublic    bool
+		tlsCertFile     string
+		tlsKeyFile      string
+		authnKubeconfig string
+		authzKubeconfig string
+		disableAuth     bool
 	)
 
 	flag.StringVar(&address, "address", "0.0.0.0", "address to bind to")
@@ -32,6 +41,11 @@ func main() {
 	flag.IntVar(&publicPort, "public-port", 8081, "port for public API")
 	flag.BoolVar(&enablePublic, "enable-public-api", true, "enable public API server")
 	flag.StringVar(&corsOrigins, "cors-origins", "*", "comma-separated list of allowed CORS origins")
+	flag.StringVar(&tlsCertFile, "tls-cert-file", "", "path to TLS certificate (auto-generated if empty)")
+	flag.StringVar(&tlsKeyFile, "tls-key-file", "", "path to TLS private key (auto-generated if empty)")
+	flag.StringVar(&authnKubeconfig, "authentication-kubeconfig", "", "kubeconfig for delegated authentication (in-cluster if empty)")
+	flag.StringVar(&authzKubeconfig, "authorization-kubeconfig", "", "kubeconfig for delegated authorization (in-cluster if empty)")
+	flag.BoolVar(&disableAuth, "disable-auth", false, "disable authentication/authorization (for testing/local dev)")
 	flag.Parse()
 
 	logger := stdr.New(nil)
@@ -86,15 +100,25 @@ func main() {
 			ConnString: connStr,
 			Context:    context.Background(),
 		})
+	} else {
+		storageFactory = func(resourceType string, scheme *runtime.Scheme, gvk runtimeschema.GroupVersionKind) (storage.ResourceStore, error) {
+			return memory.NewMemoryStore(resourceType, scheme, gvk), nil
+		}
+		log.Println("No DB_HOST set, using in-memory storage")
 	}
 
 	// Create server with resource configuration
 	opts := apiserver.Options{
 		Address: address,
 		Private: apiserver.PrivateAPIOptions{
-			Port:      privatePort,
-			Resources: getPrivateResources(),
-			Scheme:    getPrivateScheme(),
+			Port:                     privatePort,
+			Resources:                getPrivateResources(),
+			Scheme:                   getPrivateScheme(),
+			TLSCertFile:              tlsCertFile,
+			TLSKeyFile:               tlsKeyFile,
+			AuthenticationKubeconfig: authnKubeconfig,
+			AuthorizationKubeconfig:  authzKubeconfig,
+			DisableAuth:              disableAuth,
 		},
 		Public: apiserver.PublicAPIOptions{
 			Enable:    enablePublic,
@@ -102,8 +126,8 @@ func main() {
 			Resources: getPublicResources(),
 			Scheme:    getPublicScheme(),
 		},
-		CORSOrigins:    origins,
 		StorageFactory: storageFactory,
+		CORSOrigins:    origins,
 		Logger:         logger,
 	}
 

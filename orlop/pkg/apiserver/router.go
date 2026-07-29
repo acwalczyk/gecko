@@ -11,15 +11,24 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
-func registerHealthEndpoints(r chi.Router) {
-	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+// healthChecker is a function that tests storage backend connectivity.
+// It returns nil if the backend is healthy, or an error describing the problem.
+type healthChecker func() error
+
+func registerHealthEndpoints(r chi.Router, check healthChecker) {
+	handler := func(w http.ResponseWriter, _ *http.Request) {
+		if check != nil {
+			if err := check(); err != nil {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				w.Write([]byte("storage check failed: " + err.Error()))
+				return
+			}
+		}
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
-	})
-	r.Get("/readyz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
-	})
+	}
+	r.Get("/healthz", handler)
+	r.Get("/readyz", handler)
 }
 
 // setupRouter configures the HTTP router with all endpoints.
@@ -31,7 +40,7 @@ func setupRouter(registry *ResourceRegistry, corsOrigins []string, customMiddlew
 		AllowedOrigins: corsOrigins,
 	}))
 
-	registerHealthEndpoints(r)
+	registerHealthEndpoints(r, nil)
 
 	for _, mw := range customMiddleware {
 		r.Use(mw)
@@ -147,10 +156,11 @@ func setupRouter(registry *ResourceRegistry, corsOrigins []string, customMiddlew
 	return r, nil
 }
 
+
 // setupConvertingRouter configures the HTTP router with converting handlers for public API.
 // publicRegistry defines the public API types and schemas.
 // privateRegistry provides the shared storage backend.
-func setupConvertingRouter(publicRegistry *ResourceRegistry, privateRegistry *ResourceRegistry, converter *conversion.Converter, privateScheme *runtime.Scheme, corsOrigins []string, customMiddleware []func(http.Handler) http.Handler) (chi.Router, error) {
+func setupConvertingRouter(publicRegistry *ResourceRegistry, privateRegistry *ResourceRegistry, converter *conversion.Converter, privateScheme *runtime.Scheme, corsOrigins []string, customMiddleware []func(http.Handler) http.Handler, check healthChecker) (chi.Router, error) {
 	r := chi.NewRouter()
 
 	// Add CORS middleware
@@ -158,7 +168,7 @@ func setupConvertingRouter(publicRegistry *ResourceRegistry, privateRegistry *Re
 		AllowedOrigins: corsOrigins,
 	}))
 
-	registerHealthEndpoints(r)
+	registerHealthEndpoints(r, check)
 
 	for _, mw := range customMiddleware {
 		r.Use(mw)

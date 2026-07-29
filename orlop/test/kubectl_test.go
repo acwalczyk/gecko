@@ -30,6 +30,7 @@ kind: Config
 clusters:
 - cluster:
     server: %s
+    insecure-skip-tls-verify: true
   name: orlop
 contexts:
 - context:
@@ -39,6 +40,8 @@ contexts:
 current-context: orlop
 users:
 - name: admin
+  user:
+    token: "test"
 `, baseURL)
 
 	if err := os.WriteFile(kubeconfig, []byte(kubeconfigContent), 0644); err != nil {
@@ -47,7 +50,7 @@ users:
 
 	// Create an object first
 	createBody := map[string]interface{}{
-		"apiVersion": "test.orlop.thetechnick.ninja/v1",
+		"apiVersion": "test.orlop.gcp.managed.openshift.io/v1",
 		"kind":       "Object",
 		"metadata": map[string]interface{}{
 			"name": "kubectl-edit-test",
@@ -63,8 +66,8 @@ users:
 	}
 
 	createJSON, _ := json.Marshal(createBody)
-	resp, err := http.Post(
-		baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/default/objects",
+	resp, err := insecureClient.Post(
+		baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/default/objects",
 		"application/json",
 		bytes.NewBuffer(createJSON),
 	)
@@ -94,12 +97,12 @@ mv "$TMPFILE" "$FILE"
 		t.Fatalf("Failed to write editor script: %v", err)
 	}
 
-	// Run kubectl edit with custom editor and full API path
-	// Client-side validation enabled - server returns 406 for protobuf requests
+	// Run kubectl edit with custom editor and full API path.
+	// Specify v1 explicitly since v2 has separate storage.
 	cmd := exec.Command("kubectl",
 		"--kubeconfig", kubeconfig,
 		"edit",
-		"objects.test.orlop.thetechnick.ninja/kubectl-edit-test",
+		"objects.v1.test.orlop.gcp.managed.openshift.io/kubectl-edit-test",
 		"-n", "default",
 	)
 	cmd.Env = append(os.Environ(),
@@ -126,8 +129,8 @@ mv "$TMPFILE" "$FILE"
 	}
 
 	// Get the object to verify changes
-	getResp, err := http.Get(
-		baseURL + "/apis/test.orlop.thetechnick.ninja/v1/namespaces/default/objects/kubectl-edit-test",
+	getResp, err := insecureClient.Get(
+		baseURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/default/objects/kubectl-edit-test",
 	)
 	if err != nil {
 		t.Fatalf("Get request failed: %v", err)
@@ -192,6 +195,7 @@ kind: Config
 clusters:
 - cluster:
     server: %s
+    insecure-skip-tls-verify: true
   name: orlop
 contexts:
 - context:
@@ -201,6 +205,8 @@ contexts:
 current-context: orlop
 users:
 - name: admin
+  user:
+    token: "test"
 `, baseURL)
 
 	if err := os.WriteFile(kubeconfig, []byte(kubeconfigContent), 0644); err != nil {
@@ -209,7 +215,7 @@ users:
 
 	// Create an object
 	createBody := map[string]interface{}{
-		"apiVersion": "test.orlop.thetechnick.ninja/v1",
+		"apiVersion": "test.orlop.gcp.managed.openshift.io/v1",
 		"kind":       "Object",
 		"metadata": map[string]interface{}{
 			"name": "kubectl-get-test",
@@ -225,8 +231,8 @@ users:
 	}
 
 	createJSON, _ := json.Marshal(createBody)
-	resp, err := http.Post(
-		baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/default/objects",
+	resp, err := insecureClient.Post(
+		baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/default/objects",
 		"application/json",
 		bytes.NewBuffer(createJSON),
 	)
@@ -252,13 +258,12 @@ users:
 		t.Logf("kubectl api-resources error: %v", apiErr)
 	}
 
-	// Test kubectl get with full API path
+	// Test kubectl get with explicit v1 version (v2 has separate storage)
 	cmd := exec.Command("kubectl",
 		"--kubeconfig", kubeconfig,
-		"get", "objects.test.orlop.thetechnick.ninja/kubectl-get-test",
+		"get", "objects.v1.test.orlop.gcp.managed.openshift.io/kubectl-get-test",
 		"-n", "default",
 		"-o", "json",
-		"-v=8",
 	)
 
 	var stdout, stderr bytes.Buffer

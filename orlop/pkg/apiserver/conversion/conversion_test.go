@@ -116,18 +116,18 @@ func TestConverter_PrivateToPublic(t *testing.T) {
 			privateObj: newTestObject(
 				withLabels(map[string]string{
 					"app":                                     "myapp",
-					"private.orlop.thetechnick.ninja/secret":  "hidden",
-					"private.orlop.thetechnick.ninja/owner":   "system",
+					"private.orlop.gcp.managed.openshift.io/secret":  "hidden",
+					"private.orlop.gcp.managed.openshift.io/owner":   "system",
 					"public-label":                            "visible",
 				}),
 			),
 			validate: func(t *testing.T, obj runtime.Object) {
 				u := obj.(*unstructured.Unstructured)
 				labels := u.GetLabels()
-				if _, exists := labels["private.orlop.thetechnick.ninja/secret"]; exists {
+				if _, exists := labels["private.orlop.gcp.managed.openshift.io/secret"]; exists {
 					t.Error("Private label was not filtered")
 				}
-				if _, exists := labels["private.orlop.thetechnick.ninja/owner"]; exists {
+				if _, exists := labels["private.orlop.gcp.managed.openshift.io/owner"]; exists {
 					t.Error("Private label was not filtered")
 				}
 				if labels["app"] != "myapp" {
@@ -147,15 +147,15 @@ func TestConverter_PrivateToPublic(t *testing.T) {
 			privateObj: newTestObject(
 				withAnnotations(map[string]string{
 					"description":                                  "public",
-					"private.orlop.thetechnick.ninja/internal-id":  "12345",
-					"private.orlop.thetechnick.ninja/tracking-key": "xyz",
+					"private.orlop.gcp.managed.openshift.io/internal-id":  "12345",
+					"private.orlop.gcp.managed.openshift.io/tracking-key": "xyz",
 					"public-annotation":                            "visible",
 				}),
 			),
 			validate: func(t *testing.T, obj runtime.Object) {
 				u := obj.(*unstructured.Unstructured)
 				annotations := u.GetAnnotations()
-				if _, exists := annotations["private.orlop.thetechnick.ninja/internal-id"]; exists {
+				if _, exists := annotations["private.orlop.gcp.managed.openshift.io/internal-id"]; exists {
 					t.Error("Private annotation was not filtered")
 				}
 				if annotations["description"] != "public" {
@@ -173,9 +173,9 @@ func TestConverter_PrivateToPublic(t *testing.T) {
 				withStatus(map[string]interface{}{
 					"conditions": []string{
 						"Ready",
-						"private.orlop.thetechnick.ninja/InternalCheck",
+						"private.orlop.gcp.managed.openshift.io/InternalCheck",
 						"Available",
-						"private.orlop.thetechnick.ninja/SecretStatus",
+						"private.orlop.gcp.managed.openshift.io/SecretStatus",
 					},
 				}),
 			),
@@ -190,8 +190,8 @@ func TestConverter_PrivateToPublic(t *testing.T) {
 
 				for _, cond := range conditions {
 					condStr := cond.(string)
-					if condStr == "private.orlop.thetechnick.ninja/InternalCheck" ||
-					   condStr == "private.orlop.thetechnick.ninja/SecretStatus" {
+					if condStr == "private.orlop.gcp.managed.openshift.io/InternalCheck" ||
+					   condStr == "private.orlop.gcp.managed.openshift.io/SecretStatus" {
 						t.Errorf("Private condition %s was not filtered", condStr)
 					}
 				}
@@ -211,7 +211,7 @@ func TestConverter_PrivateToPublic(t *testing.T) {
 							"status": "True",
 						},
 						map[string]interface{}{
-							"type":   "private.orlop.thetechnick.ninja/InternalCheck",
+							"type":   "private.orlop.gcp.managed.openshift.io/InternalCheck",
 							"status": "True",
 						},
 						map[string]interface{}{
@@ -233,7 +233,7 @@ func TestConverter_PrivateToPublic(t *testing.T) {
 				for _, cond := range conditions {
 					condMap := cond.(map[string]interface{})
 					condType := condMap["type"].(string)
-					if condType == "private.orlop.thetechnick.ninja/InternalCheck" {
+					if condType == "private.orlop.gcp.managed.openshift.io/InternalCheck" {
 						t.Error("Private condition was not filtered")
 					}
 				}
@@ -383,7 +383,7 @@ func TestConverter_PublicToPrivate(t *testing.T) {
 				}),
 				withLabels(map[string]string{
 					"app":                                    "original",
-					"private.orlop.thetechnick.ninja/owner": "system",
+					"private.orlop.gcp.managed.openshift.io/owner": "system",
 				}),
 			),
 			validate: func(t *testing.T, obj runtime.Object) {
@@ -469,9 +469,9 @@ func TestConverter_FilterPrivateMetadata(t *testing.T) {
 			obj: newTestObject(
 				withLabels(map[string]string{
 					"app":                                     "myapp",
-					"private.orlop.thetechnick.ninja/secret":  "hidden",
+					"private.orlop.gcp.managed.openshift.io/secret":  "hidden",
 					"tier":                                    "frontend",
-					"private.orlop.thetechnick.ninja/owner":   "system",
+					"private.orlop.gcp.managed.openshift.io/owner":   "system",
 				}),
 			),
 			validate: func(t *testing.T, obj *unstructured.Unstructured) {
@@ -492,9 +492,9 @@ func TestConverter_FilterPrivateMetadata(t *testing.T) {
 			obj: newTestObject(
 				withAnnotations(map[string]string{
 					"description":                                  "public desc",
-					"private.orlop.thetechnick.ninja/internal-id":  "12345",
+					"private.orlop.gcp.managed.openshift.io/internal-id":  "12345",
 					"public-ann":                                   "visible",
-					"private.orlop.thetechnick.ninja/tracking-key": "xyz",
+					"private.orlop.gcp.managed.openshift.io/tracking-key": "xyz",
 				}),
 			),
 			validate: func(t *testing.T, obj *unstructured.Unstructured) {
@@ -560,9 +560,9 @@ func TestConverter_FilterPrivateConditions(t *testing.T) {
 				withStatus(map[string]interface{}{
 					"conditions": []string{
 						"Ready",
-						"private.orlop.thetechnick.ninja/InternalCheck",
+						"private.orlop.gcp.managed.openshift.io/InternalCheck",
 						"Available",
-						"private.orlop.thetechnick.ninja/SecretStatus",
+						"private.orlop.gcp.managed.openshift.io/SecretStatus",
 						"Progressing",
 					},
 				}),
@@ -574,8 +574,8 @@ func TestConverter_FilterPrivateConditions(t *testing.T) {
 					t.Errorf("Expected 3 conditions, got %d", len(conditions))
 				}
 				for _, cond := range conditions {
-					if cond == "private.orlop.thetechnick.ninja/InternalCheck" ||
-					   cond == "private.orlop.thetechnick.ninja/SecretStatus" {
+					if cond == "private.orlop.gcp.managed.openshift.io/InternalCheck" ||
+					   cond == "private.orlop.gcp.managed.openshift.io/SecretStatus" {
 						t.Errorf("Private condition %v was not filtered", cond)
 					}
 				}
@@ -587,7 +587,7 @@ func TestConverter_FilterPrivateConditions(t *testing.T) {
 				withStatus(map[string]interface{}{
 					"conditions": []interface{}{
 						map[string]interface{}{"type": "Ready", "status": "True"},
-						map[string]interface{}{"type": "private.orlop.thetechnick.ninja/InternalCheck", "status": "True"},
+						map[string]interface{}{"type": "private.orlop.gcp.managed.openshift.io/InternalCheck", "status": "True"},
 						map[string]interface{}{"type": "Available", "status": "True"},
 					},
 				}),

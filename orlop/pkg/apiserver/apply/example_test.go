@@ -13,7 +13,7 @@ import (
 func TestManagedFields_Structure(t *testing.T) {
 	// Example object with managedFields after two controllers applied changes
 	objectJSON := `{
-  "apiVersion": "test.orlop.thetechnick.ninja/v1",
+  "apiVersion": "test.orlop.gcp.managed.openshift.io/v1",
   "kind": "Object",
   "metadata": {
     "name": "example",
@@ -22,7 +22,7 @@ func TestManagedFields_Structure(t *testing.T) {
       {
         "manager": "controller-a",
         "operation": "Apply",
-        "apiVersion": "test.orlop.thetechnick.ninja/v1",
+        "apiVersion": "test.orlop.gcp.managed.openshift.io/v1",
         "time": "2026-07-09T10:00:00Z",
         "fieldsType": "FieldsV1",
         "fieldsV1": {
@@ -34,7 +34,7 @@ func TestManagedFields_Structure(t *testing.T) {
       {
         "manager": "controller-b",
         "operation": "Apply",
-        "apiVersion": "test.orlop.thetechnick.ninja/v1",
+        "apiVersion": "test.orlop.gcp.managed.openshift.io/v1",
         "time": "2026-07-09T10:05:00Z",
         "fieldsType": "FieldsV1",
         "fieldsV1": {
@@ -49,7 +49,7 @@ func TestManagedFields_Structure(t *testing.T) {
       {
         "manager": "kubectl",
         "operation": "Update",
-        "apiVersion": "test.orlop.thetechnick.ninja/v1",
+        "apiVersion": "test.orlop.gcp.managed.openshift.io/v1",
         "time": "2026-07-09T10:10:00Z",
         "fieldsType": "FieldsV1",
         "fieldsV1": {

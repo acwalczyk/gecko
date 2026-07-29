@@ -2,7 +2,6 @@ package memory
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -593,12 +592,8 @@ func (s *MemoryStore) Watch(ctx context.Context, opts storage.ListOptions, resou
 }
 
 func matchesFieldFilters(obj client.Object, filters map[string]string) bool {
-	data, err := json.Marshal(obj)
+	objMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
 	if err != nil {
-		return false
-	}
-	var objMap map[string]interface{}
-	if err := json.Unmarshal(data, &objMap); err != nil {
 		return false
 	}
 	for path, expected := range filters {

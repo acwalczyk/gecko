@@ -37,19 +37,19 @@ func parseWatchConfig(r *http.Request) watchConfig {
 }
 
 // applyWatchTimeout applies timeout to context if specified.
-func applyWatchTimeout(ctx context.Context, timeoutSeconds string) context.Context {
+// The returned CancelFunc must be deferred by the caller to release the timer
+// resource. When no timeout is applied, the returned CancelFunc is a no-op.
+func applyWatchTimeout(ctx context.Context, timeoutSeconds string) (context.Context, context.CancelFunc) {
 	if timeoutSeconds == "" {
-		return ctx
+		return ctx, func() {}
 	}
 
 	timeout, err := strconv.ParseInt(timeoutSeconds, 10, 64)
 	if err != nil || timeout <= 0 {
-		return ctx
+		return ctx, func() {}
 	}
 
-	ctxWithTimeout, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
-	_ = cancel // cancel is handled by the parent context or watch stop
-	return ctxWithTimeout
+	return context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 }
 
 // watchStreamer handles the streaming watch protocol.

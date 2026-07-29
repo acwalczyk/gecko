@@ -2,236 +2,288 @@ package generator
 
 import (
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
-	"sync"
-
-	"k8s.io/code-generator/cmd/conversion-gen/args"
-	conversiongen "k8s.io/code-generator/cmd/conversion-gen/generators"
-	"k8s.io/gengo/v2"
-	"k8s.io/gengo/v2/generator"
-	"k8s.io/gengo/v2/namer"
-	"k8s.io/klog/v2"
+	"text/template"
 )
 
-var klogInitOnce sync.Once
-
-// customConversionNamer creates unique function names by including more package path
-// components to distinguish between internal and public packages
-func customConversionNamer() *namer.NameStrategy {
-	return &namer.NameStrategy{
-		Join: func(pre string, in []string, post string) string {
-			return strings.Join(in, "_")
-		},
-		// Use 3 package names to include "internal" or "public" in the path
-		// e.g., "internal_test_v1" vs "public_test_v1"
-		PrependPackageNames: 3,
-	}
-}
-
-// customNameSystems returns custom name systems that avoid function name collisions
-func customNameSystems() namer.NameSystems {
-	return namer.NameSystems{
-		"public": customConversionNamer(),
-		"raw":    namer.NewRawNamer("", nil),
-		"defaultfn": &namer.NameStrategy{
-			Prefix: "SetDefaults_",
-			Join: func(pre string, in []string, post string) string {
-				return pre + strings.Join(in, "_") + post
-			},
-		},
-	}
-}
-
+// generateConversions generates conversion functions between private (input)
+// and public (output) API types.
+//
+// Instead of using k8s.io/code-generator/conversion-gen, which cannot produce
+// unique function names when both packages share the same version directory
+// (e.g., both are "v1"), this generator produces conversion functions directly.
+// Each function is named with a directional suffix (_PrivateToPublic or
+// _PublicToPrivate) to guarantee uniqueness, eliminating the fragile
+// post-processing that conversion-gen would require.
 func (g *Generator) generateConversions() error {
-	// Find all package directories that need conversion generation
-	var packagePaths []string
+	// Clean up stale artifacts from the previous conversion-gen approach.
+	if err := g.cleanStaleConversionArtifacts(); err != nil {
+		return fmt.Errorf("cleaning stale conversion artifacts: %w", err)
+	}
 
-	err := filepath.Walk(g.outputDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
+	// Walk the output directory to find versioned packages with generated types.
+	return filepath.Walk(g.outputDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || !info.IsDir() {
 			return err
 		}
 
-		if !info.IsDir() {
+		// Collect struct type names from generated files in this package.
+		typeNames, err := g.collectPackageTypes(path)
+		if err != nil {
+			return fmt.Errorf("collecting types from %s: %w", path, err)
+		}
+		if len(typeNames) == 0 {
 			return nil
 		}
 
-		// Check if this directory has Go files (excluding generated)
-		entries, err := os.ReadDir(path)
+		// Determine the relative path from the output root to this package.
+		relPath, err := filepath.Rel(g.outputDir, path)
 		if err != nil {
 			return err
 		}
 
-		hasGoFiles := false
-		for _, entry := range entries {
-			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".go") && !strings.HasPrefix(entry.Name(), "zz_generated") {
-				hasGoFiles = true
-				break
-			}
+		// Ensure the corresponding input (private) package exists.
+		privatePkgDir := filepath.Join(g.inputDir, relPath)
+		if _, err := os.Stat(privatePkgDir); os.IsNotExist(err) {
+			return nil
 		}
 
-		if hasGoFiles {
-			// Get the package import path
-			relPath, err := filepath.Rel(g.outputDir, path)
-			if err != nil {
-				return err
+		publicImportPath := g.outputBasePath + "/" + strings.ReplaceAll(relPath, string(filepath.Separator), "/")
+		privateImportPath := g.inputBasePath + "/" + strings.ReplaceAll(relPath, string(filepath.Separator), "/")
+
+		pkgName, err := determinePackageName(path)
+		if err != nil {
+			return fmt.Errorf("determining package name: %w", err)
+		}
+
+		fmt.Printf("  Generating conversions for %s (%d types)...\n", publicImportPath, len(typeNames))
+
+		return g.writeConversionFile(path, pkgName, publicImportPath, privateImportPath, typeNames)
+	})
+}
+
+// collectPackageTypes parses generated Go files in a package directory and
+// returns the names of top-level struct types found. It skips infrastructure
+// files like deepcopy, schemas, conversion, and groupversion_info.
+func (g *Generator) collectPackageTypes(pkgDir string) ([]string, error) {
+	entries, err := os.ReadDir(pkgDir)
+	if err != nil {
+		return nil, err
+	}
+
+	var typeNames []string
+	seen := make(map[string]bool)
+
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") {
+			continue
+		}
+
+		// Only look at generated type files; skip infrastructure.
+		if !strings.HasPrefix(name, "zz_generated.") {
+			continue
+		}
+		switch name {
+		case "zz_generated.deepcopy.go",
+			"zz_generated.schemas.go",
+			"zz_generated.conversion.go",
+			"zz_generated.groupversion_info.go":
+			continue
+		}
+
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, filepath.Join(pkgDir, name), nil, 0)
+		if err != nil {
+			return nil, fmt.Errorf("parsing %s: %w", name, err)
+		}
+
+		for _, decl := range f.Decls {
+			genDecl, ok := decl.(*ast.GenDecl)
+			if !ok || genDecl.Tok != token.TYPE {
+				continue
 			}
-
-			// Check if corresponding internal package exists
-			internalPath := filepath.Join(g.inputDir, relPath)
-			if _, err := os.Stat(internalPath); err == nil {
-				pkgPath := g.outputBasePath + "/" + strings.ReplaceAll(relPath, string(filepath.Separator), "/")
-				packagePaths = append(packagePaths, pkgPath)
-
-				// Create doc.go with conversion markers
-				if err := g.createConversionDocFile(path, relPath); err != nil {
-					return fmt.Errorf("failed to create doc.go: %w", err)
+			for _, spec := range genDecl.Specs {
+				typeSpec, ok := spec.(*ast.TypeSpec)
+				if !ok {
+					continue
+				}
+				if _, ok := typeSpec.Type.(*ast.StructType); ok {
+					if !seen[typeSpec.Name.Name] {
+						seen[typeSpec.Name.Name] = true
+						typeNames = append(typeNames, typeSpec.Name.Name)
+					}
 				}
 			}
 		}
-
-		return nil
-	})
-	if err != nil {
-		return fmt.Errorf("failed to walk output directory: %w", err)
 	}
 
-	if len(packagePaths) == 0 {
-		return nil
-	}
-
-	// Use conversion-gen library directly
-	for _, pkgPath := range packagePaths {
-		if err := g.runConversionGenLib(pkgPath); err != nil {
-			return fmt.Errorf("failed to generate conversions for %s: %w", pkgPath, err)
-		}
-	}
-
-	return nil
+	sort.Strings(typeNames)
+	return typeNames, nil
 }
 
-func (g *Generator) createConversionDocFile(pkgDir, relPath string) error {
-	// Get package name
-	pkgName, err := determinePackageName(pkgDir)
+// conversionData holds the template variables for zz_generated.conversion.go.
+type conversionData struct {
+	Boilerplate       string
+	PackageName       string
+	PrivateImportPath string
+	PrivateAlias      string // import alias for the private package
+	Types             []string
+}
+
+// conversionTmpl is the template for generated conversion files.
+//
+// Each type gets two conversion functions with directional suffixes:
+//   - Convert_<Type>_PrivateToPublic: private -> public
+//   - Convert_<Type>_PublicToPrivate: public -> private
+//
+// The conversion uses JSON round-trip, which is consistent with the existing
+// Converter implementation and correctly handles the field-subset relationship
+// between public and private types.
+var conversionTmpl = template.Must(template.New("conversion").Parse(`//go:build !ignore_autogenerated
+// +build !ignore_autogenerated
+
+{{ .Boilerplate }}
+// Code generated by orlop-gen. DO NOT EDIT.
+
+package {{ .PackageName }}
+
+import (
+	"encoding/json"
+
+	{{ .PrivateAlias }} "{{ .PrivateImportPath }}"
+	conversion "k8s.io/apimachinery/pkg/conversion"
+	runtime "k8s.io/apimachinery/pkg/runtime"
+)
+
+func init() {
+	localSchemeBuilder.Register(RegisterConversions)
+}
+
+// RegisterConversions adds conversion functions to the given scheme.
+// Public to allow building arbitrary schemes.
+func RegisterConversions(s *runtime.Scheme) error {
+{{- range .Types }}
+	if err := s.AddGeneratedConversionFunc((*{{ $.PrivateAlias }}.{{ . }})(nil), (*{{ . }})(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_{{ . }}_PrivateToPublic(a.(*{{ $.PrivateAlias }}.{{ . }}), b.(*{{ . }}), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*{{ . }})(nil), (*{{ $.PrivateAlias }}.{{ . }})(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_{{ . }}_PublicToPrivate(a.(*{{ . }}), b.(*{{ $.PrivateAlias }}.{{ . }}), scope)
+	}); err != nil {
+		return err
+	}
+{{- end }}
+	return nil
+}
+{{ range .Types }}
+func autoConvert_{{ . }}_PrivateToPublic(in *{{ $.PrivateAlias }}.{{ . }}, out *{{ . }}, s conversion.Scope) error {
+	data, err := json.Marshal(in)
 	if err != nil {
 		return err
 	}
-
-	// Construct internal package import path
-	internalImportPath := g.inputBasePath + "/" + strings.ReplaceAll(relPath, string(filepath.Separator), "/")
-
-	docContent := fmt.Sprintf(`// +k8s:conversion-gen=%s
-// +k8s:conversion-gen-external-types=%s
-
-// Package %s contains the public API types.
-package %s
-`, internalImportPath, internalImportPath, pkgName, pkgName)
-
-	docPath := filepath.Join(pkgDir, "doc.go")
-	return os.WriteFile(docPath, []byte(docContent), 0644)
+	return json.Unmarshal(data, out)
 }
 
-func (g *Generator) runConversionGenLib(pkgPath string) error {
-	// Initialize klog flags only once
-	klogInitOnce.Do(func() {
-		klog.InitFlags(nil)
-	})
+// Convert_{{ . }}_PrivateToPublic is an autogenerated conversion function.
+func Convert_{{ . }}_PrivateToPublic(in *{{ $.PrivateAlias }}.{{ . }}, out *{{ . }}, s conversion.Scope) error {
+	return autoConvert_{{ . }}_PrivateToPublic(in, out, s)
+}
 
-	// Get project root
+func autoConvert_{{ . }}_PublicToPrivate(in *{{ . }}, out *{{ $.PrivateAlias }}.{{ . }}, s conversion.Scope) error {
+	data, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, out)
+}
+
+// Convert_{{ . }}_PublicToPrivate is an autogenerated conversion function.
+func Convert_{{ . }}_PublicToPrivate(in *{{ . }}, out *{{ $.PrivateAlias }}.{{ . }}, s conversion.Scope) error {
+	return autoConvert_{{ . }}_PublicToPrivate(in, out, s)
+}
+{{ end -}}
+`))
+
+// writeConversionFile generates the zz_generated.conversion.go file for a
+// single public package.
+func (g *Generator) writeConversionFile(pkgDir, pkgName, publicImportPath, privateImportPath string, typeNames []string) error {
+	// Read boilerplate
 	projectRoot := filepath.Dir(filepath.Dir(g.outputDir))
-
-	// Set up args
-	genArgs := args.New()
-	genArgs.GoHeaderFile = filepath.Join(projectRoot, "hack/boilerplate.go.txt")
-	// genArgs.GeneratedBuildTag is already set to "ignore_autogenerated" by New()
-	genArgs.OutputFile = "zz_generated.conversion.go"
-
-	// Create generator context with custom naming to avoid collisions
-	myTargets := func(context *generator.Context) []generator.Target {
-		return conversiongen.GetTargets(context, genArgs)
+	boilerplate, err := os.ReadFile(filepath.Join(projectRoot, "hack/boilerplate.go.txt"))
+	if err != nil {
+		return fmt.Errorf("reading boilerplate: %w", err)
 	}
 
-	// Execute code generation with custom name systems
-	// Note: We pass empty string for buildTag parameter because it's only used
-	// for parser build tags. The output build tag comes from the boilerplate
-	// generated in GetTargets via args.GeneratedBuildTag.
-	if err := gengo.Execute(
-		customNameSystems(), // Use custom name systems to avoid duplicate names
-		conversiongen.DefaultNameSystem(),
-		myTargets,
-		"",                // Don't pass buildTag here - it's for parser, not output
-		[]string{pkgPath}, // Input packages
-	); err != nil {
-		return fmt.Errorf("gengo.Execute failed: %w", err)
+	// Build a private import alias that won't collide with the current package.
+	// The private and public packages typically share the same Go package name
+	// (e.g., both are "v1"), so we prefix "private" to distinguish them.
+	privateAlias := "private" + pkgName
+
+	data := conversionData{
+		Boilerplate:       strings.TrimSpace(string(boilerplate)),
+		PackageName:       pkgName,
+		PrivateImportPath: privateImportPath,
+		PrivateAlias:      privateAlias,
+		Types:             typeNames,
 	}
 
-	// Post-process the generated file to fix duplicate function names
-	// The issue is that conversion-gen generates both:
-	// - Convert_v1_Object_To_v1_Object (from internal v1 to internal v1)
-	// - Convert_v1_Object_To_v1_Object (from public v1 to public v1)
-	// We need to rename one set to avoid conflicts
-	if strings.HasPrefix(pkgPath, g.outputBasePath) {
-		// Calculate the actual file path
-		pkgRelPath := strings.TrimPrefix(pkgPath, g.modulePath+"/")
-		genFilePath := filepath.Join(projectRoot, pkgRelPath, genArgs.OutputFile)
-		fmt.Printf("  Post-processing %s to fix duplicate names...\n", genFilePath)
-		if err := g.fixDuplicateConversionNames(genFilePath); err != nil {
-			return fmt.Errorf("failed to fix duplicate names: %w", err)
-		}
+	var buf strings.Builder
+	if err := conversionTmpl.Execute(&buf, data); err != nil {
+		return fmt.Errorf("executing template: %w", err)
 	}
 
-	return nil
+	outPath := filepath.Join(pkgDir, "zz_generated.conversion.go")
+	return os.WriteFile(outPath, []byte(buf.String()), 0644)
 }
 
-func (g *Generator) fixDuplicateConversionNames(filePath string) error {
-	content, err := os.ReadFile(filePath)
-	if err != nil {
-		return err
-	}
+// cleanStaleConversionArtifacts removes doc.go files from the previous
+// conversion-gen approach and stale zz_generated.conversion.go files from
+// packages that no longer have types (e.g., aggregator packages).
+func (g *Generator) cleanStaleConversionArtifacts() error {
+	return filepath.Walk(g.outputDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return err
+		}
 
-	// Replace duplicate function declarations by renaming the second occurrence
-	// of each conversion function to include package distinction
-	lines := strings.Split(string(content), "\n")
-	seenFuncs := make(map[string]bool)
-	var result []string
-	inSecondDuplicate := false
-	currentFunc := ""
+		base := filepath.Base(path)
 
-	for i, line := range lines {
-		// Check if this is a function declaration
-		if strings.HasPrefix(strings.TrimSpace(line), "func autoConvert_") ||
-			strings.HasPrefix(strings.TrimSpace(line), "func Convert_") {
-			// Extract function name
-			funcName := strings.TrimSpace(line)
-			if idx := strings.Index(funcName, "("); idx > 0 {
-				funcName = funcName[5:idx] // Remove "func "
+		// Remove doc.go files that contain conversion-gen tags.
+		if base == "doc.go" {
+			content, err := os.ReadFile(path)
+			if err != nil {
+				return nil
 			}
-
-			if seenFuncs[funcName] {
-				// This is a duplicate - rename it by adding suffix
-				// Convert internal package functions to use "internal" prefix
-				inSecondDuplicate = true
-				currentFunc = funcName
-				line = strings.Replace(line, funcName, funcName+"_internal", 1)
-			} else {
-				seenFuncs[funcName] = true
-				inSecondDuplicate = false
-			}
-		} else if inSecondDuplicate {
-			// Also update calls to renamed functions
-			if currentFunc != "" {
-				line = strings.ReplaceAll(line, currentFunc+"(", currentFunc+"_internal(")
-			}
-			// Check if we've reached the end of the function
-			if strings.TrimSpace(line) == "}" && i > 0 {
-				inSecondDuplicate = false
-				currentFunc = ""
+			if strings.Contains(string(content), "+k8s:conversion-gen") {
+				fmt.Printf("  Removing stale %s\n", path)
+				return os.Remove(path)
 			}
 		}
 
-		result = append(result, line)
-	}
+		// Remove zz_generated.conversion.go from packages without types
+		// (e.g., aggregator packages that had an empty RegisterConversions).
+		if base == "zz_generated.conversion.go" {
+			dir := filepath.Dir(path)
+			types, _ := g.collectPackageTypes(dir)
 
-	return os.WriteFile(filePath, []byte(strings.Join(result, "\n")), 0644)
+			// Also check that the corresponding private package exists.
+			relPath, _ := filepath.Rel(g.outputDir, dir)
+			privatePkgDir := filepath.Join(g.inputDir, relPath)
+			_, privateErr := os.Stat(privatePkgDir)
+
+			if len(types) == 0 || os.IsNotExist(privateErr) {
+				fmt.Printf("  Removing stale %s\n", path)
+				return os.Remove(path)
+			}
+		}
+
+		return nil
+	})
 }

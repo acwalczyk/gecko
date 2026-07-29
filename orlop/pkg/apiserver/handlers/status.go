@@ -56,9 +56,16 @@ func (h *ResourceHandler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Convert existing object to map to preserve spec
-	existingJSON, _ := json.Marshal(existing)
+	existingJSON, err := json.Marshal(existing)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to marshal existing object: %v", err))
+		return
+	}
 	var existingMap map[string]interface{}
-	json.Unmarshal(existingJSON, &existingMap)
+	if err := json.Unmarshal(existingJSON, &existingMap); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to unmarshal existing object: %v", err))
+		return
+	}
 
 	// Replace only the status field
 	if status, ok := updateMap["status"]; ok {
@@ -66,7 +73,11 @@ func (h *ResourceHandler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Convert back to typed object in storage version
-	updatedJSON, _ := json.Marshal(existingMap)
+	updatedJSON, err := json.Marshal(existingMap)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to marshal updated object: %v", err))
+		return
+	}
 	obj, err := h.storageVersionSchemeNew()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create object: %v", err))

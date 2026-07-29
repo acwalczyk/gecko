@@ -46,3 +46,9 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
+
+# GenericAPIServer self-signed cert artifacts (created during tests)
+apiserver.local.config/
+
+# Sample/demo manifests
+simple-managed-hosted-cluster.yaml

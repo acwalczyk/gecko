@@ -16,7 +16,7 @@ func TestJSONPatch(t *testing.T) {
 
 		// Create initial object
 		createBody := map[string]interface{}{
-			"apiVersion": "test.orlop.thetechnick.ninja/v1",
+			"apiVersion": "test.orlop.gcp.managed.openshift.io/v1",
 			"kind":       "Object",
 			"metadata": map[string]interface{}{
 				"name": name,
@@ -31,8 +31,8 @@ func TestJSONPatch(t *testing.T) {
 			},
 		}
 		createJSON, _ := json.Marshal(createBody)
-		createResp, err := http.Post(
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/"+namespace+"/objects",
+		createResp, err := insecureClient.Post(
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects",
 			"application/json",
 			bytes.NewBuffer(createJSON),
 		)
@@ -58,12 +58,12 @@ func TestJSONPatch(t *testing.T) {
 
 		req, _ := http.NewRequest(
 			"PATCH",
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/"+namespace+"/objects/"+name,
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects/"+name,
 			bytes.NewBuffer(patchJSON),
 		)
 		req.Header.Set("Content-Type", "application/json-patch+json")
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := insecureClient.Do(req)
 		if err != nil {
 			t.Fatalf("Patch request failed: %v", err)
 		}
@@ -97,7 +97,7 @@ func TestJSONPatch(t *testing.T) {
 
 		// Create initial object
 		createBody := map[string]interface{}{
-			"apiVersion": "test.orlop.thetechnick.ninja/v1",
+			"apiVersion": "test.orlop.gcp.managed.openshift.io/v1",
 			"kind":       "Object",
 			"metadata": map[string]interface{}{
 				"name": name,
@@ -112,8 +112,8 @@ func TestJSONPatch(t *testing.T) {
 			},
 		}
 		createJSON, _ := json.Marshal(createBody)
-		createResp, err := http.Post(
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/"+namespace+"/objects",
+		createResp, err := insecureClient.Post(
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects",
 			"application/json",
 			bytes.NewBuffer(createJSON),
 		)
@@ -134,12 +134,12 @@ func TestJSONPatch(t *testing.T) {
 
 		req, _ := http.NewRequest(
 			"PATCH",
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/"+namespace+"/objects/"+name,
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects/"+name,
 			bytes.NewBuffer(patchJSON),
 		)
 		req.Header.Set("Content-Type", "application/json-patch+json")
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := insecureClient.Do(req)
 		if err != nil {
 			t.Fatalf("Patch request failed: %v", err)
 		}
@@ -169,7 +169,7 @@ func TestJSONPatch(t *testing.T) {
 
 		// Create initial object
 		createBody := map[string]interface{}{
-			"apiVersion": "test.orlop.thetechnick.ninja/v1",
+			"apiVersion": "test.orlop.gcp.managed.openshift.io/v1",
 			"kind":       "Object",
 			"metadata": map[string]interface{}{
 				"name": name,
@@ -184,8 +184,8 @@ func TestJSONPatch(t *testing.T) {
 			},
 		}
 		createJSON, _ := json.Marshal(createBody)
-		createResp, err := http.Post(
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/"+namespace+"/objects",
+		createResp, err := insecureClient.Post(
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects",
 			"application/json",
 			bytes.NewBuffer(createJSON),
 		)
@@ -206,12 +206,12 @@ func TestJSONPatch(t *testing.T) {
 
 		req, _ := http.NewRequest(
 			"PATCH",
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/"+namespace+"/objects/"+name,
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects/"+name,
 			bytes.NewBuffer(patchJSON),
 		)
 		req.Header.Set("Content-Type", "application/json-patch+json")
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := insecureClient.Do(req)
 		if err != nil {
 			t.Fatalf("Patch request failed: %v", err)
 		}
@@ -251,7 +251,7 @@ func TestJSONPatch(t *testing.T) {
 
 		// Create initial object
 		createBody := map[string]interface{}{
-			"apiVersion": "test.orlop.thetechnick.ninja/v1",
+			"apiVersion": "test.orlop.gcp.managed.openshift.io/v1",
 			"kind":       "Object",
 			"metadata": map[string]interface{}{
 				"name": name,
@@ -266,8 +266,8 @@ func TestJSONPatch(t *testing.T) {
 			},
 		}
 		createJSON, _ := json.Marshal(createBody)
-		createResp, err := http.Post(
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/"+namespace+"/objects",
+		createResp, err := insecureClient.Post(
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects",
 			"application/json",
 			bytes.NewBuffer(createJSON),
 		)
@@ -293,12 +293,12 @@ func TestJSONPatch(t *testing.T) {
 
 		req, _ := http.NewRequest(
 			"PATCH",
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/"+namespace+"/objects/"+name,
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects/"+name,
 			bytes.NewBuffer(patchJSON),
 		)
 		req.Header.Set("Content-Type", "application/json-patch+json")
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := insecureClient.Do(req)
 		if err != nil {
 			t.Fatalf("Patch request failed: %v", err)
 		}
@@ -340,7 +340,7 @@ func TestJSONPatch(t *testing.T) {
 
 		// Create initial object
 		createBody := map[string]interface{}{
-			"apiVersion": "test.orlop.thetechnick.ninja/v1",
+			"apiVersion": "test.orlop.gcp.managed.openshift.io/v1",
 			"kind":       "Object",
 			"metadata": map[string]interface{}{
 				"name": name,
@@ -355,8 +355,8 @@ func TestJSONPatch(t *testing.T) {
 			},
 		}
 		createJSON, _ := json.Marshal(createBody)
-		createResp, err := http.Post(
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/"+namespace+"/objects",
+		createResp, err := insecureClient.Post(
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects",
 			"application/json",
 			bytes.NewBuffer(createJSON),
 		)
@@ -382,12 +382,12 @@ func TestJSONPatch(t *testing.T) {
 
 		req, _ := http.NewRequest(
 			"PATCH",
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/"+namespace+"/objects/"+name,
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects/"+name,
 			bytes.NewBuffer(patchJSON),
 		)
 		req.Header.Set("Content-Type", "application/json-patch+json")
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := insecureClient.Do(req)
 		if err != nil {
 			t.Fatalf("Patch request failed: %v", err)
 		}
@@ -416,7 +416,7 @@ func TestJSONPatch(t *testing.T) {
 
 		// Create initial object
 		createBody := map[string]interface{}{
-			"apiVersion": "test.orlop.thetechnick.ninja/v1",
+			"apiVersion": "test.orlop.gcp.managed.openshift.io/v1",
 			"kind":       "Object",
 			"metadata": map[string]interface{}{
 				"name": name,
@@ -431,8 +431,8 @@ func TestJSONPatch(t *testing.T) {
 			},
 		}
 		createJSON, _ := json.Marshal(createBody)
-		createResp, err := http.Post(
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/"+namespace+"/objects",
+		createResp, err := insecureClient.Post(
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects",
 			"application/json",
 			bytes.NewBuffer(createJSON),
 		)
@@ -458,12 +458,12 @@ func TestJSONPatch(t *testing.T) {
 
 		req, _ := http.NewRequest(
 			"PATCH",
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/"+namespace+"/objects/"+name,
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects/"+name,
 			bytes.NewBuffer(patchJSON),
 		)
 		req.Header.Set("Content-Type", "application/json-patch+json")
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := insecureClient.Do(req)
 		if err != nil {
 			t.Fatalf("Patch request failed: %v", err)
 		}

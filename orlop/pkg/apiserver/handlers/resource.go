@@ -694,15 +694,24 @@ func (h *ResourceHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 	if len(finalizers) > 0 {
 		if deletionTimestamp == nil {
-			// Soft delete: set deletionTimestamp and update the object
+			toStore, ok := existing.DeepCopyObject().(client.Object)
+			if !ok {
+				writeError(w, http.StatusInternalServerError, "object does not implement client.Object")
+				return
+			}
+
 			now := metav1.Now()
-			accessor.SetDeletionTimestamp(&now)
+			toStore.SetDeletionTimestamp(&now)
+			toStore.GetObjectKind().SetGroupVersionKind(h.effectiveStorageGVK())
 
-			// Set GVK for update (use storage version when conversion is active)
-			existing.GetObjectKind().SetGroupVersionKind(h.effectiveStorageGVK())
+			// Verify conversion is possible before persisting.
+			responseObj, err := h.convertToServingVersion(toStore)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to convert response version: %v", err))
+				return
+			}
 
-			// Update the object with deletionTimestamp
-			if err := h.store.Update(r.Context(), existing); err != nil {
+			if err := h.store.Update(r.Context(), toStore); err != nil {
 				h.logger.Error(err, "Delete failed - update with deletionTimestamp", "kind", h.gvk.Kind, "namespace", namespace, "name", name)
 				if errors.IsConflict(err) {
 					writeError(w, http.StatusConflict, err.Error())
@@ -713,18 +722,21 @@ func (h *ResourceHandler) Delete(w http.ResponseWriter, r *http.Request) {
 			}
 
 			h.logger.Info("Marked for deletion (finalizers present)", "kind", h.gvk.Kind, "namespace", namespace, "name", name, "finalizers", finalizers, "propagationPolicy", propagationPolicy)
-		} else {
-			h.logger.V(1).Info("Already marked for deletion", "kind", h.gvk.Kind, "namespace", namespace, "name", name, "finalizers", finalizers)
+
+			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(responseObj)
+			return
 		}
 
-		// Convert to serving version for response
+		h.logger.V(1).Info("Already marked for deletion", "kind", h.gvk.Kind, "namespace", namespace, "name", name, "finalizers", finalizers)
+
 		responseObj, err := h.convertToServingVersion(existing)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to convert response version: %v", err))
 			return
 		}
 
-		// Return the object with deletionTimestamp (whether just set or already present)
 		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(responseObj)

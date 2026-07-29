@@ -18,7 +18,8 @@ func (h *ResourceHandler) handleWatch(w http.ResponseWriter, r *http.Request, op
 		config.allowWatchBookmarks, config.sendInitialEvents, config.resourceVersionMatch, config.timeoutSeconds)
 
 	// Apply timeout if specified
-	ctx := applyWatchTimeout(r.Context(), config.timeoutSeconds)
+	ctx, timeoutCancel := applyWatchTimeout(r.Context(), config.timeoutSeconds)
+	defer timeoutCancel()
 
 	// Start watch
 	eventCh, stop, err := h.store.Watch(ctx, opts, config.resourceVersion)

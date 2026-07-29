@@ -1,184 +1,160 @@
-# Orlop API Server Architecture
+# Platform API Architecture
 
 ## Dual API Surface with Shared Storage
 
+The server exposes two API surfaces sharing the same storage backend. The private API uses GenericAPIServer (HTTPS). The public API uses chi.Router (HTTP).
+
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                          API Clients                                │
-└──────────────┬─────────────────────────────┬────────────────────────┘
-               │                             │
+                          API Clients
+                              │
+               ┌──────────────┴──────────────┐
                │                             │
        ┌───────▼────────┐            ┌───────▼────────┐
        │  Private API   │            │   Public API   │
        │   Port 8080    │            │   Port 8081    │
-       └───────┬────────┘            └───────┬────────┘
-               │                             │
-               │                             │
-       ┌───────▼────────┐            ┌───────▼────────┐
-       │ Private Schema │            │ Public Schema  │
-       │  (Internal)    │            │  (Filtered)    │
-       └───────┬────────┘            └───────┬────────┘
-               │                             │
-               │                    ┌────────▼────────┐
-               │                    │   Converter     │
-               │                    │ PrivateToPublic │
-               │                    │ PublicToPrivate │
-               │                    └────────┬────────┘
+       │  GenericAPI    │            │  chi.Router    │
+       │  Server        │            │  (always HTTP) │
+       │  (HTTPS)       │            └───────┬────────┘
+       └───────┬────────┘                    │
+               │                     ┌───────▼────────┐
+               │                     │   Converter    │
+               │                     │ PrivateToPublic│
+               │                     │ PublicToPrivate│
+               │                     └───────┬────────┘
                │                             │
                └──────────┬──────────────────┘
                           │
                   ┌───────▼───────┐
                   │ Shared Store  │
-                  │  (In-Memory)  │
+                  │  ResourceStore│
                   │               │
-                  │  Objects are  │
-                  │ stored in the │
-                  │ PRIVATE type  │
+                  │  Memory /     │
+                  │  PostgreSQL / │
+                  │  Spanner      │
                   └───────────────┘
 ```
 
-## API Flow Examples
+### Private API
 
-### Creating an Object via Private API
-
-```
-Client → POST /apis/.../v1/namespaces/default/objects
-         {
-           spec: {publicField: "val", internalField: "secret"},
-           metadata: {
-             labels: {"app": "web", "private.orlop.../key": "value"}
-           }
-         }
-         │
-         ▼
-  Private Schema Validation
-         │
-         ▼
-  Store (Private Type) ✓ All fields stored
-```
-
-### Reading via Public API
+Private API uses Kubernetes `GenericAPIServer` with `rest.Storage` adapters wrapping `ResourceStore`. HTTPS with TLS.
 
 ```
-Client → GET /apis/.../v1/namespaces/default/objects/test
-         │
-         ▼
-  Store (Private Type) → {spec: {publicField, internalField}, 
-                          metadata: {labels: {app, private.orlop...}}}
-         │
-         ▼
-  Converter.PrivateToPublic()
-    1. JSON round-trip (drops internalField)
-    2. filterPrivateMetadata() (removes private.orlop... labels/annotations)
-    3. filterPrivateConditions() (removes private.orlop... conditions)
-         │
-         ▼
-  Client ← {spec: {publicField: "val"},
-            metadata: {labels: {"app": "web"}}}
-            ✓ Internal fields hidden
+Client → GenericAPIServer → rest.Storage adapter → ResourceStore
+              │
+              ├── Content negotiation (JSON, protobuf, CBOR)
+              ├── OpenAPI v3 serving
+              ├── API discovery (/apis)
+              ├── Health endpoints (/healthz, /livez, /readyz)
+              ├── Watch protocol (streaming)
+              ├── Delegated authn (TokenReview)
+              └── Delegated authz (SubjectAccessReview)
 ```
 
-### Updating via Public API
+When deployed on a cluster with an `APIService` registration:
 
 ```
-Client → PUT /apis/.../v1/namespaces/default/objects/test
-         {
-           spec: {publicField: "newval"},
-           metadata: {resourceVersion: "5"}
-         }
-         │
-         ▼
-  Converter.PublicToPrivate(public, existing)
-    1. Start with existing private object (preserves internalField)
-    2. Overlay public fields from request
-    3. Result: {spec: {publicField: "newval", internalField: "secret"}}
-         │
-         ▼
-  Store (Private Type) ✓ Internal fields preserved
+Client (kubectl, controller)
+    → GKE kube-apiserver (authn, authz, audit)
+        → proxy (APIService routing)
+            → Gecko GenericAPIServer
+                → rest.Storage adapter
+                    → ResourceStore (PostgreSQL / Spanner)
+```
+
+## Private/Public Field Filtering
+
+Source types in `api/private/` use `+orlop:public` markers. The `orlop-gen` code generator produces filtered types in `api/public/` containing only marked fields.
+
+```go
+// Private (all fields)
+type ObjectSpec struct {
+    PublicField   string `json:"publicField"`   // +orlop:public
+    InternalField string `json:"internalField"` // not exposed
+}
+
+// Public (generated, filtered)
+type ObjectSpec struct {
+    PublicField string `json:"publicField"`
+}
+```
+
+### Create via public API
+
+```
+Client → POST public object
+    → Converter.PublicToPrivate(public, nil)
+        → Private object with public fields set, internal fields zero-valued
+    → Store (private type)
+```
+
+### Read via public API
+
+```
+Store (private type) → full object with all fields
+    → Converter.PrivateToPublic()
+        → JSON round-trip drops unexported fields
+        → filterPrivateMetadata() removes private.orlop.gcp.managed.openshift.io/ labels/annotations
+        → filterPrivateConditions() removes private.orlop.gcp.managed.openshift.io/ conditions
+    → Client sees filtered object
+```
+
+### Update via public API
+
+```
+Client → PUT public object
+    → Converter.PublicToPrivate(public, existing)
+        → Start with existing private object (preserves internal fields)
+        → Overlay public fields from request
+    → Store (private type) — internal fields preserved
 ```
 
 ## Key Components
 
-### Shared Storage
-- Single in-memory store per resource type
-- Objects stored in **private type** format
-- Both APIs access the same store instances
-- Created in `privateRegistry`, referenced by `publicRegistry`
+### Storage layer (`orlop/pkg/apiserver/storage/`)
 
-### Converter
-**Location:** `pkg/apiserver/conversion/conversion.go`
+`ResourceStore` interface with pluggable backends:
+- **MemoryStore** — in-memory, for development and testing
+- **PostgresStore** — PostgreSQL with JSON column storage
+- **Spanner** — planned
 
-**Methods:**
-- `PrivateToPublic(private) → public`
-  - JSON round-trip automatically filters private-only fields
-  - `filterPrivateMetadata()` removes labels/annotations with `private.orlop.thetechnick.ninja/` prefix
-  - `filterPrivateConditions()` removes conditions with `private.orlop.thetechnick.ninja/` prefix
+Both API surfaces share the same store instances via a memoizing `StorageFactory`.
 
-- `PublicToPrivate(public, existing) → private`
-  - Starts with existing object to preserve internal fields
-  - Overlays public data on top
-  - Used for CREATE and UPDATE operations
+### Adapter layer (`orlop/pkg/apiserver/aggregated/`)
 
-### Schema Types
+Bridges `ResourceStore` to GenericAPIServer's `rest.Storage` interfaces:
+- **ResourceStorage** — `rest.Storage` adapter wrapping `ResourceStore` (CRUD, watch, table conversion)
+- **StatusStorage** — `/status` subresource (status-only updates)
+- **ResourceStrategy** — `rest.RESTCreateStrategy` + `rest.RESTUpdateStrategy` (schema validation, generation tracking, finalizer handling, custom defaulting/validation)
+- **watchAdapter** — `watch.Interface` wrapping `<-chan storage.ResourceEvent`
 
-**Private Schema:**
-```go
-// All fields visible
-type ObjectSpec struct {
-    PublicField   string `json:"publicField"`
-    InternalField string `json:"internalField"`  // Not tagged +orlop:public
-}
-```
+### Converter (`orlop/pkg/apiserver/conversion/`)
 
-**Public Schema:**
-```go
-// Only public fields
-type ObjectSpec struct {
-    PublicField string `json:"publicField"`
-    // internalField omitted
-}
-```
+Bidirectional conversion between private and public types. Uses JSON round-trip for field filtering plus explicit metadata/condition filtering for `private.orlop.gcp.managed.openshift.io/` prefixed keys.
 
-### Router Setup
+### Code generator (`orlop/pkg/generator/`)
 
-**Private Router:**
-```go
-privateRegistry := NewResourceRegistry(privateScheme)
-privateRegistry.Register(privateResources...)
-router := setupRouter(privateRegistry)  // Direct handlers
-```
-
-**Public Router:**
-```go
-publicRegistry := NewResourceRegistry(publicScheme)
-publicRegistry.Register(publicResources...)
-
-// Create converting handlers that:
-//   - Use privateRegistry.GetStore() (shared storage)
-//   - Use publicRegistry schemas (filtering)
-//   - Use converter for type conversion
-router := setupConvertingRouter(publicRegistry, privateRegistry, converter)
-```
+`orlop-gen` produces from private API types:
+- Filtered public types (only `+orlop:public` fields)
+- DeepCopy methods
+- OpenAPI structural schemas (YAML)
+- Conversion functions (private ↔ public)
+- GroupVersion registration
 
 ## Security Model
 
-### Private API (Port 8080)
-- Full access to all fields
-- No filtering applied
-- Intended for cluster-internal use
-- Exposes `internalField`, private labels, private annotations, private conditions
+### Local development
 
-### Public API (Port 8081)
-- Filtered view of the same data
-- Private fields automatically hidden via schema
-- Private metadata explicitly filtered via converter
-- Intended for external consumers
-- Never exposes fields/metadata prefixed with `private.orlop.thetechnick.ninja/`
+With `--disable-auth`: authn/authz skipped, all requests accepted. HTTPS still required.
 
-## Benefits
+### On cluster
 
-1. **Single Source of Truth:** One storage backend prevents data inconsistency
-2. **Automatic Filtering:** Schema + converter ensure private data stays private
-3. **Preserved Semantics:** Public API updates preserve internal state
-4. **Standard Kubernetes Patterns:** Uses standard GVK, resourceVersion, etc.
-5. **Type Safety:** Separate schemes prevent accidental exposure
+Authentication and authorization delegated to the GKE kube-apiserver:
+- **Authn**: tokens validated via `TokenReview` API (projected ServiceAccount tokens, short-lived, auto-rotated)
+- **Authz**: permissions checked via `SubjectAccessReview` API (native Kubernetes RBAC)
+- **Audit**: structured audit events logged by the kube-apiserver
+
+The custom auth stack (SA token authenticator, RBAC authorizer, auth resource types) was removed in Phase 4 — replaced entirely by kube-native mechanisms.
+
+### Public API
+
+Separate auth (not covered by API aggregation). Intended for external consumers with its own authentication layer.

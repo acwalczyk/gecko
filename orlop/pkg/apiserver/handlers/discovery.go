@@ -218,13 +218,108 @@ func (h *DiscoveryHandler) OpenAPIV3(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
+// --- OpenAPI response helpers ---
+
+// v3Response builds an OpenAPI v3 response object with an optional JSON schema reference.
+func v3Response(description, schemaRef string) map[string]interface{} {
+	resp := map[string]interface{}{"description": description}
+	if schemaRef != "" {
+		resp["content"] = map[string]interface{}{
+			constants.ContentTypeJSON: map[string]interface{}{
+				"schema": map[string]interface{}{"$ref": schemaRef},
+			},
+		}
+	}
+	return resp
+}
+
+// v3Operation builds an OpenAPI v3 operation with standard response.
+func v3Operation(description, statusCode, statusDesc, schemaRef string) map[string]interface{} {
+	op := map[string]interface{}{
+		"description": description,
+		"responses": map[string]interface{}{
+			statusCode: v3Response(statusDesc, schemaRef),
+		},
+	}
+	return op
+}
+
+// v3OperationWithID builds an OpenAPI v3 operation with an operationId.
+func v3OperationWithID(operationId, description, statusCode, statusDesc, schemaRef string) map[string]interface{} {
+	op := v3Operation(description, statusCode, statusDesc, schemaRef)
+	op["operationId"] = operationId
+	return op
+}
+
+// v3ResourcePaths generates OpenAPI v3 collection, item, and status paths for a resource.
+func v3ResourcePaths(basePath string, params []interface{}, nameParam map[string]interface{}, kind, plural, schemaRef string) map[string]map[string]interface{} {
+	paths := make(map[string]map[string]interface{})
+
+	// Collection: list + create
+	paths[basePath] = map[string]interface{}{
+		"parameters": params,
+		"get":        v3Operation("list "+plural, "200", "OK", schemaRef),
+		"post":       v3Operation("create a "+kind, "201", "Created", schemaRef),
+	}
+
+	// Item: get + put + delete
+	itemPath := basePath + "/{name}"
+	itemParams := append(append([]interface{}{}, params...), nameParam)
+	paths[itemPath] = map[string]interface{}{
+		"parameters": itemParams,
+		"get":        v3Operation("read the specified "+kind, "200", "OK", schemaRef),
+		"put":        v3Operation("replace the specified "+kind, "200", "OK", schemaRef),
+		"delete":     v3Operation("delete a "+kind, "200", "OK", ""),
+	}
+
+	// Status subresource: get + put
+	statusPath := itemPath + "/status"
+	paths[statusPath] = map[string]interface{}{
+		"parameters": itemParams,
+		"get":        v3Operation("read status of the specified "+kind, "200", "OK", schemaRef),
+		"put":        v3Operation("replace status of the specified "+kind, "200", "OK", schemaRef),
+	}
+
+	return paths
+}
+
+// v3NestedResourcePaths generates OpenAPI v3 paths for nested (parent/child) resources.
+func v3NestedResourcePaths(nestedBase string, params []interface{}, nameParam map[string]interface{}, kind, plural, parentPlural, schemaRef string) map[string]map[string]interface{} {
+	paths := make(map[string]map[string]interface{})
+
+	// Nested collection
+	paths[nestedBase] = map[string]interface{}{
+		"parameters": params,
+		"get":        v3OperationWithID("listNamespaced"+kind+"For"+parentPlural, "list "+plural+" for a specific parent", "200", "OK", schemaRef),
+		"post":       v3OperationWithID("createNamespaced"+kind+"For"+parentPlural, "create a "+kind+" under a specific parent", "201", "Created", schemaRef),
+	}
+
+	// Nested item
+	nestedItem := nestedBase + "/{name}"
+	itemParams := append(append([]interface{}{}, params...), nameParam)
+	paths[nestedItem] = map[string]interface{}{
+		"parameters": itemParams,
+		"get":        v3OperationWithID("readNamespaced"+kind+"For"+parentPlural, "read the specified "+kind+" under a specific parent", "200", "OK", schemaRef),
+		"put":        v3OperationWithID("replaceNamespaced"+kind+"For"+parentPlural, "replace the specified "+kind+" under a specific parent", "200", "OK", schemaRef),
+		"delete":     v3OperationWithID("deleteNamespaced"+kind+"For"+parentPlural, "delete a "+kind+" under a specific parent", "200", "OK", ""),
+	}
+
+	// Nested status
+	nestedStatus := nestedItem + "/status"
+	paths[nestedStatus] = map[string]interface{}{
+		"parameters": itemParams,
+		"get":        v3OperationWithID("readNamespaced"+kind+"StatusFor"+parentPlural, "read status of the specified "+kind+" under a specific parent", "200", "OK", schemaRef),
+		"put":        v3OperationWithID("replaceNamespaced"+kind+"StatusFor"+parentPlural, "replace status of the specified "+kind+" under a specific parent", "200", "OK", schemaRef),
+	}
+
+	return paths
+}
+
 // OpenAPIV3GroupVersion handles GET /openapi/v3/apis/{group}/{version}
 // Returns the OpenAPI v3 schema for a specific group version.
 func (h *DiscoveryHandler) OpenAPIV3GroupVersion(w http.ResponseWriter, r *http.Request, group, version string) {
-	// Discovery: GET /openapi/v3/apis/{group}/{version}
 	gv := runtimeschema.GroupVersion{Group: group, Version: version}
 
-	// Build OpenAPI v3 document
 	spec := map[string]interface{}{
 		"openapi": "3.0.0",
 		"info": map[string]interface{}{
@@ -237,168 +332,49 @@ func (h *DiscoveryHandler) OpenAPIV3GroupVersion(w http.ResponseWriter, r *http.
 
 	schemas := make(map[string]interface{})
 
-	// Add each resource schema
 	for _, res := range h.resources {
 		if res.GVK.Group != group || res.GVK.Version != version {
 			continue
 		}
 
-		// Parse the schema YAML to get the JSON schema
 		var schemaObj map[string]interface{}
 		if err := yaml.Unmarshal([]byte(res.SchemaYAML), &schemaObj); err != nil {
-			// Skip schemas that don't parse
 			continue
 		}
 
-		// Add x-kubernetes-group-version-kind extension for kubectl validation
 		schemaObj["x-kubernetes-group-version-kind"] = []map[string]interface{}{
-			{
-				"group":   res.GVK.Group,
-				"version": res.GVK.Version,
-				"kind":    res.GVK.Kind,
-			},
+			{"group": res.GVK.Group, "version": res.GVK.Version, "kind": res.GVK.Kind},
 		}
 
-		// Add schema to components
 		schemaName := gv.String() + "." + res.GVK.Kind
 		schemas[schemaName] = schemaObj
 
-		// Add path entries for this resource
-		basePath := "/apis/" + group + "/" + version + "/namespaces/{namespace}/" + res.Plural
 		paths := spec["paths"].(map[string]interface{})
-
-		// Schema reference for responses
 		schemaRef := "#/components/schemas/" + schemaName
 
-		// Common parameters
 		namespaceParam := map[string]interface{}{
-			"name":        "namespace",
-			"in":          "path",
-			"required":    true,
-			"schema":      map[string]interface{}{"type": "string"},
-			"description": "object namespace",
+			"name": "namespace", "in": "path", "required": true,
+			"schema": map[string]interface{}{"type": "string"}, "description": "object namespace",
 		}
 		nameParam := map[string]interface{}{
-			"name":        "name",
-			"in":          "path",
-			"required":    true,
-			"schema":      map[string]interface{}{"type": "string"},
-			"description": "name of the " + res.GVK.Kind,
+			"name": "name", "in": "path", "required": true,
+			"schema": map[string]interface{}{"type": "string"}, "description": "name of the " + res.GVK.Kind,
 		}
 
-		// Collection operations
-		paths[basePath] = map[string]interface{}{
-			"parameters": []interface{}{namespaceParam},
-			"get": map[string]interface{}{
-				"description": "list " + res.Plural,
-				"responses": map[string]interface{}{
-					"200": map[string]interface{}{
-						"description": "OK",
-						"content": map[string]interface{}{
-							constants.ContentTypeJSON: map[string]interface{}{
-								"schema": map[string]interface{}{
-									"$ref": schemaRef,
-								},
-							},
-						},
-					},
-				},
-			},
-			"post": map[string]interface{}{
-				"description": "create a " + res.GVK.Kind,
-				"responses": map[string]interface{}{
-					"201": map[string]interface{}{
-						"description": "Created",
-						"content": map[string]interface{}{
-							constants.ContentTypeJSON: map[string]interface{}{
-								"schema": map[string]interface{}{
-									"$ref": schemaRef,
-								},
-							},
-						},
-					},
-				},
-			},
+		basePath := "/apis/" + group + "/" + version + "/namespaces/{namespace}/" + res.Plural
+		for p, entry := range v3ResourcePaths(basePath, []interface{}{namespaceParam}, nameParam, res.GVK.Kind, res.Plural, schemaRef) {
+			paths[p] = entry
 		}
 
-		// Individual resource operations
-		itemPath := basePath + "/{name}"
-		paths[itemPath] = map[string]interface{}{
-			"parameters": []interface{}{namespaceParam, nameParam},
-			"get": map[string]interface{}{
-				"description": "read the specified " + res.GVK.Kind,
-				"responses": map[string]interface{}{
-					"200": map[string]interface{}{
-						"description": "OK",
-						"content": map[string]interface{}{
-							constants.ContentTypeJSON: map[string]interface{}{
-								"schema": map[string]interface{}{
-									"$ref": schemaRef,
-								},
-							},
-						},
-					},
-				},
-			},
-			"put": map[string]interface{}{
-				"description": "replace the specified " + res.GVK.Kind,
-				"responses": map[string]interface{}{
-					"200": map[string]interface{}{
-						"description": "OK",
-						"content": map[string]interface{}{
-							constants.ContentTypeJSON: map[string]interface{}{
-								"schema": map[string]interface{}{
-									"$ref": schemaRef,
-								},
-							},
-						},
-					},
-				},
-			},
-			"delete": map[string]interface{}{
-				"description": "delete a " + res.GVK.Kind,
-				"responses": map[string]interface{}{
-					"200": map[string]interface{}{
-						"description": "OK",
-					},
-				},
-			},
-		}
-
-		// Status subresource
-		statusPath := itemPath + "/status"
-		paths[statusPath] = map[string]interface{}{
-			"parameters": []interface{}{namespaceParam, nameParam},
-			"get": map[string]interface{}{
-				"description": "read status of the specified " + res.GVK.Kind,
-				"responses": map[string]interface{}{
-					"200": map[string]interface{}{
-						"description": "OK",
-						"content": map[string]interface{}{
-							constants.ContentTypeJSON: map[string]interface{}{
-								"schema": map[string]interface{}{
-									"$ref": schemaRef,
-								},
-							},
-						},
-					},
-				},
-			},
-			"put": map[string]interface{}{
-				"description": "replace status of the specified " + res.GVK.Kind,
-				"responses": map[string]interface{}{
-					"200": map[string]interface{}{
-						"description": "OK",
-						"content": map[string]interface{}{
-							constants.ContentTypeJSON: map[string]interface{}{
-								"schema": map[string]interface{}{
-									"$ref": schemaRef,
-								},
-							},
-						},
-					},
-				},
-			},
+		if res.ParentResource != nil {
+			parentIDParam := map[string]interface{}{
+				"name": "parentID", "in": "path", "required": true,
+				"schema": map[string]interface{}{"type": "string"}, "description": "ID of the parent " + res.ParentResource.Plural,
+			}
+			nestedBase := "/apis/" + group + "/" + version + "/namespaces/{namespace}/" + res.ParentResource.Plural + "/{parentID}/" + res.Plural
+			for p, entry := range v3NestedResourcePaths(nestedBase, []interface{}{namespaceParam, parentIDParam}, nameParam, res.GVK.Kind, res.Plural, res.ParentResource.Plural, schemaRef) {
+				paths[p] = entry
+			}
 		}
 
 		// Nested routes for child resources with a parent
@@ -533,9 +509,67 @@ func (h *DiscoveryHandler) OpenAPIV3GroupVersion(w http.ResponseWriter, r *http.
 	json.NewEncoder(w).Encode(spec)
 }
 
+// --- OpenAPI v2 response helpers ---
+
+// v2Response builds an OpenAPI v2 response object with an optional schema reference.
+func v2Response(description, defRef string) map[string]interface{} {
+	resp := map[string]interface{}{"description": description}
+	if defRef != "" {
+		resp["schema"] = map[string]interface{}{"$ref": defRef}
+	}
+	return resp
+}
+
+// v2Operation builds an OpenAPI v2 operation.
+func v2Operation(operationId, description string, produces, consumes []string, params []interface{}, statusCode, statusDesc, defRef string) map[string]interface{} {
+	op := map[string]interface{}{
+		"description": description,
+		"operationId": operationId,
+		"produces":    produces,
+		"parameters":  params,
+		"responses": map[string]interface{}{
+			statusCode: v2Response(statusDesc, defRef),
+		},
+	}
+	if len(consumes) > 0 {
+		op["consumes"] = consumes
+	}
+	return op
+}
+
+// v2NestedResourcePaths generates OpenAPI v2 paths for nested (parent/child) resources.
+func v2NestedResourcePaths(nestedBase string, nsParam, parentIDParam, nameParam map[string]interface{}, kind, plural, parentPlural, defRef string) map[string]map[string]interface{} {
+	paths := make(map[string]map[string]interface{})
+	jsonMime := []string{constants.ContentTypeJSON}
+	ns := []interface{}{nsParam}
+
+	// Collection
+	paths[nestedBase] = map[string]interface{}{
+		"get":  v2Operation(fmt.Sprintf("listNamespaced%sFor%s", kind, parentPlural), fmt.Sprintf("list %s for a specific parent", plural), jsonMime, nil, append(ns, parentIDParam), "200", "OK", defRef),
+		"post": v2Operation(fmt.Sprintf("createNamespaced%sFor%s", kind, parentPlural), fmt.Sprintf("create a %s under a specific parent", kind), jsonMime, jsonMime, append(ns, parentIDParam, map[string]interface{}{"name": "body", "in": "body", "required": true, "schema": map[string]interface{}{"$ref": defRef}}), "201", "Created", defRef),
+	}
+
+	// Item
+	nestedItem := nestedBase + "/{name}"
+	itemParams := []interface{}{nsParam, parentIDParam, nameParam}
+	paths[nestedItem] = map[string]interface{}{
+		"get":    v2Operation(fmt.Sprintf("readNamespaced%sFor%s", kind, parentPlural), fmt.Sprintf("read the specified %s under a specific parent", kind), jsonMime, nil, itemParams, "200", "OK", defRef),
+		"put":    v2Operation(fmt.Sprintf("replaceNamespaced%sFor%s", kind, parentPlural), fmt.Sprintf("replace the specified %s under a specific parent", kind), jsonMime, jsonMime, append(itemParams, map[string]interface{}{"name": "body", "in": "body", "required": true, "schema": map[string]interface{}{"$ref": defRef}}), "200", "OK", defRef),
+		"delete": v2Operation(fmt.Sprintf("deleteNamespaced%sFor%s", kind, parentPlural), fmt.Sprintf("delete a %s under a specific parent", kind), jsonMime, nil, itemParams, "200", "OK", ""),
+	}
+
+	// Status
+	nestedStatus := nestedItem + "/status"
+	paths[nestedStatus] = map[string]interface{}{
+		"get": v2Operation(fmt.Sprintf("readNamespaced%sStatusFor%s", kind, parentPlural), fmt.Sprintf("read status of the specified %s under a specific parent", kind), jsonMime, nil, itemParams, "200", "OK", defRef),
+		"put": v2Operation(fmt.Sprintf("replaceNamespaced%sStatusFor%s", kind, parentPlural), fmt.Sprintf("replace status of the specified %s under a specific parent", kind), jsonMime, jsonMime, append(itemParams, map[string]interface{}{"name": "body", "in": "body", "required": true, "schema": map[string]interface{}{"$ref": defRef}}), "200", "OK", defRef),
+	}
+
+	return paths
+}
+
 // buildOpenAPIV2Spec builds the OpenAPI v2 spec as a openapispec.Swagger object.
 func (h *DiscoveryHandler) buildOpenAPIV2Spec() *openapispec.Swagger {
-	// Build OpenAPI v2 (Swagger 2.0) document
 	spec := map[string]interface{}{
 		"swagger": "2.0",
 		"info": map[string]interface{}{
@@ -548,272 +582,78 @@ func (h *DiscoveryHandler) buildOpenAPIV2Spec() *openapispec.Swagger {
 
 	definitions := spec["definitions"].(map[string]interface{})
 	paths := spec["paths"].(map[string]interface{})
+	jsonMime := []string{constants.ContentTypeJSON}
 
-	// Group resources by group/version
 	groupedResources := make(map[string][]types.ResourceInfo)
 	for _, res := range h.resources {
 		key := res.GVK.Group + "/" + res.GVK.Version
 		groupedResources[key] = append(groupedResources[key], res)
 	}
 
-	// Add definitions and paths for each resource
 	for gv, resources := range groupedResources {
 		for _, res := range resources {
-			// Parse the schema YAML
 			var schemaObj map[string]interface{}
 			if err := yaml.Unmarshal([]byte(res.SchemaYAML), &schemaObj); err != nil {
 				continue
 			}
 
-			// Add x-kubernetes-group-version-kind extension
 			schemaObj["x-kubernetes-group-version-kind"] = []map[string]interface{}{
-				{
-					"group":   res.GVK.Group,
-					"version": res.GVK.Version,
-					"kind":    res.GVK.Kind,
-				},
+				{"group": res.GVK.Group, "version": res.GVK.Version, "kind": res.GVK.Kind},
 			}
 
-			// Add definition
 			defName := res.GVK.Group + "." + res.GVK.Version + "." + res.GVK.Kind
 			definitions[defName] = schemaObj
-
-			// Add paths for this resource
+			defRef := fmt.Sprintf("#/definitions/%s", defName)
 			basePath := fmt.Sprintf("/apis/%s/namespaces/{namespace}/%s", gv, res.Plural)
+			ver := res.GVK.Version
+			kind := res.GVK.Kind
+
+			nsParam := map[string]interface{}{"name": "namespace", "in": "path", "required": true, "type": "string", "description": "object name and auth scope, such as for teams and projects"}
+			nameParam := map[string]interface{}{"name": "name", "in": "path", "required": true, "type": "string", "description": "name of the resource"}
+			bodyParam := map[string]interface{}{"name": "body", "in": "body", "required": true, "schema": map[string]interface{}{"$ref": defRef}}
 
 			// Collection operations
 			paths[basePath] = map[string]interface{}{
-				"get": map[string]interface{}{
-					"description": fmt.Sprintf("list objects of kind %s", res.GVK.Kind),
-					"operationId": fmt.Sprintf("list%s%s", res.GVK.Version, res.GVK.Kind),
-					"produces":    []string{constants.ContentTypeJSON},
-					"parameters": []interface{}{
-						map[string]interface{}{
-							"name":        "namespace",
-							"in":          "path",
-							"required":    true,
-							"type":        "string",
-							"description": "object name and auth scope, such as for teams and projects",
-						},
-						map[string]interface{}{
-							"name":        "labelSelector",
-							"in":          "query",
-							"type":        "string",
-							"description": "A selector to restrict the list of returned objects by their labels",
-						},
-						map[string]interface{}{
-							"name":        "watch",
-							"in":          "query",
-							"type":        "boolean",
-							"description": "Watch for changes to the described resources",
-						},
-						map[string]interface{}{
-							"name":        "resourceVersion",
-							"in":          "query",
-							"type":        "string",
-							"description": "When specified with watch, shows changes that occur after that version",
-						},
-					},
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{
-							"description": "OK",
-							"schema": map[string]interface{}{
-								"$ref": fmt.Sprintf("#/definitions/%s", defName),
-							},
-						},
-					},
-				},
-				"post": map[string]interface{}{
-					"description": fmt.Sprintf("create a %s", res.GVK.Kind),
-					"operationId": fmt.Sprintf("create%s%s", res.GVK.Version, res.GVK.Kind),
-					"produces":    []string{constants.ContentTypeJSON},
-					"consumes":    []string{constants.ContentTypeJSON},
-					"parameters": []interface{}{
-						map[string]interface{}{
-							"name":     "namespace",
-							"in":       "path",
-							"required": true,
-							"type":     "string",
-						},
-						map[string]interface{}{
-							"name":     "body",
-							"in":       "body",
-							"required": true,
-							"schema": map[string]interface{}{
-								"$ref": fmt.Sprintf("#/definitions/%s", defName),
-							},
-						},
-					},
-					"responses": map[string]interface{}{
-						"201": map[string]interface{}{
-							"description": "Created",
-							"schema": map[string]interface{}{
-								"$ref": fmt.Sprintf("#/definitions/%s", defName),
-							},
-						},
-					},
-				},
+				"get": v2Operation(fmt.Sprintf("list%s%s", ver, kind), fmt.Sprintf("list objects of kind %s", kind), jsonMime, nil, []interface{}{
+					nsParam,
+					map[string]interface{}{"name": "labelSelector", "in": "query", "type": "string", "description": "A selector to restrict the list of returned objects by their labels"},
+					map[string]interface{}{"name": "watch", "in": "query", "type": "boolean", "description": "Watch for changes to the described resources"},
+					map[string]interface{}{"name": "resourceVersion", "in": "query", "type": "string", "description": "When specified with watch, shows changes that occur after that version"},
+				}, "200", "OK", defRef),
+				"post": v2Operation(fmt.Sprintf("create%s%s", ver, kind), fmt.Sprintf("create a %s", kind), jsonMime, jsonMime, []interface{}{
+					map[string]interface{}{"name": "namespace", "in": "path", "required": true, "type": "string"},
+					bodyParam,
+				}, "201", "Created", defRef),
 			}
 
-			// Individual resource operations
+			// Item operations
 			itemPath := basePath + "/{name}"
+			itemParams := []interface{}{
+				map[string]interface{}{"name": "namespace", "in": "path", "required": true, "type": "string"},
+				nameParam,
+			}
 			paths[itemPath] = map[string]interface{}{
-				"get": map[string]interface{}{
-					"description": fmt.Sprintf("read the specified %s", res.GVK.Kind),
-					"operationId": fmt.Sprintf("read%s%s", res.GVK.Version, res.GVK.Kind),
-					"produces":    []string{constants.ContentTypeJSON},
-					"parameters": []interface{}{
-						map[string]interface{}{
-							"name":     "namespace",
-							"in":       "path",
-							"required": true,
-							"type":     "string",
-						},
-						map[string]interface{}{
-							"name":        "name",
-							"in":          "path",
-							"required":    true,
-							"type":        "string",
-							"description": "name of the resource",
-						},
-					},
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{
-							"description": "OK",
-							"schema": map[string]interface{}{
-								"$ref": fmt.Sprintf("#/definitions/%s", defName),
-							},
-						},
-					},
-				},
-				"put": map[string]interface{}{
-					"description": fmt.Sprintf("replace the specified %s", res.GVK.Kind),
-					"operationId": fmt.Sprintf("replace%s%s", res.GVK.Version, res.GVK.Kind),
-					"produces":    []string{constants.ContentTypeJSON},
-					"consumes":    []string{constants.ContentTypeJSON},
-					"parameters": []interface{}{
-						map[string]interface{}{
-							"name":     "namespace",
-							"in":       "path",
-							"required": true,
-							"type":     "string",
-						},
-						map[string]interface{}{
-							"name":     "name",
-							"in":       "path",
-							"required": true,
-							"type":     "string",
-						},
-						map[string]interface{}{
-							"name":     "body",
-							"in":       "body",
-							"required": true,
-							"schema": map[string]interface{}{
-								"$ref": fmt.Sprintf("#/definitions/%s", defName),
-							},
-						},
-					},
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{
-							"description": "OK",
-							"schema": map[string]interface{}{
-								"$ref": fmt.Sprintf("#/definitions/%s", defName),
-							},
-						},
-					},
-				},
-				"delete": map[string]interface{}{
-					"description": fmt.Sprintf("delete a %s", res.GVK.Kind),
-					"operationId": fmt.Sprintf("delete%s%s", res.GVK.Version, res.GVK.Kind),
-					"produces":    []string{constants.ContentTypeJSON},
-					"parameters": []interface{}{
-						map[string]interface{}{
-							"name":     "namespace",
-							"in":       "path",
-							"required": true,
-							"type":     "string",
-						},
-						map[string]interface{}{
-							"name":     "name",
-							"in":       "path",
-							"required": true,
-							"type":     "string",
-						},
-					},
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{
-							"description": "OK",
-						},
-					},
-				},
+				"get":    v2Operation(fmt.Sprintf("read%s%s", ver, kind), fmt.Sprintf("read the specified %s", kind), jsonMime, nil, itemParams, "200", "OK", defRef),
+				"put":    v2Operation(fmt.Sprintf("replace%s%s", ver, kind), fmt.Sprintf("replace the specified %s", kind), jsonMime, jsonMime, append(append([]interface{}{}, itemParams...), bodyParam), "200", "OK", defRef),
+				"delete": v2Operation(fmt.Sprintf("delete%s%s", ver, kind), fmt.Sprintf("delete a %s", kind), jsonMime, nil, itemParams, "200", "OK", ""),
 			}
 
 			// Status subresource
 			statusPath := itemPath + "/status"
 			paths[statusPath] = map[string]interface{}{
-				"get": map[string]interface{}{
-					"description": fmt.Sprintf("read status of the specified %s", res.GVK.Kind),
-					"operationId": fmt.Sprintf("read%s%sStatus", res.GVK.Version, res.GVK.Kind),
-					"produces":    []string{constants.ContentTypeJSON},
-					"parameters": []interface{}{
-						map[string]interface{}{
-							"name":     "namespace",
-							"in":       "path",
-							"required": true,
-							"type":     "string",
-						},
-						map[string]interface{}{
-							"name":     "name",
-							"in":       "path",
-							"required": true,
-							"type":     "string",
-						},
-					},
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{
-							"description": "OK",
-							"schema": map[string]interface{}{
-								"$ref": fmt.Sprintf("#/definitions/%s", defName),
-							},
-						},
-					},
-				},
-				"put": map[string]interface{}{
-					"description": fmt.Sprintf("replace status of the specified %s", res.GVK.Kind),
-					"operationId": fmt.Sprintf("replace%s%sStatus", res.GVK.Version, res.GVK.Kind),
-					"produces":    []string{constants.ContentTypeJSON},
-					"consumes":    []string{constants.ContentTypeJSON},
-					"parameters": []interface{}{
-						map[string]interface{}{
-							"name":     "namespace",
-							"in":       "path",
-							"required": true,
-							"type":     "string",
-						},
-						map[string]interface{}{
-							"name":     "name",
-							"in":       "path",
-							"required": true,
-							"type":     "string",
-						},
-						map[string]interface{}{
-							"name":     "body",
-							"in":       "body",
-							"required": true,
-							"schema": map[string]interface{}{
-								"$ref": fmt.Sprintf("#/definitions/%s", defName),
-							},
-						},
-					},
-					"responses": map[string]interface{}{
-						"200": map[string]interface{}{
-							"description": "OK",
-							"schema": map[string]interface{}{
-								"$ref": fmt.Sprintf("#/definitions/%s", defName),
-							},
-						},
-					},
-				},
+				"get": v2Operation(fmt.Sprintf("read%s%sStatus", ver, kind), fmt.Sprintf("read status of the specified %s", kind), jsonMime, nil, itemParams, "200", "OK", defRef),
+				"put": v2Operation(fmt.Sprintf("replace%s%sStatus", ver, kind), fmt.Sprintf("replace status of the specified %s", kind), jsonMime, jsonMime, append(append([]interface{}{}, itemParams...), bodyParam), "200", "OK", defRef),
+			}
+
+			// Nested routes for child resources
+			if res.ParentResource != nil {
+				parentIDParam := map[string]interface{}{"name": "parentID", "in": "path", "required": true, "type": "string", "description": fmt.Sprintf("ID of the parent %s", res.ParentResource.Plural)}
+				nestedBase := fmt.Sprintf("/apis/%s/namespaces/{namespace}/%s/{parentID}/%s", gv, res.ParentResource.Plural, res.Plural)
+				nestedNSParam := map[string]interface{}{"name": "namespace", "in": "path", "required": true, "type": "string"}
+				nestedNameParam := map[string]interface{}{"name": "name", "in": "path", "required": true, "type": "string", "description": "name of the resource"}
+				for p, entry := range v2NestedResourcePaths(nestedBase, nestedNSParam, parentIDParam, nestedNameParam, kind, res.Plural, res.ParentResource.Plural, defRef) {
+					paths[p] = entry
+				}
 			}
 
 			// Nested routes for child resources with a parent
@@ -959,7 +799,6 @@ func (h *DiscoveryHandler) buildOpenAPIV2Spec() *openapispec.Swagger {
 		}
 	}
 
-	// Convert the map-based spec to JSON, then unmarshal into spec.Swagger
 	specJSON, err := json.Marshal(spec)
 	if err != nil {
 		return nil

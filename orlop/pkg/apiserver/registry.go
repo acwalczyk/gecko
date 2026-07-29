@@ -30,7 +30,7 @@ type StorageFactory func(resourceType string, scheme *runtime.Scheme, gvk runtim
 
 // GroupKindResourceType returns a stable string identifier for a GroupKind,
 // used for database table names, channel names, and error messages.
-// Format: "{group}_{kind}" lowercased, e.g. "test.orlop.thetechnick.ninja_object".
+// Format: "{group}_{kind}" lowercased, e.g. "test.orlop.gcp.managed.openshift.io_object".
 func GroupKindResourceType(gk runtimeschema.GroupKind) string {
 	return strings.ToLower(gk.Group + "_" + gk.Kind)
 }

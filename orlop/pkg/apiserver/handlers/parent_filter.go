@@ -2,11 +2,11 @@ package handlers
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
+	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -59,12 +59,8 @@ func validateParentOwnership(ctx context.Context, obj client.Object) bool {
 	if pf == nil {
 		return true
 	}
-	data, err := json.Marshal(obj)
+	objMap, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
 	if err != nil {
-		return false
-	}
-	var objMap map[string]interface{}
-	if err := json.Unmarshal(data, &objMap); err != nil {
 		return false
 	}
 	return fieldValueFromMap(objMap, pf.IDField) == pf.ID

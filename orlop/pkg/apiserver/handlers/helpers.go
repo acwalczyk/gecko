@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 
@@ -27,16 +28,22 @@ func writeError(w http.ResponseWriter, code int, message string) {
 }
 
 // specChanged checks if the spec field has changed between two objects.
+// All gecko resource types must serialize their spec under the JSON key "spec".
 func specChanged(old, new runtime.Object) bool {
-	oldJSON, _ := json.Marshal(old)
-	newJSON, _ := json.Marshal(new)
-
-	var oldMap, newMap map[string]interface{}
-	json.Unmarshal(oldJSON, &oldMap)
-	json.Unmarshal(newJSON, &newMap)
-
-	oldSpec, _ := json.Marshal(oldMap["spec"])
-	newSpec, _ := json.Marshal(newMap["spec"])
-
-	return string(oldSpec) != string(newSpec)
+	oldData, err := json.Marshal(old)
+	if err != nil {
+		return true
+	}
+	newData, err := json.Marshal(new)
+	if err != nil {
+		return true
+	}
+	var oldRaw, newRaw map[string]json.RawMessage
+	if err := json.Unmarshal(oldData, &oldRaw); err != nil {
+		return true
+	}
+	if err := json.Unmarshal(newData, &newRaw); err != nil {
+		return true
+	}
+	return !bytes.Equal(oldRaw["spec"], newRaw["spec"])
 }

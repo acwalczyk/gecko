@@ -146,7 +146,7 @@ func getResources() []ResourceInfo {
 		{
 			Plural: "objects",
 			GVK: runtimeschema.GroupVersionKind{
-				Group:   "test.orlop.thetechnick.ninja",
+				Group:   "test.orlop.gcp.managed.openshift.io",
 				Version: "v1",
 				Kind:    "Object",
 			},
@@ -154,7 +154,7 @@ func getResources() []ResourceInfo {
 		{
 			Plural: "others",
 			GVK: runtimeschema.GroupVersionKind{
-				Group:   "test.orlop.thetechnick.ninja",
+				Group:   "test.orlop.gcp.managed.openshift.io",
 				Version: "v1",
 				Kind:    "Other",
 			},

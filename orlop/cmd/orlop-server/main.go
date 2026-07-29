@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -13,7 +12,10 @@ import (
 
 	"github.com/go-logr/stdr"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver"
-	"github.com/openshift-online/gecko/orlop/pkg/apiserver/optional"
+	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
+	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/memory"
+	"k8s.io/apimachinery/pkg/runtime"
+	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 func main() {
@@ -23,16 +25,14 @@ func main() {
 		publicPort  int
 		corsOrigins string
 		enablePublic bool
-		enableRBAC  bool
-		enableAuthn bool
+		disableAuth  bool
 	)
 
 	flag.StringVar(&address, "address", "0.0.0.0", "address to bind to")
 	flag.IntVar(&privatePort, "private-port", 8080, "port for private API")
 	flag.IntVar(&publicPort, "public-port", 8081, "port for public API")
 	flag.BoolVar(&enablePublic, "enable-public-api", true, "enable public API server")
-	flag.BoolVar(&enableRBAC, "enable-rbac", false, "enable RBAC authorization middleware")
-	flag.BoolVar(&enableAuthn, "enable-authentication", false, "enable ServiceAccount authentication middleware")
+	flag.BoolVar(&disableAuth, "disable-auth", false, "disable authentication and authorization (for testing/local dev)")
 	flag.StringVar(&corsOrigins, "cors-origins", "*", "comma-separated list of allowed CORS origins")
 	flag.Parse()
 
@@ -46,54 +46,27 @@ func main() {
 		}
 	}
 
-	privateScheme := getPrivateScheme()
-	privateRegistry := apiserver.NewResourceRegistry(privateScheme, apiserver.WithLogger(logger))
-	for _, res := range getPrivateResources() {
-		if err := privateRegistry.Register(res); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to register private resource: %v\n", err)
-			os.Exit(1)
-		}
-	}
-
-	var middleware []func(http.Handler) http.Handler
-
-	if enableAuthn {
-		mw, err := optional.SetupAuthentication(privateRegistry, logger)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to setup authentication: %v\n", err)
-			os.Exit(1)
-		}
-		middleware = append(middleware, mw)
-		logger.Info("ServiceAccount authentication enabled")
-	}
-
-	if enableRBAC {
-		mw, err := optional.SetupRBAC(privateRegistry, logger)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to setup RBAC: %v\n", err)
-			os.Exit(1)
-		}
-		middleware = append(middleware, mw)
-		logger.Info("RBAC authorization enabled")
+	storageFactory := func(resourceType string, scheme *runtime.Scheme, gvk runtimeschema.GroupVersionKind) (storage.ResourceStore, error) {
+		return memory.NewMemoryStore(resourceType, scheme, gvk), nil
 	}
 
 	opts := apiserver.Options{
 		Address:     address,
 		CORSOrigins: origins,
 		Private: apiserver.PrivateAPIOptions{
-			Port:       privatePort,
-			Registry:   privateRegistry,
-			Scheme:     privateScheme,
-			Middleware: middleware,
+			Port:        privatePort,
+			Resources:   getPrivateResources(),
+			Scheme:      getPrivateScheme(),
+			DisableAuth: disableAuth,
 		},
 		Public: apiserver.PublicAPIOptions{
-			Enable:     enablePublic,
-			Port:       publicPort,
-			Resources:  getPublicResources(),
-			Scheme:     getPublicScheme(),
-			Middleware: middleware,
+			Enable:    enablePublic,
+			Port:      publicPort,
+			Resources: getPublicResources(),
+			Scheme:    getPublicScheme(),
 		},
-		Logger: logger,
+		StorageFactory: storageFactory,
+		Logger:         logger,
 	}
 
 	server, err := apiserver.New(opts)

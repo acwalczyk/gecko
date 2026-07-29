@@ -18,7 +18,7 @@ func TestGarbageCollection(t *testing.T) {
 
 		// Create owner object
 		ownerBody := map[string]interface{}{
-			"apiVersion": "test.orlop.thetechnick.ninja/v1",
+			"apiVersion": "test.orlop.gcp.managed.openshift.io/v1",
 			"kind":       "Object",
 			"metadata": map[string]interface{}{
 				"name": ownerName,
@@ -33,8 +33,8 @@ func TestGarbageCollection(t *testing.T) {
 			},
 		}
 		ownerJSON, _ := json.Marshal(ownerBody)
-		ownerResp, err := http.Post(
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/"+namespace+"/objects",
+		ownerResp, err := insecureClient.Post(
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects",
 			"application/json",
 			bytes.NewBuffer(ownerJSON),
 		)
@@ -49,13 +49,13 @@ func TestGarbageCollection(t *testing.T) {
 
 		// Create dependent object with ownerReference
 		dependentBody := map[string]interface{}{
-			"apiVersion": "test.orlop.thetechnick.ninja/v1",
+			"apiVersion": "test.orlop.gcp.managed.openshift.io/v1",
 			"kind":       "Object",
 			"metadata": map[string]interface{}{
 				"name": dependentName,
 				"ownerReferences": []map[string]interface{}{
 					{
-						"apiVersion": "test.orlop.thetechnick.ninja/v1",
+						"apiVersion": "test.orlop.gcp.managed.openshift.io/v1",
 						"kind":       "Object",
 						"name":       ownerName,
 						"uid":        ownerUID,
@@ -72,8 +72,8 @@ func TestGarbageCollection(t *testing.T) {
 			},
 		}
 		dependentJSON, _ := json.Marshal(dependentBody)
-		dependentResp, err := http.Post(
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/"+namespace+"/objects",
+		dependentResp, err := insecureClient.Post(
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects",
 			"application/json",
 			bytes.NewBuffer(dependentJSON),
 		)
@@ -83,13 +83,13 @@ func TestGarbageCollection(t *testing.T) {
 		dependentResp.Body.Close()
 
 		// Verify both objects exist
-		ownerGetResp, _ := http.Get(baseURL + "/apis/test.orlop.thetechnick.ninja/v1/namespaces/" + namespace + "/objects/" + ownerName)
+		ownerGetResp, _ := insecureClient.Get(baseURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + ownerName)
 		if ownerGetResp.StatusCode != http.StatusOK {
 			t.Fatalf("Owner not found after creation")
 		}
 		ownerGetResp.Body.Close()
 
-		dependentGetResp, _ := http.Get(baseURL + "/apis/test.orlop.thetechnick.ninja/v1/namespaces/" + namespace + "/objects/" + dependentName)
+		dependentGetResp, _ := insecureClient.Get(baseURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + dependentName)
 		if dependentGetResp.StatusCode != http.StatusOK {
 			t.Fatalf("Dependent not found after creation")
 		}
@@ -98,10 +98,10 @@ func TestGarbageCollection(t *testing.T) {
 		// Delete the owner
 		req, _ := http.NewRequest(
 			"DELETE",
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/"+namespace+"/objects/"+ownerName,
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects/"+ownerName,
 			nil,
 		)
-		deleteResp, err := http.DefaultClient.Do(req)
+		deleteResp, err := insecureClient.Do(req)
 		if err != nil {
 			t.Fatalf("Delete owner failed: %v", err)
 		}
@@ -113,7 +113,7 @@ func TestGarbageCollection(t *testing.T) {
 		// be running as a separate process (orlop-gc binary).
 		
 		// For now, just verify the dependent still has the owner reference
-		finalGetResp, _ := http.Get(baseURL + "/apis/test.orlop.thetechnick.ninja/v1/namespaces/" + namespace + "/objects/" + dependentName)
+		finalGetResp, _ := insecureClient.Get(baseURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + dependentName)
 		if finalGetResp.StatusCode != http.StatusOK {
 			t.Fatalf("Dependent not accessible after owner deletion")
 		}
@@ -138,7 +138,7 @@ func TestGarbageCollection(t *testing.T) {
 
 		// Create object without owner reference
 		body := map[string]interface{}{
-			"apiVersion": "test.orlop.thetechnick.ninja/v1",
+			"apiVersion": "test.orlop.gcp.managed.openshift.io/v1",
 			"kind":       "Object",
 			"metadata": map[string]interface{}{
 				"name": name,
@@ -153,8 +153,8 @@ func TestGarbageCollection(t *testing.T) {
 			},
 		}
 		bodyJSON, _ := json.Marshal(body)
-		createResp, err := http.Post(
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/"+namespace+"/objects",
+		createResp, err := insecureClient.Post(
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects",
 			"application/json",
 			bytes.NewBuffer(bodyJSON),
 		)
@@ -167,7 +167,7 @@ func TestGarbageCollection(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 
 		// Verify object still exists
-		getResp, _ := http.Get(baseURL + "/apis/test.orlop.thetechnick.ninja/v1/namespaces/" + namespace + "/objects/" + name)
+		getResp, _ := insecureClient.Get(baseURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + name)
 		if getResp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(getResp.Body)
 			t.Errorf("Independent object was deleted by GC, got status %d: %s", getResp.StatusCode, body)

@@ -111,8 +111,8 @@ Client → PUT /apis/.../v1/namespaces/default/objects/test
 **Methods:**
 - `PrivateToPublic(private) → public`
   - JSON round-trip automatically filters private-only fields
-  - `filterPrivateMetadata()` removes labels/annotations with `private.orlop.thetechnick.ninja/` prefix
-  - `filterPrivateConditions()` removes conditions with `private.orlop.thetechnick.ninja/` prefix
+  - `filterPrivateMetadata()` removes labels/annotations with `private.orlop.gcp.managed.openshift.io/` prefix
+  - `filterPrivateConditions()` removes conditions with `private.orlop.gcp.managed.openshift.io/` prefix
 
 - `PublicToPrivate(public, existing) → private`
   - Starts with existing object to preserve internal fields
@@ -173,7 +173,7 @@ router := setupConvertingRouter(publicRegistry, privateRegistry, converter)
 - Private fields automatically hidden via schema
 - Private metadata explicitly filtered via converter
 - Intended for external consumers
-- Never exposes fields/metadata prefixed with `private.orlop.thetechnick.ninja/`
+- Never exposes fields/metadata prefixed with `private.orlop.gcp.managed.openshift.io/`
 
 ## Benefits
 
