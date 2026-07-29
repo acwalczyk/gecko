@@ -19,7 +19,6 @@ type maestroFlags struct {
 	grpcAddr string
 	httpAddr string
 	sourceID string
-	clientID string
 	insecure bool
 }
 
@@ -73,7 +72,6 @@ func NewCommand(rf *setup.RootFlags) *cobra.Command {
 	cmd.Flags().StringVar(&mf.grpcAddr, "maestro-grpc-addr", "maestro-grpc.hyperfleet.svc.cluster.local:8090", "Maestro gRPC server address")
 	cmd.Flags().StringVar(&mf.httpAddr, "maestro-http-addr", "http://maestro.hyperfleet.svc.cluster.local:8000", "Maestro HTTP API server address")
 	cmd.Flags().StringVar(&mf.sourceID, "maestro-source-id", "hc-controller", "Maestro source ID")
-	cmd.Flags().StringVar(&mf.clientID, "maestro-client-id", "hc-controller-client", "Maestro client ID")
 	cmd.Flags().BoolVar(&mf.insecure, "maestro-insecure", true, "Disable TLS verification for Maestro connections")
 
 	return cmd
