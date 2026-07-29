@@ -7,6 +7,8 @@ metadata:
     {{- include "gecko-nodepool-vr-resolution.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
+  strategy:
+    {{- toYaml .Values.strategy | nindent 4 }}
   selector:
     matchLabels:
       {{- include "gecko-nodepool-vr-resolution.selectorLabels" . | nindent 6 }}
@@ -36,7 +38,7 @@ spec:
           image: "{{ .Values.image.registry }}/{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
-            - nodepool-vr-resolution
+            - nodepool-vr
             - --orlop-url={{ .Values.orlopURL }}
             - --log-level={{ .Values.logLevel }}
             - --log-format={{ .Values.logFormat }}

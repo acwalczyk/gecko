@@ -7,6 +7,8 @@ metadata:
     {{- include "gecko-placement.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
+  strategy:
+    {{- toYaml .Values.strategy | nindent 4 }}
   selector:
     matchLabels:
       {{- include "gecko-placement.selectorLabels" . | nindent 6 }}
@@ -47,9 +49,9 @@ spec:
             {{- else }}
             {{- if .Values.candidates }}
             - --candidates={{ join "," .Values.candidates }}
-            {{- end }}
             {{- if .Values.baseDomains }}
             - --base-domains={{ join "," .Values.baseDomains }}
+            {{- end }}
             {{- end }}
             {{- end }}
           resources:

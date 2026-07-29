@@ -75,4 +75,9 @@ Validate required values.
 {{- if not (trim (toString .Values.orlopURL)) -}}
 {{- fail "orlopURL must be set (e.g. --set orlopURL=http://platform-api:8080)" -}}
 {{- end -}}
+{{- if not .Values.secretManagerProject -}}
+{{- if not .Values.candidates -}}
+{{- fail "either secretManagerProject or candidates must be set" -}}
+{{- end -}}
+{{- end -}}
 {{- end }}
