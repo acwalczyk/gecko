@@ -228,11 +228,21 @@ properties:
           VersionResolution is written by the version-resolution controller.
           Not exposed on the public API.
         properties:
-          releaseChannel:
+          channelGroup:
+            description: |-
+              ChannelGroup is the raw channel group from spec.release.channelGroup (e.g. "stable", "candidate", "fast").
+              Stored to detect channel group changes without reconstructing the Cincinnati channel string.
+            type: string
+          cincinnatiChannel:
+            description: |-
+              CincinnatiChannel is the channel string used to query Cincinnati (e.g. "stable-4.16").
+              Derived from ChannelGroup and the major.minor of ReleaseVersion.
             type: string
           releaseImage:
+            description: ReleaseImage is the resolved OCP release pullspec (e.g. quay.io/openshift-release-dev/ocp-release@sha256:...).
             type: string
           releaseVersion:
+            description: ReleaseVersion is the resolved OCP version string (e.g. "4.16.3").
             type: string
         type: object
     type: object

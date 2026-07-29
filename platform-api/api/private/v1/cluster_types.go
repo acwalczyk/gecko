@@ -173,9 +173,16 @@ type PlacementResult struct {
 
 // VersionResolutionResult holds the VR controller's output.
 type VersionResolutionResult struct {
-	ReleaseImage   string `json:"releaseImage,omitempty"`
+	// ReleaseImage is the resolved OCP release pullspec (e.g. quay.io/openshift-release-dev/ocp-release@sha256:...).
+	ReleaseImage string `json:"releaseImage,omitempty"`
+	// ReleaseVersion is the resolved OCP version string (e.g. "4.16.3").
 	ReleaseVersion string `json:"releaseVersion,omitempty"`
-	ReleaseChannel string `json:"releaseChannel,omitempty"`
+	// CincinnatiChannel is the channel string used to query Cincinnati (e.g. "stable-4.16").
+	// Derived from ChannelGroup and the major.minor of ReleaseVersion.
+	CincinnatiChannel string `json:"cincinnatiChannel,omitempty"`
+	// ChannelGroup is the raw channel group from spec.release.channelGroup (e.g. "stable", "candidate", "fast").
+	// Stored to detect channel group changes without reconstructing the Cincinnati channel string.
+	ChannelGroup string `json:"channelGroup,omitempty"`
 }
 
 // HostedClusterResult holds the hc-adapter's output from ManifestWork status feedback.

@@ -1,8 +1,9 @@
-name: Build and Push platform-api
+name: Build and Push
 
 on:
   push:
     branches: [main]
+  pull_request:
 
 jobs:
   test:
@@ -22,8 +23,13 @@ jobs:
         working-directory: platform-api
         run: go test ./...
 
+      - name: Test controllers
+        working-directory: controllers
+        run: go test ./...
+
   build-push:
     needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -39,9 +45,18 @@ jobs:
         id: vars
         run: echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push image
+      - name: Build and push platform-api image
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: Dockerfile
           push: true
           tags: quay.io/gcphcp/gecko:${{ steps.vars.outputs.short_sha }}
+
+      - name: Build and push controllers image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: controllers/Dockerfile
+          push: true
+          tags: quay.io/gcphcp/gecko-controllers:${{ steps.vars.outputs.short_sha }}

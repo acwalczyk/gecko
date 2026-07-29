@@ -1,0 +1,7 @@
+# Build output
+bin/
+controllers
+
+# Test binaries
+*.test
+*.out
