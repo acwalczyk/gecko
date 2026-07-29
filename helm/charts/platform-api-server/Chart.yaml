@@ -1,0 +1,14 @@
+apiVersion: v2
+name: platform-api-server
+description: Gecko Platform API Server - Custom API server for ManagedHostedCluster resources
+type: application
+version: 0.1.0
+appVersion: "0.0.1-dev"
+maintainers:
+  - name: GCP HCP Team
+keywords:
+  - gecko
+  - platform-api
+  - managed-hosted-cluster
+  - api-server
+home: https://github.com/openshift-online/gecko

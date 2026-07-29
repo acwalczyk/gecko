@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "platform-api-server.fullname" . }}
+  labels:
+    {{- include "platform-api-server.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.service.privatePort }}
+      targetPort: private-api
+      protocol: TCP
+      name: private-api
+    {{- if .Values.publicApi.enabled }}
+    - port: {{ .Values.service.publicPort }}
+      targetPort: public-api
+      protocol: TCP
+      name: public-api
+    {{- end }}
+  selector:
+    {{- include "platform-api-server.selectorLabels" . | nindent 4 }}
