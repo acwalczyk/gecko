@@ -25,7 +25,7 @@ func Set(conditions *[]metav1.Condition, c metav1.Condition) bool {
 			continue
 		}
 		// Found — check whether anything meaningful changed.
-		if existing.Status == c.Status && existing.Reason == c.Reason && existing.Message == c.Message {
+		if existing.Status == c.Status && existing.Reason == c.Reason && existing.Message == c.Message && existing.ObservedGeneration == c.ObservedGeneration {
 			return false
 		}
 		// Preserve LastTransitionTime when only Reason/Message changed.

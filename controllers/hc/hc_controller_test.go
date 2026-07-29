@@ -570,10 +570,11 @@ func TestReconcile_ApplyConditions_Idempotent(t *testing.T) {
 	mcName := "mc-cluster-1"
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
-	// Pre-populate conditions to exactly match what applyStatusConditions would set.
+	// Pre-populate conditions to exactly match what applyStatusConditions would set,
+	// including ObservedGeneration (cluster.Generation = 2).
 	cluster.Status.Conditions = []metav1.Condition{
-		{Type: "ManifestWorkApplied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully", Message: ""},
-		{Type: "HostedClusterAvailable", Status: metav1.ConditionFalse, Reason: "HostedClusterAvailable", Message: ""},
+		{Type: "ManifestWorkApplied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully", Message: "", ObservedGeneration: 2},
+		{Type: "HostedClusterAvailable", Status: metav1.ConditionFalse, Reason: "HostedClusterAvailable", Message: "", ObservedGeneration: 2},
 	}
 
 	tr := mock.New()
