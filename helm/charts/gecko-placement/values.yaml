@@ -22,6 +22,8 @@ candidates: []
 # Base domains paired with candidates (one per MC).
 baseDomains: []
 # GCP project for Secret Manager MC/DNS discovery. Enables dynamic selector.
+# Can also be set at runtime via the SECRETMANAGER_PROJECT env var, but must
+# be non-empty here (or candidates must be set) to pass Helm validation.
 secretManagerProject: ""
 
 serviceAccount:
