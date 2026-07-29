@@ -7,6 +7,7 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -16,7 +17,6 @@ import (
 
 	"github.com/openshift-online/gecko/controllers/client/transport"
 	"github.com/openshift-online/gecko/controllers/nodepool/manifest"
-	"github.com/openshift-online/gecko/controllers/util/conditions"
 	"github.com/openshift-online/gecko/controllers/util/logger"
 )
 
@@ -83,7 +83,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 
 	// Gate: HC must be Available (HostedClusterAvailable condition on the cluster).
-	if !conditions.IsTrue(cluster.Status.Conditions, "HostedClusterAvailable") {
+	if !meta.IsStatusConditionTrue(cluster.Status.Conditions, "HostedClusterAvailable") {
 		log.Infof(ctx, "hc not available for nodepool %s, waiting for next event", nodepoolID)
 		if setWaitingNPConditions(&np, "HostedClusterNotAvailable", "Waiting for HostedCluster to become available") {
 			if err := r.client.Status().Update(ctx, &np); err != nil && !apierrors.IsConflict(err) {
@@ -189,7 +189,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		}
 	}
 
-	if !conditions.IsTrue(np.Status.Conditions, "NodePoolManifestWorkApplied") {
+	if !meta.IsStatusConditionTrue(np.Status.Conditions, "NodePoolManifestWorkApplied") {
 		log.Infof(ctx, "nodepool reconciler: nodepool %s MW not yet applied, requeueing after %s", nodepoolID, requeuePending)
 		return reconcile.Result{RequeueAfter: requeuePending}, nil
 	}
@@ -201,14 +201,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 // Returns true if either condition changed.
 func setWaitingNPConditions(np *privatev1.NodePool, reason, message string) bool {
 	gen := np.Generation
-	a := conditions.Set(&np.Status.Conditions, metav1.Condition{
+	a := meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
 		Type:               "NodePoolManifestWorkApplied",
 		Status:             metav1.ConditionUnknown,
 		Reason:             reason,
 		Message:            message,
 		ObservedGeneration: gen,
 	})
-	b := conditions.Set(&np.Status.Conditions, metav1.Condition{
+	b := meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
 		Type:               "NodePoolAvailable",
 		Status:             metav1.ConditionUnknown,
 		Reason:             reason,
@@ -224,13 +224,13 @@ func (r *Reconciler) applyStatusConditions(np *privatev1.NodePool, mwStatus *tra
 	gen := np.Generation
 
 	if mwStatus == nil {
-		a := conditions.Set(&np.Status.Conditions, metav1.Condition{
+		a := meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
 			Type:               "NodePoolManifestWorkApplied",
 			Status:             metav1.ConditionFalse,
 			Reason:             "ManifestWorkNotFound",
 			ObservedGeneration: gen,
 		})
-		b := conditions.Set(&np.Status.Conditions, metav1.Condition{
+		b := meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
 			Type:               "NodePoolAvailable",
 			Status:             metav1.ConditionFalse,
 			Reason:             "ManifestWorkNotFound",
@@ -275,19 +275,19 @@ func (r *Reconciler) applyStatusConditions(np *privatev1.NodePool, mwStatus *tra
 		availableReason = "NodePoolAvailable"
 	}
 
-	a := conditions.Set(&np.Status.Conditions, metav1.Condition{
+	a := meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
 		Type:               "NodePoolManifestWorkApplied",
 		Status:             appliedStatus,
 		Reason:             appliedReason,
 		ObservedGeneration: gen,
 	})
-	b := conditions.Set(&np.Status.Conditions, metav1.Condition{
+	b := meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
 		Type:               "NodePoolAvailable",
 		Status:             metav1.ConditionStatus(availableStatus),
 		Reason:             availableReason,
 		ObservedGeneration: gen,
 	})
-	c := conditions.Set(&np.Status.Conditions, metav1.Condition{
+	c := meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
 		Type:               "NodePoolHealthy",
 		Status:             healthStatus,
 		Reason:             healthReason,

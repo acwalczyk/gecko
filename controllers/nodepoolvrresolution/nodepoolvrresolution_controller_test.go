@@ -21,7 +21,6 @@ import (
 
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 
-	"github.com/openshift-online/gecko/controllers/util/conditions"
 	"github.com/openshift-online/gecko/controllers/util/logger"
 	"github.com/openshift-online/gecko/controllers/versionresolution"
 )
@@ -462,7 +461,7 @@ func TestBuildChannel(t *testing.T) {
 func TestSetCondition(t *testing.T) {
 	t.Run("appends new condition", func(t *testing.T) {
 		var conds []metav1.Condition
-		conditions.Set(&conds, metav1.Condition{Type: "Applied", Status: metav1.ConditionTrue, Reason: "Test"})
+		meta.SetStatusCondition(&conds, metav1.Condition{Type: "Applied", Status: metav1.ConditionTrue, Reason: "Test"})
 		require.Len(t, conds, 1)
 		require.Equal(t, "Applied", conds[0].Type)
 		require.Equal(t, metav1.ConditionTrue, conds[0].Status)
@@ -474,7 +473,7 @@ func TestSetCondition(t *testing.T) {
 		conds := []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, LastTransitionTime: ts, Reason: "Test"},
 		}
-		conditions.Set(&conds, metav1.Condition{Type: "Applied", Status: metav1.ConditionTrue, Reason: "Test"})
+		meta.SetStatusCondition(&conds, metav1.Condition{Type: "Applied", Status: metav1.ConditionTrue, Reason: "Test"})
 		require.Len(t, conds, 1)
 		require.Equal(t, ts, conds[0].LastTransitionTime)
 	})
@@ -484,7 +483,7 @@ func TestSetCondition(t *testing.T) {
 		conds := []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionFalse, LastTransitionTime: old, Reason: "Test"},
 		}
-		conditions.Set(&conds, metav1.Condition{Type: "Applied", Status: metav1.ConditionTrue, Reason: "Test"})
+		meta.SetStatusCondition(&conds, metav1.Condition{Type: "Applied", Status: metav1.ConditionTrue, Reason: "Test"})
 		require.Len(t, conds, 1)
 		require.False(t, conds[0].LastTransitionTime.IsZero())
 	})

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -14,7 +15,6 @@ import (
 
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 
-	"github.com/openshift-online/gecko/controllers/util/conditions"
 	"github.com/openshift-online/gecko/controllers/util/logger"
 	"github.com/openshift-online/gecko/controllers/versionresolution"
 )
@@ -69,7 +69,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 	if np.Spec.Release.Version == "" {
 		r.log.Infof(ctx, "nodepool-vr: nodepool %s: release version not set, waiting for next event", nodepoolID)
-		if conditions.Set(&np.Status.Conditions, metav1.Condition{
+		if meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
 			Type:               "NodePoolVersionResolved",
 			Status:             metav1.ConditionUnknown,
 			Reason:             "ReleaseVersionNotSet",
@@ -109,7 +109,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 	if info == nil {
 		r.log.Warnf(ctx, "nodepool-vr: nodepool %s: version %s not found in Cincinnati, waiting for next event", nodepoolID, version)
-		if conditions.Set(&np.Status.Conditions, metav1.Condition{
+		if meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
 			Type:               "NodePoolVersionResolved",
 			Status:             metav1.ConditionFalse,
 			Reason:             "VersionNotFoundInCincinnati",
@@ -130,7 +130,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		CincinnatiChannel: channel,
 		ChannelGroup:      channelGroup,
 	}
-	conditions.Set(&np.Status.Conditions, metav1.Condition{
+	meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
 		Type:               "NodePoolVersionResolved",
 		Status:             metav1.ConditionTrue,
 		Reason:             "VersionResolved",

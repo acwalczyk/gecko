@@ -7,6 +7,7 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -15,7 +16,6 @@ import (
 
 	"github.com/openshift-online/gecko/controllers/client/transport"
 	"github.com/openshift-online/gecko/controllers/hc/manifest"
-	"github.com/openshift-online/gecko/controllers/util/conditions"
 	"github.com/openshift-online/gecko/controllers/util/logger"
 )
 
@@ -170,7 +170,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		}
 	}
 
-	if !conditions.IsTrue(cluster.Status.Conditions, "ManifestWorkApplied") {
+	if !meta.IsStatusConditionTrue(cluster.Status.Conditions, "ManifestWorkApplied") {
 		log.Infof(ctx, "hc-controller: cluster %s MW not yet applied, requeueing after %s", clusterID, requeuePending)
 		return reconcile.Result{RequeueAfter: requeuePending}, nil
 	}
@@ -182,14 +182,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 // Returns true if either condition changed.
 func (r *Reconciler) setWaitingConditions(cluster *privatev1.Cluster, reason, message string) bool {
 	gen := cluster.Generation
-	a := conditions.Set(&cluster.Status.Conditions, metav1.Condition{
+	a := meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
 		Type:               "ManifestWorkApplied",
 		Status:             metav1.ConditionUnknown,
 		Reason:             reason,
 		Message:            message,
 		ObservedGeneration: gen,
 	})
-	b := conditions.Set(&cluster.Status.Conditions, metav1.Condition{
+	b := meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
 		Type:               "HostedClusterAvailable",
 		Status:             metav1.ConditionUnknown,
 		Reason:             reason,
@@ -205,14 +205,14 @@ func (r *Reconciler) applyStatusConditions(cluster *privatev1.Cluster, mwStatus 
 	gen := cluster.Generation
 
 	if mwStatus == nil {
-		a := conditions.Set(&cluster.Status.Conditions, metav1.Condition{
+		a := meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
 			Type:               "ManifestWorkApplied",
 			Status:             metav1.ConditionFalse,
 			Reason:             "ManifestWorkNotFound",
 			Message:            "ManifestWork has not been processed yet",
 			ObservedGeneration: gen,
 		})
-		b := conditions.Set(&cluster.Status.Conditions, metav1.Condition{
+		b := meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
 			Type:               "HostedClusterAvailable",
 			Status:             metav1.ConditionFalse,
 			Reason:             "ManifestWorkNotFound",
@@ -242,14 +242,14 @@ func (r *Reconciler) applyStatusConditions(cluster *privatev1.Cluster, mwStatus 
 		}
 	}
 
-	a := conditions.Set(&cluster.Status.Conditions, metav1.Condition{
+	a := meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
 		Type:               "ManifestWorkApplied",
 		Status:             metav1.ConditionStatus(appliedStatus),
 		Reason:             appliedReason,
 		Message:            appliedMessage,
 		ObservedGeneration: gen,
 	})
-	b := conditions.Set(&cluster.Status.Conditions, metav1.Condition{
+	b := meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
 		Type:               "HostedClusterAvailable",
 		Status:             metav1.ConditionStatus(availableStatus),
 		Reason:             "HostedClusterAvailable",

@@ -7,13 +7,13 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 
-	"github.com/openshift-online/gecko/controllers/util/conditions"
 	"github.com/openshift-online/gecko/controllers/util/logger"
 )
 
@@ -54,7 +54,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 	if cluster.Spec.Release.Version == "" {
 		r.log.Infof(ctx, "vr: cluster %s: release version not set, waiting for next event", clusterID)
-		if conditions.Set(&cluster.Status.Conditions, metav1.Condition{
+		if meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
 			Type:               "VersionResolved",
 			Status:             metav1.ConditionUnknown,
 			Reason:             "ReleaseVersionNotSet",
@@ -93,7 +93,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 	if info == nil {
 		r.log.Warnf(ctx, "vr: cluster %s: version %s not found in Cincinnati, waiting for next event", clusterID, version)
-		if conditions.Set(&cluster.Status.Conditions, metav1.Condition{
+		if meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
 			Type:               "VersionResolved",
 			Status:             metav1.ConditionFalse,
 			Reason:             "VersionNotFoundInCincinnati",
@@ -114,7 +114,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		CincinnatiChannel: channel,
 		ChannelGroup:      channelGroup,
 	}
-	conditions.Set(&cluster.Status.Conditions, metav1.Condition{
+	meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
 		Type:               "VersionResolved",
 		Status:             metav1.ConditionTrue,
 		Reason:             "VersionResolved",
