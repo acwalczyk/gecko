@@ -39,10 +39,24 @@ func NewScheme() *runtime.Scheme {
 	return scheme
 }
 
-// NewManager creates a controller-runtime Manager pointed at the orlop API server.
+// NewManager creates a controller-runtime Manager.
+// When OrlopURL is set it connects directly to the orlop API server (legacy / local dev).
+// When empty it uses in-cluster config, talking to the kube-apiserver (API aggregation path).
 func (rf *RootFlags) NewManager(scheme *runtime.Scheme, log logger.Logger) (ctrl.Manager, error) {
 	ctrl.SetLogger(logger.ToLogr(log))
-	return ctrl.NewManager(&rest.Config{Host: rf.OrlopURL}, ctrl.Options{
+
+	var cfg *rest.Config
+	if rf.OrlopURL != "" {
+		cfg = &rest.Config{Host: rf.OrlopURL}
+	} else {
+		var err error
+		cfg, err = ctrl.GetConfig()
+		if err != nil {
+			return nil, fmt.Errorf("get in-cluster config: %w", err)
+		}
+	}
+
+	return ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:         scheme,
 		LeaderElection: false,
 	})
