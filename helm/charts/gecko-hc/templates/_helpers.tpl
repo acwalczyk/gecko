@@ -72,7 +72,4 @@ Validate required values.
 {{- if not (trim (toString .Values.image.tag)) -}}
 {{- fail "image.tag must be set (e.g. --set image.tag=abc1234)" -}}
 {{- end -}}
-{{- if not (trim (toString .Values.orlopURL)) -}}
-{{- fail "orlopURL must be set (e.g. --set orlopURL=http://platform-api:8080)" -}}
-{{- end -}}
 {{- end }}

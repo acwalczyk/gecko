@@ -39,7 +39,9 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - nodepool
+            {{- if .Values.orlopURL }}
             - --orlop-url={{ .Values.orlopURL }}
+            {{- end }}
             - --log-level={{ .Values.logLevel }}
             - --log-format={{ .Values.logFormat }}
             - --workers={{ .Values.workers }}

@@ -45,7 +45,7 @@ func main() {
 
 	root.PersistentFlags().StringVar(&rf.LogLevel, "log-level", "info", "Log level (debug, info, warn, error)")
 	root.PersistentFlags().StringVar(&rf.LogFormat, "log-format", "json", "Log format (json, text)")
-	root.PersistentFlags().StringVar(&rf.OrlopURL, "orlop-url", "http://hyperfleet-api:8080", "Orlop API server URL [$ORLOP_URL]")
+	root.PersistentFlags().StringVar(&rf.OrlopURL, "orlop-url", "", "Orlop API server URL; when empty uses in-cluster kubeconfig [$ORLOP_URL]")
 	root.PersistentFlags().IntVar(&rf.Workers, "workers", 10, "Concurrent reconcile goroutines")
 
 	root.AddCommand(
