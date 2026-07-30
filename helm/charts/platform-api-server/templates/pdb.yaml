@@ -2,9 +2,6 @@
 {{- if and .Values.podDisruptionBudget.minAvailable .Values.podDisruptionBudget.maxUnavailable }}
 {{- fail "podDisruptionBudget: cannot set both minAvailable and maxUnavailable" }}
 {{- end }}
-{{- if not (or .Values.podDisruptionBudget.minAvailable .Values.podDisruptionBudget.maxUnavailable) }}
-{{- fail "podDisruptionBudget.enabled is true but neither minAvailable nor maxUnavailable is set" }}
-{{- end }}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
@@ -12,11 +9,11 @@ metadata:
   labels:
     {{- include "platform-api-server.labels" . | nindent 4 }}
 spec:
-  {{- if and .Values.podDisruptionBudget.minAvailable (not .Values.podDisruptionBudget.maxUnavailable) }}
-  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  {{- with .Values.podDisruptionBudget.minAvailable }}
+  minAvailable: {{ . }}
   {{- end }}
-  {{- if and .Values.podDisruptionBudget.maxUnavailable (not .Values.podDisruptionBudget.minAvailable) }}
-  maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
+  {{- with .Values.podDisruptionBudget.maxUnavailable }}
+  maxUnavailable: {{ . }}
   {{- end }}
   selector:
     matchLabels:

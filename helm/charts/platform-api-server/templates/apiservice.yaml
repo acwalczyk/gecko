@@ -1,0 +1,18 @@
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: {{ .Values.apiService.version }}.{{ .Values.apiService.group }}
+  labels:
+    {{- include "platform-api-server.labels" . | nindent 4 }}
+  {{- if .Values.tls.certManager.enabled }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "platform-api-server.fullname" . }}
+  {{- end }}
+spec:
+  group: {{ .Values.apiService.group }}
+  version: {{ .Values.apiService.version }}
+  service:
+    name: {{ include "platform-api-server.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+  groupPriorityMinimum: {{ .Values.apiService.groupPriorityMinimum }}
+  versionPriority: {{ .Values.apiService.versionPriority }}

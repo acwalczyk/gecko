@@ -1,0 +1,16 @@
+{{- if .Values.tls.certManager.enabled }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "platform-api-server.fullname" . }}
+  labels:
+    {{- include "platform-api-server.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "platform-api-server.fullname" . }}-tls
+  dnsNames:
+    - {{ include "platform-api-server.fullname" . }}.{{ .Release.Namespace }}.svc
+    - {{ include "platform-api-server.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+  issuerRef:
+    name: {{ .Values.tls.certManager.issuerRef.name }}
+    kind: {{ .Values.tls.certManager.issuerRef.kind }}
+{{- end }}
