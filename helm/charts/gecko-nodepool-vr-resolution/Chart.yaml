@@ -1,0 +1,13 @@
+apiVersion: v2
+name: gecko-nodepool-vr-resolution
+description: Gecko NodePool VR Resolution Controller - reconciles OCP version for NodePools
+type: application
+version: 0.1.0
+appVersion: "0.0.1-dev"
+maintainers:
+  - name: GCP HCP Team
+keywords:
+  - gecko
+  - controllers
+  - nodepool-vr-resolution
+home: https://github.com/openshift-online/gecko
