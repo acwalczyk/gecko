@@ -24,7 +24,7 @@ serviceAccount:
   name: ""
 
 rbac:
-  create: false
+  create: true
 
 strategy:
   rollingUpdate:
