@@ -46,12 +46,12 @@ Objects are automatically deleted when their owner is deleted if they have
 `metadata.ownerReferences` set:
 
 ```yaml
-apiVersion: test.orlop.thetechnick.ninja/v1
+apiVersion: test.orlop.gcp.managed.openshift.io/v1
 kind: Object
 metadata:
   name: dependent-object
   ownerReferences:
-  - apiVersion: test.orlop.thetechnick.ninja/v1
+  - apiVersion: test.orlop.gcp.managed.openshift.io/v1
     kind: Object
     name: owner-object
     uid: abc-123-def-456

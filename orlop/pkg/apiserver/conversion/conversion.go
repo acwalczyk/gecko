@@ -9,7 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
-const DefaultPrivatePrefix = "private.orlop.thetechnick.ninja/"
+const DefaultPrivatePrefix = "private.orlop.gcp.managed.openshift.io/"
 
 // Converter handles conversion between private and public API types using scheme conversion.
 type Converter struct {

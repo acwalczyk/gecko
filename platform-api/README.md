@@ -1,25 +1,109 @@
-# GCP-HCP Platform API (experimental)
+# GCP-HCP Platform API
 
-This is the implementation of a experimental Platform API server, which uses code generation to implement a kubernetes API server with custom types and storages.
+Kubernetes-style API server for managed hosted clusters on GCP. Uses [orlop](../orlop/) for code generation and the dual API surface (private/public field filtering via `+orlop:public` markers).
 
-To play with the setup:
+## Running Locally
 
-The folder `api/private` contains the source API definitions with a new "+orlop:public" marker.
-Fields marked with this marker are moved to `api/public` when running `go run ./cmd/orlop-gen`.
+The private API uses GenericAPIServer (HTTPS). The public API uses a chi.Router over plain HTTP.
 
-To run the demo apiserver:
+### Local development
+
+Uses Kubernetes `GenericAPIServer` for the private API — HTTPS with auto-generated self-signed certs. Auth disabled for local dev.
+
 ```sh
-# Run the API server using a in-memory database
-$ go run ./cmd/platform-api-server --private-port 8080 --public-port 8081
-
-# you can interact with the API using kubectl:
-$ export KUBECONFIG="$PWD/kubeconfig-public.yaml"
-$ kubecl create -f test.mhc.yaml
+go run ./cmd/platform-api-server --disable-auth
 ```
 
-There is also a simple scheduler controller within the project:
 ```sh
-# Run the scheduler:
-$ export KUBECONFIG="$PWD/kubeconfig.yaml"
-$ go run ./cmd/mhc-scheduler --health-probe-bind-address=0 --metrics-bind-address=0
+# Private API (HTTPS, self-signed cert)
+kubectl --server https://localhost:8080 --insecure-skip-tls-verify get managedhostedclusters
+curl -sk https://localhost:8080/apis/gcp.managed.openshift.io/v1/namespaces/default/clusters
+
+# Public API (HTTP)
+kubectl --server http://localhost:8081 get managedhostedclusters
+
+# k8s-native endpoints
+curl -sk https://localhost:8080/healthz
+curl -sk https://localhost:8080/openapi/v3
+kubectl --server https://localhost:8080 --insecure-skip-tls-verify api-resources
+```
+
+### With delegated auth
+
+For testing authn/authz delegation against a real cluster (kind, minikube, GKE):
+
+```sh
+go run ./cmd/platform-api-server \
+  --authentication-kubeconfig ~/.kube/config \
+  --authorization-kubeconfig ~/.kube/config
+```
+
+Tokens are validated via `TokenReview` and permissions checked via `SubjectAccessReview` against the target cluster's kube-apiserver.
+
+### On a cluster (Phase 5 — not yet implemented)
+
+When deployed on GKE with an `APIService` registration, the kube-apiserver proxies requests to gecko. Clients use standard `kubectl` against the cluster — no special server URL needed.
+
+```sh
+# After APIService registration, this just works:
+kubectl get managedhostedclusters -A
+```
+
+Requirements (see [api-aggregation-status.md](../api-aggregation-status.md) Phase 5):
+- `APIService` manifest per API group
+- TLS certs via cert-manager
+- RBAC ClusterRole/ClusterRoleBinding for consumer identities
+- Pod liveness/readiness probes on `/livez`, `/readyz`
+
+## Creating a test resource
+
+```sh
+kubectl create -f test.mhc.yaml
+```
+
+Or via curl (public API):
+
+```sh
+curl -X POST http://localhost:8081/apis/gcp.managed.openshift.io/v1/namespaces/default/clusters \
+  -H "Content-Type: application/json" \
+  -d '{
+    "apiVersion": "gcp.managed.openshift.io/v1",
+    "kind": "Cluster",
+    "metadata": {"name": "test-cluster"},
+    "spec": {}
+  }'
+```
+
+## CLI flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `--address` | `0.0.0.0` | Bind address |
+| `--private-port` | `8080` | Private API port |
+| `--public-port` | `8081` | Public API port |
+| `--enable-public-api` | `true` | Enable public API server |
+| `--cors-origins` | `*` | Comma-separated CORS origins |
+| `--tls-cert-file` | | TLS cert (auto-generated if empty) |
+| `--tls-key-file` | | TLS key (auto-generated if empty) |
+| `--authentication-kubeconfig` | | Kubeconfig for delegated authn (in-cluster if empty) |
+| `--authorization-kubeconfig` | | Kubeconfig for delegated authz (in-cluster if empty) |
+| `--disable-auth` | `false` | Skip authn/authz (for testing/local dev) |
+
+## Storage
+
+Currently hardcoded to in-memory storage. Data does not survive restarts. PostgreSQL and Spanner backends exist in orlop but are not yet wired into the CLI.
+
+## Related docs
+
+- [Architecture](ARCHITECTURE.md) — dual API surface, conversion, storage
+- [API aggregation proposal](../api-aggregation.md) — motivation and design
+- [Implementation status](../api-aggregation-status.md) — phase tracker
+- [orlop](../orlop/) — framework, code generator, storage backends
+
+## Scheduler
+
+A simple controller that assigns management clusters to ManagedHostedCluster resources:
+
+```sh
+KUBECONFIG=$PWD/kubeconfig.yaml go run ./cmd/mhc-scheduler --health-probe-bind-address=0 --metrics-bind-address=0
 ```

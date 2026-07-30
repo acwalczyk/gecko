@@ -11,9 +11,7 @@ spec:
   strategy:
     {{- toYaml . | nindent 4 }}
   {{- end }}
-  {{- if .Values.revisionHistoryLimit }}
   revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
-  {{- end }}
   selector:
     matchLabels:
       {{- include "platform-api-server.selectorLabels" . | nindent 6 }}
@@ -34,9 +32,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "platform-api-server.serviceAccountName" . }}
-      {{- if .Values.terminationGracePeriodSeconds }}
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
-      {{- end }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
@@ -47,8 +43,10 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - --address=0.0.0.0
-            - --private-port={{ .Values.service.privatePort }}
-            - --public-port={{ .Values.service.publicPort }}
+            - --private-port={{ .Values.tls.port }}
+            - --tls-cert-file=/etc/tls/tls.crt
+            - --tls-key-file=/etc/tls/tls.key
+            - --public-port={{ .Values.publicApi.port }}
             - --enable-public-api={{ .Values.publicApi.enabled }}
             {{- if .Values.corsOrigins }}
             - --cors-origins={{ join "," .Values.corsOrigins }}
@@ -72,24 +70,38 @@ spec:
               value: {{ .Values.alloydb.sslMode | quote }}
           {{- end }}
           ports:
-            - containerPort: {{ .Values.service.privatePort }}
-              name: private-api
+            - containerPort: {{ .Values.tls.port }}
+              name: https
               protocol: TCP
             {{- if .Values.publicApi.enabled }}
-            - containerPort: {{ .Values.service.publicPort }}
+            - containerPort: {{ .Values.publicApi.port }}
               name: public-api
               protocol: TCP
             {{- end }}
           livenessProbe:
             httpGet:
-              path: /healthz
-              port: private-api
+              path: /livez
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 10
           readinessProbe:
             httpGet:
               path: /readyz
-              port: private-api
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 10
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: tls
+              mountPath: /etc/tls
+              readOnly: true
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ include "platform-api-server.fullname" . }}-tls
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

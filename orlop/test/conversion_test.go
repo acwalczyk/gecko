@@ -3,6 +3,7 @@ package test
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +15,8 @@ import (
 	privatev1 "github.com/openshift-online/gecko/orlop/apis/private/test/v1"
 	publicv1 "github.com/openshift-online/gecko/orlop/apis/public/test/v1"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver"
+	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
+	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/memory"
 	"k8s.io/apimachinery/pkg/runtime"
 	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -42,7 +45,7 @@ func ensureConversionTestServer(t *testing.T) {
 	privateResources := []apiserver.ResourceInfo{
 		{
 			GVK: runtimeschema.GroupVersionKind{
-				Group:   "test.orlop.thetechnick.ninja",
+				Group:   "test.orlop.gcp.managed.openshift.io",
 				Version: "v1",
 				Kind:    "Object",
 			},
@@ -56,7 +59,7 @@ func ensureConversionTestServer(t *testing.T) {
 	publicResources := []apiserver.ResourceInfo{
 		{
 			GVK: runtimeschema.GroupVersionKind{
-				Group:   "test.orlop.thetechnick.ninja",
+				Group:   "test.orlop.gcp.managed.openshift.io",
 				Version: "v1",
 				Kind:    "Object",
 			},
@@ -67,14 +70,19 @@ func ensureConversionTestServer(t *testing.T) {
 		},
 	}
 
+	storageFactory := func(resourceType string, s *runtime.Scheme, gvk runtimeschema.GroupVersionKind) (storage.ResourceStore, error) {
+		return memory.NewMemoryStore(resourceType, s, gvk), nil
+	}
+
 	// Start server with both private and public APIs
 	opts := apiserver.Options{
 		Address:     "127.0.0.1",
 		CORSOrigins: []string{"*"},
 		Private: apiserver.PrivateAPIOptions{
-			Port:      9003, // Different ports from other tests
-			Resources: privateResources,
-			Scheme:    privateScheme,
+			Port:        9003, // Different ports from other tests
+			Resources:   privateResources,
+			Scheme:      privateScheme,
+			DisableAuth: true,
 		},
 		Public: apiserver.PublicAPIOptions{
 			Enable:    true,
@@ -82,6 +90,7 @@ func ensureConversionTestServer(t *testing.T) {
 			Resources: publicResources,
 			Scheme:    publicScheme,
 		},
+		StorageFactory: storageFactory,
 	}
 
 	var err error
@@ -90,7 +99,7 @@ func ensureConversionTestServer(t *testing.T) {
 		t.Fatalf("Failed to create conversion test server: %v", err)
 	}
 
-	conversionPrivateBaseURL = fmt.Sprintf("http://%s", conversionTestServer.PrivateAddress())
+	conversionPrivateBaseURL = fmt.Sprintf("https://localhost%s", conversionTestServer.PrivateAddress())
 	conversionPublicBaseURL = fmt.Sprintf("http://%s", conversionTestServer.PublicAddress())
 
 	// Start server in background
@@ -101,7 +110,21 @@ func ensureConversionTestServer(t *testing.T) {
 	}()
 
 	// Wait for server to be ready
-	time.Sleep(200 * time.Millisecond)
+	convClient := &http.Client{
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+		Timeout:   2 * time.Second,
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := convClient.Get(conversionPrivateBaseURL + "/healthz")
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				break
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 
 	conversionTestServerStarted = true
 
@@ -121,7 +144,7 @@ func TestConversion_CreatePrivateReadPublic(t *testing.T) {
 
 	// Create object via PRIVATE API with both public and internal fields
 	createPayload := map[string]interface{}{
-		"apiVersion": "test.orlop.thetechnick.ninja/v1",
+		"apiVersion": "test.orlop.gcp.managed.openshift.io/v1",
 		"kind":       "Object",
 		"metadata": map[string]interface{}{
 			"name":      name,
@@ -137,13 +160,13 @@ func TestConversion_CreatePrivateReadPublic(t *testing.T) {
 		},
 	}
 
-	resp, body := doConversionRequest(t, "POST", conversionPrivateBaseURL+fmt.Sprintf("/apis/test.orlop.thetechnick.ninja/v1/namespaces/%s/objects", namespace), createPayload)
+	resp, body := doConversionRequest(t, "POST", conversionPrivateBaseURL+fmt.Sprintf("/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/%s/objects", namespace), createPayload)
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("Failed to create via private API: %d: %s", resp.StatusCode, body)
 	}
 
 	// Read via PUBLIC API
-	resp, body = doConversionRequest(t, "GET", conversionPublicBaseURL+fmt.Sprintf("/apis/test.orlop.thetechnick.ninja/v1/namespaces/%s/objects/%s", namespace, name), nil)
+	resp, body = doConversionRequest(t, "GET", conversionPublicBaseURL+fmt.Sprintf("/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/%s/objects/%s", namespace, name), nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("Failed to read via public API: %d: %s", resp.StatusCode, body)
 	}
@@ -176,7 +199,7 @@ func TestConversion_CreatePrivateReadPublic(t *testing.T) {
 	}
 
 	// Cleanup
-	doConversionRequest(t, "DELETE", conversionPrivateBaseURL+fmt.Sprintf("/apis/test.orlop.thetechnick.ninja/v1/namespaces/%s/objects/%s", namespace, name), nil)
+	doConversionRequest(t, "DELETE", conversionPrivateBaseURL+fmt.Sprintf("/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/%s/objects/%s", namespace, name), nil)
 }
 
 func TestConversion_CreatePublicReadPrivate(t *testing.T) {
@@ -186,7 +209,7 @@ func TestConversion_CreatePublicReadPrivate(t *testing.T) {
 
 	// Create object via PUBLIC API (can only set public fields)
 	createPayload := map[string]interface{}{
-		"apiVersion": "test.orlop.thetechnick.ninja/v1",
+		"apiVersion": "test.orlop.gcp.managed.openshift.io/v1",
 		"kind":       "Object",
 		"metadata": map[string]interface{}{
 			"name":      name,
@@ -200,13 +223,13 @@ func TestConversion_CreatePublicReadPrivate(t *testing.T) {
 		},
 	}
 
-	resp, body := doConversionRequest(t, "POST", conversionPublicBaseURL+fmt.Sprintf("/apis/test.orlop.thetechnick.ninja/v1/namespaces/%s/objects", namespace), createPayload)
+	resp, body := doConversionRequest(t, "POST", conversionPublicBaseURL+fmt.Sprintf("/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/%s/objects", namespace), createPayload)
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("Failed to create via public API: %d: %s", resp.StatusCode, body)
 	}
 
 	// Read via PRIVATE API
-	resp, body = doConversionRequest(t, "GET", conversionPrivateBaseURL+fmt.Sprintf("/apis/test.orlop.thetechnick.ninja/v1/namespaces/%s/objects/%s", namespace, name), nil)
+	resp, body = doConversionRequest(t, "GET", conversionPrivateBaseURL+fmt.Sprintf("/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/%s/objects/%s", namespace, name), nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("Failed to read via private API: %d: %s", resp.StatusCode, body)
 	}
@@ -232,7 +255,7 @@ func TestConversion_CreatePublicReadPrivate(t *testing.T) {
 	}
 
 	// Cleanup
-	doConversionRequest(t, "DELETE", conversionPrivateBaseURL+fmt.Sprintf("/apis/test.orlop.thetechnick.ninja/v1/namespaces/%s/objects/%s", namespace, name), nil)
+	doConversionRequest(t, "DELETE", conversionPrivateBaseURL+fmt.Sprintf("/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/%s/objects/%s", namespace, name), nil)
 }
 
 func TestConversion_ListFromBothAPIs(t *testing.T) {
@@ -241,7 +264,7 @@ func TestConversion_ListFromBothAPIs(t *testing.T) {
 
 	// Create object via private API
 	privateObj := map[string]interface{}{
-		"apiVersion": "test.orlop.thetechnick.ninja/v1",
+		"apiVersion": "test.orlop.gcp.managed.openshift.io/v1",
 		"kind":       "Object",
 		"metadata": map[string]interface{}{
 			"name":      "list-test-private",
@@ -256,14 +279,14 @@ func TestConversion_ListFromBothAPIs(t *testing.T) {
 			},
 		},
 	}
-	resp, body := doConversionRequest(t, "POST", conversionPrivateBaseURL+fmt.Sprintf("/apis/test.orlop.thetechnick.ninja/v1/namespaces/%s/objects", namespace), privateObj)
+	resp, body := doConversionRequest(t, "POST", conversionPrivateBaseURL+fmt.Sprintf("/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/%s/objects", namespace), privateObj)
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("Failed to create via private API: %d: %s", resp.StatusCode, body)
 	}
 
 	// Create object via public API
 	publicObj := map[string]interface{}{
-		"apiVersion": "test.orlop.thetechnick.ninja/v1",
+		"apiVersion": "test.orlop.gcp.managed.openshift.io/v1",
 		"kind":       "Object",
 		"metadata": map[string]interface{}{
 			"name":      "list-test-public",
@@ -276,13 +299,13 @@ func TestConversion_ListFromBothAPIs(t *testing.T) {
 			},
 		},
 	}
-	resp, body = doConversionRequest(t, "POST", conversionPublicBaseURL+fmt.Sprintf("/apis/test.orlop.thetechnick.ninja/v1/namespaces/%s/objects", namespace), publicObj)
+	resp, body = doConversionRequest(t, "POST", conversionPublicBaseURL+fmt.Sprintf("/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/%s/objects", namespace), publicObj)
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("Failed to create via public API: %d: %s", resp.StatusCode, body)
 	}
 
 	// List via PRIVATE API
-	resp, body = doConversionRequest(t, "GET", conversionPrivateBaseURL+fmt.Sprintf("/apis/test.orlop.thetechnick.ninja/v1/namespaces/%s/objects", namespace), nil)
+	resp, body = doConversionRequest(t, "GET", conversionPrivateBaseURL+fmt.Sprintf("/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/%s/objects", namespace), nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("Failed to list via private API: %d: %s", resp.StatusCode, body)
 	}
@@ -298,7 +321,7 @@ func TestConversion_ListFromBothAPIs(t *testing.T) {
 	}
 
 	// List via PUBLIC API
-	resp, body = doConversionRequest(t, "GET", conversionPublicBaseURL+fmt.Sprintf("/apis/test.orlop.thetechnick.ninja/v1/namespaces/%s/objects", namespace), nil)
+	resp, body = doConversionRequest(t, "GET", conversionPublicBaseURL+fmt.Sprintf("/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/%s/objects", namespace), nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("Failed to list via public API: %d: %s", resp.StatusCode, body)
 	}
@@ -328,8 +351,8 @@ func TestConversion_ListFromBothAPIs(t *testing.T) {
 	}
 
 	// Cleanup
-	doConversionRequest(t, "DELETE", conversionPrivateBaseURL+fmt.Sprintf("/apis/test.orlop.thetechnick.ninja/v1/namespaces/%s/objects/list-test-private", namespace), nil)
-	doConversionRequest(t, "DELETE", conversionPrivateBaseURL+fmt.Sprintf("/apis/test.orlop.thetechnick.ninja/v1/namespaces/%s/objects/list-test-public", namespace), nil)
+	doConversionRequest(t, "DELETE", conversionPrivateBaseURL+fmt.Sprintf("/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/%s/objects/list-test-private", namespace), nil)
+	doConversionRequest(t, "DELETE", conversionPrivateBaseURL+fmt.Sprintf("/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/%s/objects/list-test-public", namespace), nil)
 }
 
 func TestConversion_UpdateViaPublicPreservesInternal(t *testing.T) {
@@ -339,7 +362,7 @@ func TestConversion_UpdateViaPublicPreservesInternal(t *testing.T) {
 
 	// Create object via PRIVATE API with internal fields
 	createPayload := map[string]interface{}{
-		"apiVersion": "test.orlop.thetechnick.ninja/v1",
+		"apiVersion": "test.orlop.gcp.managed.openshift.io/v1",
 		"kind":       "Object",
 		"metadata": map[string]interface{}{
 			"name":      name,
@@ -355,7 +378,7 @@ func TestConversion_UpdateViaPublicPreservesInternal(t *testing.T) {
 		},
 	}
 
-	resp, body := doConversionRequest(t, "POST", conversionPrivateBaseURL+fmt.Sprintf("/apis/test.orlop.thetechnick.ninja/v1/namespaces/%s/objects", namespace), createPayload)
+	resp, body := doConversionRequest(t, "POST", conversionPrivateBaseURL+fmt.Sprintf("/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/%s/objects", namespace), createPayload)
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("Failed to create: %d: %s", resp.StatusCode, body)
 	}
@@ -366,7 +389,7 @@ func TestConversion_UpdateViaPublicPreservesInternal(t *testing.T) {
 
 	// Update via PUBLIC API (can only modify public fields)
 	updatePayload := map[string]interface{}{
-		"apiVersion": "test.orlop.thetechnick.ninja/v1",
+		"apiVersion": "test.orlop.gcp.managed.openshift.io/v1",
 		"kind":       "Object",
 		"metadata": map[string]interface{}{
 			"name":            name,
@@ -381,13 +404,13 @@ func TestConversion_UpdateViaPublicPreservesInternal(t *testing.T) {
 		},
 	}
 
-	resp, body = doConversionRequest(t, "PUT", conversionPublicBaseURL+fmt.Sprintf("/apis/test.orlop.thetechnick.ninja/v1/namespaces/%s/objects/%s", namespace, name), updatePayload)
+	resp, body = doConversionRequest(t, "PUT", conversionPublicBaseURL+fmt.Sprintf("/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/%s/objects/%s", namespace, name), updatePayload)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("Failed to update via public API: %d: %s", resp.StatusCode, body)
 	}
 
 	// Read via PRIVATE API to verify internal fields were preserved
-	resp, body = doConversionRequest(t, "GET", conversionPrivateBaseURL+fmt.Sprintf("/apis/test.orlop.thetechnick.ninja/v1/namespaces/%s/objects/%s", namespace, name), nil)
+	resp, body = doConversionRequest(t, "GET", conversionPrivateBaseURL+fmt.Sprintf("/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/%s/objects/%s", namespace, name), nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("Failed to read: %d: %s", resp.StatusCode, body)
 	}
@@ -416,7 +439,7 @@ func TestConversion_UpdateViaPublicPreservesInternal(t *testing.T) {
 	}
 
 	// Cleanup
-	doConversionRequest(t, "DELETE", conversionPrivateBaseURL+fmt.Sprintf("/apis/test.orlop.thetechnick.ninja/v1/namespaces/%s/objects/%s", namespace, name), nil)
+	doConversionRequest(t, "DELETE", conversionPrivateBaseURL+fmt.Sprintf("/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/%s/objects/%s", namespace, name), nil)
 }
 
 func TestConversion_FilterPrivateMetadata(t *testing.T) {
@@ -426,21 +449,21 @@ func TestConversion_FilterPrivateMetadata(t *testing.T) {
 
 	// Create object via PRIVATE API with both public and private labels/annotations
 	createPayload := map[string]interface{}{
-		"apiVersion": "test.orlop.thetechnick.ninja/v1",
+		"apiVersion": "test.orlop.gcp.managed.openshift.io/v1",
 		"kind":       "Object",
 		"metadata": map[string]interface{}{
 			"name":      name,
 			"namespace": namespace,
 			"labels": map[string]interface{}{
 				"app":                                     "myapp",
-				"private.orlop.thetechnick.ninja/secret":  "hidden",
-				"private.orlop.thetechnick.ninja/owner":   "system",
+				"private.orlop.gcp.managed.openshift.io/secret":  "hidden",
+				"private.orlop.gcp.managed.openshift.io/owner":   "system",
 				"public-label":                            "visible",
 			},
 			"annotations": map[string]interface{}{
 				"description":                                  "public description",
-				"private.orlop.thetechnick.ninja/internal-id":  "12345",
-				"private.orlop.thetechnick.ninja/tracking-key": "xyz",
+				"private.orlop.gcp.managed.openshift.io/internal-id":  "12345",
+				"private.orlop.gcp.managed.openshift.io/tracking-key": "xyz",
 				"public-annotation":                            "visible",
 			},
 		},
@@ -453,17 +476,17 @@ func TestConversion_FilterPrivateMetadata(t *testing.T) {
 			},
 		},
 		"status": map[string]interface{}{
-			"conditions": []string{"Ready", "private.orlop.thetechnick.ninja/InternalCheck", "private.orlop.thetechnick.ninja/SecretStatus", "Available"},
+			"conditions": []string{"Ready", "private.orlop.gcp.managed.openshift.io/InternalCheck", "private.orlop.gcp.managed.openshift.io/SecretStatus", "Available"},
 		},
 	}
 
-	resp, body := doConversionRequest(t, "POST", conversionPrivateBaseURL+fmt.Sprintf("/apis/test.orlop.thetechnick.ninja/v1/namespaces/%s/objects", namespace), createPayload)
+	resp, body := doConversionRequest(t, "POST", conversionPrivateBaseURL+fmt.Sprintf("/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/%s/objects", namespace), createPayload)
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("Failed to create via private API: %d: %s", resp.StatusCode, body)
 	}
 
 	// Read via PUBLIC API
-	resp, body = doConversionRequest(t, "GET", conversionPublicBaseURL+fmt.Sprintf("/apis/test.orlop.thetechnick.ninja/v1/namespaces/%s/objects/%s", namespace, name), nil)
+	resp, body = doConversionRequest(t, "GET", conversionPublicBaseURL+fmt.Sprintf("/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/%s/objects/%s", namespace, name), nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("Failed to read via public API: %d: %s", resp.StatusCode, body)
 	}
@@ -477,11 +500,11 @@ func TestConversion_FilterPrivateMetadata(t *testing.T) {
 
 	// Check labels - private ones should be filtered
 	labels := metadata["labels"].(map[string]interface{})
-	if _, exists := labels["private.orlop.thetechnick.ninja/secret"]; exists {
-		t.Error("Private label 'private.orlop.thetechnick.ninja/secret' should be filtered in public API")
+	if _, exists := labels["private.orlop.gcp.managed.openshift.io/secret"]; exists {
+		t.Error("Private label 'private.orlop.gcp.managed.openshift.io/secret' should be filtered in public API")
 	}
-	if _, exists := labels["private.orlop.thetechnick.ninja/owner"]; exists {
-		t.Error("Private label 'private.orlop.thetechnick.ninja/owner' should be filtered in public API")
+	if _, exists := labels["private.orlop.gcp.managed.openshift.io/owner"]; exists {
+		t.Error("Private label 'private.orlop.gcp.managed.openshift.io/owner' should be filtered in public API")
 	}
 	if labels["app"] != "myapp" {
 		t.Errorf("Public label 'app' should be present, got %v", labels["app"])
@@ -492,11 +515,11 @@ func TestConversion_FilterPrivateMetadata(t *testing.T) {
 
 	// Check annotations - private ones should be filtered
 	annotations := metadata["annotations"].(map[string]interface{})
-	if _, exists := annotations["private.orlop.thetechnick.ninja/internal-id"]; exists {
-		t.Error("Private annotation 'private.orlop.thetechnick.ninja/internal-id' should be filtered in public API")
+	if _, exists := annotations["private.orlop.gcp.managed.openshift.io/internal-id"]; exists {
+		t.Error("Private annotation 'private.orlop.gcp.managed.openshift.io/internal-id' should be filtered in public API")
 	}
-	if _, exists := annotations["private.orlop.thetechnick.ninja/tracking-key"]; exists {
-		t.Error("Private annotation 'private.orlop.thetechnick.ninja/tracking-key' should be filtered in public API")
+	if _, exists := annotations["private.orlop.gcp.managed.openshift.io/tracking-key"]; exists {
+		t.Error("Private annotation 'private.orlop.gcp.managed.openshift.io/tracking-key' should be filtered in public API")
 	}
 	if annotations["description"] != "public description" {
 		t.Errorf("Public annotation 'description' should be present, got %v", annotations["description"])
@@ -529,7 +552,7 @@ func TestConversion_FilterPrivateMetadata(t *testing.T) {
 		if ct == "Available" {
 			hasAvailable = true
 		}
-		if strings.HasPrefix(ct, "private.orlop.thetechnick.ninja/") {
+		if strings.HasPrefix(ct, "private.orlop.gcp.managed.openshift.io/") {
 			t.Errorf("Private condition '%s' should be filtered in public API", ct)
 		}
 	}
@@ -542,7 +565,7 @@ func TestConversion_FilterPrivateMetadata(t *testing.T) {
 	}
 
 	// Read via PRIVATE API to verify original data is preserved
-	resp, body = doConversionRequest(t, "GET", conversionPrivateBaseURL+fmt.Sprintf("/apis/test.orlop.thetechnick.ninja/v1/namespaces/%s/objects/%s", namespace, name), nil)
+	resp, body = doConversionRequest(t, "GET", conversionPrivateBaseURL+fmt.Sprintf("/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/%s/objects/%s", namespace, name), nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("Failed to read via private API: %d: %s", resp.StatusCode, body)
 	}
@@ -555,10 +578,10 @@ func TestConversion_FilterPrivateMetadata(t *testing.T) {
 	privateAnnotations := privateMetadata["annotations"].(map[string]interface{})
 
 	// Private API should have all labels and annotations
-	if _, exists := privateLabels["private.orlop.thetechnick.ninja/secret"]; !exists {
+	if _, exists := privateLabels["private.orlop.gcp.managed.openshift.io/secret"]; !exists {
 		t.Error("Private label should be present in private API")
 	}
-	if _, exists := privateAnnotations["private.orlop.thetechnick.ninja/internal-id"]; !exists {
+	if _, exists := privateAnnotations["private.orlop.gcp.managed.openshift.io/internal-id"]; !exists {
 		t.Error("Private annotation should be present in private API")
 	}
 
@@ -573,7 +596,7 @@ func TestConversion_FilterPrivateMetadata(t *testing.T) {
 	}
 
 	// Cleanup
-	doConversionRequest(t, "DELETE", conversionPrivateBaseURL+fmt.Sprintf("/apis/test.orlop.thetechnick.ninja/v1/namespaces/%s/objects/%s", namespace, name), nil)
+	doConversionRequest(t, "DELETE", conversionPrivateBaseURL+fmt.Sprintf("/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/%s/objects/%s", namespace, name), nil)
 }
 
 func doConversionRequest(t *testing.T, method, url string, body interface{}) (*http.Response, string) {
@@ -592,7 +615,10 @@ func doConversionRequest(t *testing.T, method, url string, body interface{}) (*h
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+		Timeout:   10 * time.Second,
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatal(err)

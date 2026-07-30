@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: platform-api-server
+  namespace: gecko-system
+  labels:
+    app: platform-api-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: platform-api-server
+  template:
+    metadata:
+      labels:
+        app: platform-api-server
+    spec:
+      serviceAccountName: platform-api-server
+      containers:
+        - name: platform-api-server
+          image: platform-api-server:latest
+          args:
+            - --private-port=8443
+            - --public-port=8081
+            - --enable-public-api=true
+            - --tls-cert-file=/etc/tls/tls.crt
+            - --tls-key-file=/etc/tls/tls.key
+          ports:
+            - name: https
+              containerPort: 8443
+              protocol: TCP
+            - name: public
+              containerPort: 8081
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: tls
+              mountPath: /etc/tls
+              readOnly: true
+      volumes:
+        - name: tls
+          secret:
+            secretName: platform-api-server-tls

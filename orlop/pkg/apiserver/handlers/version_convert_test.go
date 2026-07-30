@@ -11,8 +11,8 @@ import (
 )
 
 var (
-	gvkV1 = schema.GroupVersionKind{Group: "test.orlop.thetechnick.ninja", Version: "v1", Kind: "Object"}
-	gvkV2 = schema.GroupVersionKind{Group: "test.orlop.thetechnick.ninja", Version: "v2", Kind: "Object"}
+	gvkV1 = schema.GroupVersionKind{Group: "test.orlop.gcp.managed.openshift.io", Version: "v1", Kind: "Object"}
+	gvkV2 = schema.GroupVersionKind{Group: "test.orlop.gcp.managed.openshift.io", Version: "v2", Kind: "Object"}
 )
 
 func testScheme() *runtime.Scheme {

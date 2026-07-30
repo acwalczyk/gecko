@@ -17,7 +17,7 @@ func TestPagination(t *testing.T) {
 	// Create 10 test objects for pagination
 	for i := 0; i < 10; i++ {
 		obj := map[string]interface{}{
-			"apiVersion": "test.orlop.thetechnick.ninja/v1",
+			"apiVersion": "test.orlop.gcp.managed.openshift.io/v1",
 			"kind":       "Object",
 			"metadata": map[string]interface{}{
 				"name":      fmt.Sprintf("page-test-%02d", i),
@@ -34,27 +34,35 @@ func TestPagination(t *testing.T) {
 		}
 
 		objJSON, _ := json.Marshal(obj)
-		resp, err := http.Post(
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/"+namespace+"/objects",
+		resp, err := insecureClient.Post(
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects",
 			"application/json",
 			bytes.NewBuffer(objJSON),
 		)
 		if err != nil {
 			t.Fatalf("Failed to create object: %v", err)
 		}
+		if resp.StatusCode >= 300 {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			t.Fatalf("Failed to create object %d: %s %s", i, resp.Status, string(body))
+		}
 		resp.Body.Close()
 	}
 
 	t.Run("List with limit", func(t *testing.T) {
 		// List with limit=3
-		resp, err := http.Get(baseURL + "/apis/test.orlop.thetechnick.ninja/v1/namespaces/" + namespace + "/objects?limit=3")
+		resp, err := insecureClient.Get(baseURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects?limit=3")
 		if err != nil {
 			t.Fatalf("GET request failed: %v", err)
 		}
 		defer resp.Body.Close()
 
-		var list map[string]interface{}
 		bodyBytes, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("List request failed: %s %s", resp.Status, string(bodyBytes))
+		}
+		var list map[string]interface{}
 		json.Unmarshal(bodyBytes, &list)
 
 		items := list["items"].([]interface{})
@@ -83,12 +91,12 @@ func TestPagination(t *testing.T) {
 
 		for {
 			pageCount++
-			url := baseURL + "/apis/test.orlop.thetechnick.ninja/v1/namespaces/" + namespace + "/objects?limit=3"
+			url := baseURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects?limit=3"
 			if continueToken != "" {
 				url += "&continue=" + continueToken
 			}
 
-			resp, err := http.Get(url)
+			resp, err := insecureClient.Get(url)
 			if err != nil {
 				t.Fatalf("GET request failed: %v", err)
 			}
@@ -131,10 +139,10 @@ func TestPagination(t *testing.T) {
 		name := fmt.Sprintf("page-test-%02d", i)
 		req, _ := http.NewRequest(
 			"DELETE",
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/"+namespace+"/objects/"+name,
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects/"+name,
 			nil,
 		)
-		resp, _ := http.DefaultClient.Do(req)
+		resp, _ := insecureClient.Do(req)
 		if resp != nil {
 			resp.Body.Close()
 		}

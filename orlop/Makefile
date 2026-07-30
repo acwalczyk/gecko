@@ -4,6 +4,19 @@ generate:
 	@go run ./cmd/orlop-gen
 	@echo "Running controller-gen for public APIs..."
 	@controller-gen object:headerFile=hack/boilerplate.go.txt paths="./apis/public/..."
+	@echo "Generating OpenAPI definitions..."
+	@go run k8s.io/kube-openapi/cmd/openapi-gen \
+		--output-file zz_generated.openapi.go \
+		--go-header-file hack/boilerplate.go.txt \
+		--output-dir pkg/generated/openapi \
+		--output-pkg github.com/openshift-online/gecko/orlop/pkg/generated/openapi \
+		--report-filename /dev/null \
+		k8s.io/apimachinery/pkg/apis/meta/v1 \
+		k8s.io/apimachinery/pkg/runtime \
+		k8s.io/apimachinery/pkg/version \
+		k8s.io/apimachinery/pkg/api/resource \
+		github.com/openshift-online/gecko/orlop/apis/private/test/v1 \
+		github.com/openshift-online/gecko/orlop/apis/public/test/v1
 	@echo "Done!"
 
 .PHONY: clean

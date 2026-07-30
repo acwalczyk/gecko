@@ -1,5 +1,5 @@
 // +kubebuilder:object:generate=true
-// +groupName=test.orlop.thetechnick.ninja
+// +groupName=test.orlop.gcp.managed.openshift.io
 // +orlop:public
 package v2
 
@@ -11,7 +11,7 @@ import (
 
 var (
 	// GroupVersion is group version used to register these objects.
-	GroupVersion = schema.GroupVersion{Group: "test.orlop.thetechnick.ninja", Version: "v2"}
+	GroupVersion = schema.GroupVersion{Group: "test.orlop.gcp.managed.openshift.io", Version: "v2"}
 
 	// SchemeBuilder is used to add go types to the GroupVersionKind scheme.
 	SchemeBuilder runtime.SchemeBuilder

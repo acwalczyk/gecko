@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: platform-api-server
+  namespace: gecko-system
+spec:
+  selector:
+    app: platform-api-server
+  ports:
+    - name: https
+      port: 443
+      targetPort: https
+      protocol: TCP
+    - name: public
+      port: 8081
+      targetPort: public
+      protocol: TCP

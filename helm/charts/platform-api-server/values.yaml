@@ -9,12 +9,23 @@ image:
 nameOverride: ""
 fullnameOverride: ""
 
-service:
-  privatePort: 8080
-  publicPort: 8081
+apiService:
+  group: gcp.managed.openshift.io
+  version: v1
+  groupPriorityMinimum: 1000
+  versionPriority: 15
+
+tls:
+  port: 8443
+  certManager:
+    enabled: true
+    issuerRef:
+      name: selfsigned
+      kind: ClusterIssuer
 
 publicApi:
   enabled: true
+  port: 8081
 
 corsOrigins: []
 
@@ -53,7 +64,7 @@ strategy:
 
 podDisruptionBudget:
   enabled: true
-  maxUnavailable: 1
+  minAvailable: 1
 
 revisionHistoryLimit: 10
 terminationGracePeriodSeconds: 30

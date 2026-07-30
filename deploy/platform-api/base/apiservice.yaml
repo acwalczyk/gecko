@@ -1,0 +1,14 @@
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: v1.gcp.managed.openshift.io
+  annotations:
+    cert-manager.io/inject-ca-from: gecko-system/platform-api-server
+spec:
+  group: gcp.managed.openshift.io
+  version: v1
+  service:
+    name: platform-api-server
+    namespace: gecko-system
+  groupPriorityMinimum: 1000
+  versionPriority: 15

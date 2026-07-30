@@ -1,0 +1,14 @@
+FROM golang:1.26 AS builder
+WORKDIR /workspace
+COPY orlop/go.mod orlop/go.sum orlop/
+COPY platform-api/go.mod platform-api/go.sum platform-api/
+RUN cd platform-api && go mod download
+COPY orlop/ orlop/
+COPY platform-api/ platform-api/
+RUN cd platform-api && CGO_ENABLED=0 go build -o /platform-api-server ./cmd/platform-api-server
+
+FROM scratch
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=builder /platform-api-server /
+USER 65532:65532
+ENTRYPOINT ["/platform-api-server"]

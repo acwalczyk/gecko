@@ -74,4 +74,9 @@ Validate required values that must not remain as placeholders.
 {{- if not (trim (toString .Values.image.tag)) -}}
 {{- fail "image.tag must be set (e.g. --set image.tag=abc1234)" -}}
 {{- end -}}
+{{- if .Values.alloydb.enabled -}}
+{{- if not (or .Values.alloydb.auth.password .Values.alloydb.auth.existingSecret) -}}
+{{- fail "alloydb: either auth.password or auth.existingSecret must be set when alloydb is enabled" -}}
+{{- end -}}
+{{- end -}}
 {{- end }}

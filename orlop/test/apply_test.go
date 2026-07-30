@@ -2,6 +2,7 @@ package test
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -10,12 +11,16 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+var applyClient = &http.Client{
+	Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+}
+
 // TestServerSideApply tests basic server-side apply functionality
 func TestServerSideApply(t *testing.T) {
 	t.Run("Create via Apply", func(t *testing.T) {
 		// Apply configuration to create a new object
 		applyConfig := `
-apiVersion: test.orlop.thetechnick.ninja/v1
+apiVersion: test.orlop.gcp.managed.openshift.io/v1
 kind: Object
 metadata:
   name: apply-test-create
@@ -24,12 +29,12 @@ spec:
 `
 		req, _ := http.NewRequest(
 			"PATCH",
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/default/objects/apply-test-create?fieldManager=test-controller",
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/default/objects/apply-test-create?fieldManager=test-controller",
 			bytes.NewBufferString(applyConfig),
 		)
 		req.Header.Set("Content-Type", "application/apply-patch+yaml")
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := applyClient.Do(req)
 		if err != nil {
 			t.Fatalf("Apply request failed: %v", err)
 		}
@@ -61,7 +66,7 @@ spec:
 	t.Run("Update via Apply", func(t *testing.T) {
 		// Create initial object
 		createBody := map[string]interface{}{
-			"apiVersion": "test.orlop.thetechnick.ninja/v1",
+			"apiVersion": "test.orlop.gcp.managed.openshift.io/v1",
 			"kind":       "Object",
 			"metadata": map[string]interface{}{
 				"name": "apply-test-update",
@@ -76,11 +81,12 @@ spec:
 			},
 		}
 		createJSON, _ := json.Marshal(createBody)
-		createResp, err := http.Post(
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/default/objects",
-			"application/json",
+		createReq, _ := http.NewRequest("POST",
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/default/objects",
 			bytes.NewBuffer(createJSON),
 		)
+		createReq.Header.Set("Content-Type", "application/json")
+		createResp, err := applyClient.Do(createReq)
 		if err != nil {
 			t.Fatalf("Create request failed: %v", err)
 		}
@@ -91,19 +97,23 @@ spec:
 			t.Fatalf("Expected 201 Created, got %d: %s", createResp.StatusCode, body)
 		}
 
-		// Apply update
+		// Apply update — SSA requires full object with apiVersion/kind/metadata
 		applyConfig := `
+apiVersion: test.orlop.gcp.managed.openshift.io/v1
+kind: Object
+metadata:
+  name: apply-test-update
 spec:
   publicField: updated-via-apply
 `
 		req, _ := http.NewRequest(
 			"PATCH",
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/default/objects/apply-test-update?fieldManager=test-controller&force=true",
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/default/objects/apply-test-update?fieldManager=test-controller&force=true",
 			bytes.NewBufferString(applyConfig),
 		)
 		req.Header.Set("Content-Type", "application/apply-patch+yaml")
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := applyClient.Do(req)
 		if err != nil {
 			t.Fatalf("Apply request failed: %v", err)
 		}
@@ -126,9 +136,10 @@ spec:
 	})
 
 	t.Run("JSON Apply Configuration", func(t *testing.T) {
-		// Test with JSON instead of YAML
+		// Test with JSON body via SSA. GenericAPIServer only supports
+		// application/apply-patch+yaml for SSA (YAML is a superset of JSON).
 		applyConfig := map[string]interface{}{
-			"apiVersion": "test.orlop.thetechnick.ninja/v1",
+			"apiVersion": "test.orlop.gcp.managed.openshift.io/v1",
 			"kind":       "Object",
 			"metadata": map[string]interface{}{
 				"name": "apply-test-json",
@@ -141,12 +152,12 @@ spec:
 
 		req, _ := http.NewRequest(
 			"PATCH",
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/default/objects/apply-test-json?fieldManager=json-controller",
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/default/objects/apply-test-json?fieldManager=json-controller",
 			bytes.NewBuffer(applyJSON),
 		)
-		req.Header.Set("Content-Type", "application/apply-patch+json")
+		req.Header.Set("Content-Type", "application/apply-patch+yaml")
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := applyClient.Do(req)
 		if err != nil {
 			t.Fatalf("Apply request failed: %v", err)
 		}
@@ -163,26 +174,31 @@ spec:
 func TestServerSideApply_FieldManager(t *testing.T) {
 	t.Run("Missing fieldManager returns 400", func(t *testing.T) {
 		applyConfig := `
+apiVersion: test.orlop.gcp.managed.openshift.io/v1
+kind: Object
+metadata:
+  name: test-obj
 spec:
   publicField: value
 `
 		req, _ := http.NewRequest(
 			"PATCH",
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/default/objects/test-obj",
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/default/objects/test-obj",
 			bytes.NewBufferString(applyConfig),
 		)
 		req.Header.Set("Content-Type", "application/apply-patch+yaml")
 		// Note: No fieldManager query parameter
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := applyClient.Do(req)
 		if err != nil {
 			t.Fatalf("Apply request failed: %v", err)
 		}
 		defer resp.Body.Close()
 
-		if resp.StatusCode != http.StatusBadRequest {
+		// GenericAPIServer returns 422 for missing fieldManager
+		if resp.StatusCode != http.StatusUnprocessableEntity {
 			body, _ := io.ReadAll(resp.Body)
-			t.Errorf("Expected 400 Bad Request for missing fieldManager, got %d: %s", resp.StatusCode, body)
+			t.Errorf("Expected 422 Unprocessable Entity for missing fieldManager, got %d: %s", resp.StatusCode, body)
 		}
 	})
 
@@ -190,7 +206,7 @@ spec:
 		// Create object with controller-a
 		// Note: Must include all required fields to avoid owning nested structure
 		applyConfig1 := `
-apiVersion: test.orlop.thetechnick.ninja/v1
+apiVersion: test.orlop.gcp.managed.openshift.io/v1
 kind: Object
 metadata:
   name: multi-manager-test
@@ -203,12 +219,12 @@ spec:
 `
 		req1, _ := http.NewRequest(
 			"PATCH",
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/default/objects/multi-manager-test?fieldManager=controller-a",
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/default/objects/multi-manager-test?fieldManager=controller-a",
 			bytes.NewBufferString(applyConfig1),
 		)
 		req1.Header.Set("Content-Type", "application/apply-patch+yaml")
 
-		resp1, err := http.DefaultClient.Do(req1)
+		resp1, err := applyClient.Do(req1)
 		if err != nil {
 			t.Fatalf("First apply failed: %v", err)
 		}
@@ -221,7 +237,7 @@ spec:
 		// Apply with controller-b managing nested.publicField field
 		// Use complete spec with all required fields to avoid clearing other fields
 		applyConfig2 := `
-apiVersion: test.orlop.thetechnick.ninja/v1
+apiVersion: test.orlop.gcp.managed.openshift.io/v1
 kind: Object
 metadata:
   name: multi-manager-test
@@ -234,12 +250,12 @@ spec:
 `
 		req2, _ := http.NewRequest(
 			"PATCH",
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/default/objects/multi-manager-test?fieldManager=controller-b&force=true",
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/default/objects/multi-manager-test?fieldManager=controller-b&force=true",
 			bytes.NewBufferString(applyConfig2),
 		)
 		req2.Header.Set("Content-Type", "application/apply-patch+yaml")
 
-		resp2, err := http.DefaultClient.Do(req2)
+		resp2, err := applyClient.Do(req2)
 		if err != nil {
 			t.Fatalf("Second apply failed: %v", err)
 		}
@@ -273,7 +289,7 @@ func TestServerSideApply_ConflictDetection(t *testing.T) {
 	t.Run("Conflict detected without force", func(t *testing.T) {
 		// Create object with controller-a owning publicField
 		applyConfig1 := `
-apiVersion: test.orlop.thetechnick.ninja/v1
+apiVersion: test.orlop.gcp.managed.openshift.io/v1
 kind: Object
 metadata:
   name: conflict-test
@@ -282,27 +298,31 @@ spec:
 `
 		req1, _ := http.NewRequest(
 			"PATCH",
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/default/objects/conflict-test?fieldManager=controller-a",
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/default/objects/conflict-test?fieldManager=controller-a",
 			bytes.NewBufferString(applyConfig1),
 		)
 		req1.Header.Set("Content-Type", "application/apply-patch+yaml")
 
-		resp1, _ := http.DefaultClient.Do(req1)
+		resp1, _ := applyClient.Do(req1)
 		resp1.Body.Close()
 
 		// Try to apply with controller-b managing the same field (should conflict)
 		applyConfig2 := `
+apiVersion: test.orlop.gcp.managed.openshift.io/v1
+kind: Object
+metadata:
+  name: conflict-test
 spec:
   publicField: trying-to-own
 `
 		req2, _ := http.NewRequest(
 			"PATCH",
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/default/objects/conflict-test?fieldManager=controller-b&force=false",
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/default/objects/conflict-test?fieldManager=controller-b&force=false",
 			bytes.NewBufferString(applyConfig2),
 		)
 		req2.Header.Set("Content-Type", "application/apply-patch+yaml")
 
-		resp2, err := http.DefaultClient.Do(req2)
+		resp2, err := applyClient.Do(req2)
 		if err != nil {
 			t.Fatalf("Second apply request failed: %v", err)
 		}
@@ -318,7 +338,7 @@ spec:
 	t.Run("Force takeover succeeds", func(t *testing.T) {
 		// Create object with controller-a
 		applyConfig1 := `
-apiVersion: test.orlop.thetechnick.ninja/v1
+apiVersion: test.orlop.gcp.managed.openshift.io/v1
 kind: Object
 metadata:
   name: force-test
@@ -327,27 +347,31 @@ spec:
 `
 		req1, _ := http.NewRequest(
 			"PATCH",
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/default/objects/force-test?fieldManager=controller-a",
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/default/objects/force-test?fieldManager=controller-a",
 			bytes.NewBufferString(applyConfig1),
 		)
 		req1.Header.Set("Content-Type", "application/apply-patch+yaml")
 
-		resp1, _ := http.DefaultClient.Do(req1)
+		resp1, _ := applyClient.Do(req1)
 		resp1.Body.Close()
 
 		// Force takeover with controller-b
 		applyConfig2 := `
+apiVersion: test.orlop.gcp.managed.openshift.io/v1
+kind: Object
+metadata:
+  name: force-test
 spec:
   publicField: forced-takeover
 `
 		req2, _ := http.NewRequest(
 			"PATCH",
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/default/objects/force-test?fieldManager=controller-b&force=true",
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/default/objects/force-test?fieldManager=controller-b&force=true",
 			bytes.NewBufferString(applyConfig2),
 		)
 		req2.Header.Set("Content-Type", "application/apply-patch+yaml")
 
-		resp2, err := http.DefaultClient.Do(req2)
+		resp2, err := applyClient.Do(req2)
 		if err != nil {
 			t.Fatalf("Force apply request failed: %v", err)
 		}
@@ -376,7 +400,7 @@ func TestServerSideApply_ManagedFields(t *testing.T) {
 	t.Run("ManagedFields tracking", func(t *testing.T) {
 		// Create object via apply
 		applyConfig := `
-apiVersion: test.orlop.thetechnick.ninja/v1
+apiVersion: test.orlop.gcp.managed.openshift.io/v1
 kind: Object
 metadata:
   name: managed-fields-test
@@ -385,12 +409,12 @@ spec:
 `
 		req, _ := http.NewRequest(
 			"PATCH",
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/default/objects/managed-fields-test?fieldManager=my-controller",
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/default/objects/managed-fields-test?fieldManager=my-controller",
 			bytes.NewBufferString(applyConfig),
 		)
 		req.Header.Set("Content-Type", "application/apply-patch+yaml")
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := applyClient.Do(req)
 		if err != nil {
 			t.Fatalf("Apply request failed: %v", err)
 		}
@@ -442,7 +466,7 @@ spec:
 	t.Run("Multiple managers in managedFields", func(t *testing.T) {
 		// Apply with first manager
 		applyConfig1 := `
-apiVersion: test.orlop.thetechnick.ninja/v1
+apiVersion: test.orlop.gcp.managed.openshift.io/v1
 kind: Object
 metadata:
   name: multi-manager-fields
@@ -455,16 +479,16 @@ spec:
 `
 		req1, _ := http.NewRequest(
 			"PATCH",
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/default/objects/multi-manager-fields?fieldManager=manager-1",
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/default/objects/multi-manager-fields?fieldManager=manager-1",
 			bytes.NewBufferString(applyConfig1),
 		)
 		req1.Header.Set("Content-Type", "application/apply-patch+yaml")
-		resp1, _ := http.DefaultClient.Do(req1)
+		resp1, _ := applyClient.Do(req1)
 		resp1.Body.Close()
 
 		// Apply with second manager managing nested.publicField
 		applyConfig2 := `
-apiVersion: test.orlop.thetechnick.ninja/v1
+apiVersion: test.orlop.gcp.managed.openshift.io/v1
 kind: Object
 metadata:
   name: multi-manager-fields
@@ -477,12 +501,12 @@ spec:
 `
 		req2, _ := http.NewRequest(
 			"PATCH",
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/default/objects/multi-manager-fields?fieldManager=manager-2&force=true",
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/default/objects/multi-manager-fields?fieldManager=manager-2&force=true",
 			bytes.NewBufferString(applyConfig2),
 		)
 		req2.Header.Set("Content-Type", "application/apply-patch+yaml")
 
-		resp2, err := http.DefaultClient.Do(req2)
+		resp2, err := applyClient.Do(req2)
 		if err != nil {
 			t.Fatalf("Second apply failed: %v", err)
 		}
@@ -532,7 +556,7 @@ func TestServerSideApply_PartialApply(t *testing.T) {
 	t.Run("Partial apply preserves other fields", func(t *testing.T) {
 		// Create object with multiple fields via apply
 		applyConfig1 := `
-apiVersion: test.orlop.thetechnick.ninja/v1
+apiVersion: test.orlop.gcp.managed.openshift.io/v1
 kind: Object
 metadata:
   name: partial-apply-test
@@ -545,16 +569,16 @@ spec:
 `
 		req1, _ := http.NewRequest(
 			"PATCH",
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/default/objects/partial-apply-test?fieldManager=initial-controller",
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/default/objects/partial-apply-test?fieldManager=initial-controller",
 			bytes.NewBufferString(applyConfig1),
 		)
 		req1.Header.Set("Content-Type", "application/apply-patch+yaml")
-		resp1, _ := http.DefaultClient.Do(req1)
+		resp1, _ := applyClient.Do(req1)
 		resp1.Body.Close()
 
 		// Apply with different controller only updating nested field
 		applyConfig := `
-apiVersion: test.orlop.thetechnick.ninja/v1
+apiVersion: test.orlop.gcp.managed.openshift.io/v1
 kind: Object
 metadata:
   name: partial-apply-test
@@ -567,12 +591,12 @@ spec:
 `
 		req, _ := http.NewRequest(
 			"PATCH",
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/default/objects/partial-apply-test?fieldManager=partial-controller&force=true",
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/default/objects/partial-apply-test?fieldManager=partial-controller&force=true",
 			bytes.NewBufferString(applyConfig),
 		)
 		req.Header.Set("Content-Type", "application/apply-patch+yaml")
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := applyClient.Do(req)
 		if err != nil {
 			t.Fatalf("Apply request failed: %v", err)
 		}
@@ -610,7 +634,7 @@ spec:
 func TestServerSideApply_NotFound(t *testing.T) {
 	t.Run("Apply creates object if not found", func(t *testing.T) {
 		applyConfig := `
-apiVersion: test.orlop.thetechnick.ninja/v1
+apiVersion: test.orlop.gcp.managed.openshift.io/v1
 kind: Object
 metadata:
   name: apply-create-if-missing
@@ -619,12 +643,12 @@ spec:
 `
 		req, _ := http.NewRequest(
 			"PATCH",
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/default/objects/apply-create-if-missing?fieldManager=creator",
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/default/objects/apply-create-if-missing?fieldManager=creator",
 			bytes.NewBufferString(applyConfig),
 		)
 		req.Header.Set("Content-Type", "application/apply-patch+yaml")
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := applyClient.Do(req)
 		if err != nil {
 			t.Fatalf("Apply request failed: %v", err)
 		}
@@ -637,7 +661,8 @@ spec:
 		}
 
 		// Verify the object exists by getting it
-		getResp, err := http.Get(baseURL + "/apis/test.orlop.thetechnick.ninja/v1/namespaces/default/objects/apply-create-if-missing")
+		getReq, _ := http.NewRequest("GET", baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/default/objects/apply-create-if-missing", nil)
+		getResp, err := applyClient.Do(getReq)
 		if err != nil {
 			t.Fatalf("GET request failed: %v", err)
 		}

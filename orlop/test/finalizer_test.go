@@ -17,7 +17,7 @@ func TestFinalizerDeletion(t *testing.T) {
 
 		// Create object without finalizers
 		createBody := map[string]interface{}{
-			"apiVersion": "test.orlop.thetechnick.ninja/v1",
+			"apiVersion": "test.orlop.gcp.managed.openshift.io/v1",
 			"kind":       "Object",
 			"metadata": map[string]interface{}{
 				"name": name,
@@ -32,8 +32,8 @@ func TestFinalizerDeletion(t *testing.T) {
 			},
 		}
 		createJSON, _ := json.Marshal(createBody)
-		createResp, err := http.Post(
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/"+namespace+"/objects",
+		createResp, err := insecureClient.Post(
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects",
 			"application/json",
 			bytes.NewBuffer(createJSON),
 		)
@@ -50,10 +50,10 @@ func TestFinalizerDeletion(t *testing.T) {
 		// Delete object
 		req, _ := http.NewRequest(
 			"DELETE",
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/"+namespace+"/objects/"+name,
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects/"+name,
 			nil,
 		)
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := insecureClient.Do(req)
 		if err != nil {
 			t.Fatalf("Delete request failed: %v", err)
 		}
@@ -65,7 +65,7 @@ func TestFinalizerDeletion(t *testing.T) {
 		}
 
 		// Verify object is deleted
-		getResp, err := http.Get(baseURL + "/apis/test.orlop.thetechnick.ninja/v1/namespaces/" + namespace + "/objects/" + name)
+		getResp, err := insecureClient.Get(baseURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + name)
 		if err != nil {
 			t.Fatalf("Get request failed: %v", err)
 		}
@@ -82,13 +82,13 @@ func TestFinalizerDeletion(t *testing.T) {
 
 		// Create object with finalizers
 		createBody := map[string]interface{}{
-			"apiVersion": "test.orlop.thetechnick.ninja/v1",
+			"apiVersion": "test.orlop.gcp.managed.openshift.io/v1",
 			"kind":       "Object",
 			"metadata": map[string]interface{}{
 				"name": name,
 				"finalizers": []string{
-					"test.orlop.thetechnick.ninja/finalizer-1",
-					"test.orlop.thetechnick.ninja/finalizer-2",
+					"test.orlop.gcp.managed.openshift.io/finalizer-1",
+					"test.orlop.gcp.managed.openshift.io/finalizer-2",
 				},
 			},
 			"spec": map[string]interface{}{
@@ -101,8 +101,8 @@ func TestFinalizerDeletion(t *testing.T) {
 			},
 		}
 		createJSON, _ := json.Marshal(createBody)
-		createResp, err := http.Post(
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/"+namespace+"/objects",
+		createResp, err := insecureClient.Post(
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects",
 			"application/json",
 			bytes.NewBuffer(createJSON),
 		)
@@ -119,10 +119,10 @@ func TestFinalizerDeletion(t *testing.T) {
 		// Delete object (should set deletionTimestamp)
 		req, _ := http.NewRequest(
 			"DELETE",
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/"+namespace+"/objects/"+name,
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects/"+name,
 			nil,
 		)
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := insecureClient.Do(req)
 		if err != nil {
 			t.Fatalf("Delete request failed: %v", err)
 		}
@@ -150,7 +150,7 @@ func TestFinalizerDeletion(t *testing.T) {
 		}
 
 		// Verify object still exists (soft deleted)
-		getResp, err := http.Get(baseURL + "/apis/test.orlop.thetechnick.ninja/v1/namespaces/" + namespace + "/objects/" + name)
+		getResp, err := insecureClient.Get(baseURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + name)
 		if err != nil {
 			t.Fatalf("Get request failed: %v", err)
 		}
@@ -177,12 +177,12 @@ func TestFinalizerDeletion(t *testing.T) {
 
 		// Create object with one finalizer
 		createBody := map[string]interface{}{
-			"apiVersion": "test.orlop.thetechnick.ninja/v1",
+			"apiVersion": "test.orlop.gcp.managed.openshift.io/v1",
 			"kind":       "Object",
 			"metadata": map[string]interface{}{
 				"name": name,
 				"finalizers": []string{
-					"test.orlop.thetechnick.ninja/my-finalizer",
+					"test.orlop.gcp.managed.openshift.io/my-finalizer",
 				},
 			},
 			"spec": map[string]interface{}{
@@ -195,8 +195,8 @@ func TestFinalizerDeletion(t *testing.T) {
 			},
 		}
 		createJSON, _ := json.Marshal(createBody)
-		createResp, err := http.Post(
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/"+namespace+"/objects",
+		createResp, err := insecureClient.Post(
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects",
 			"application/json",
 			bytes.NewBuffer(createJSON),
 		)
@@ -212,17 +212,17 @@ func TestFinalizerDeletion(t *testing.T) {
 		// Soft delete (set deletionTimestamp)
 		req, _ := http.NewRequest(
 			"DELETE",
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/"+namespace+"/objects/"+name,
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects/"+name,
 			nil,
 		)
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := insecureClient.Do(req)
 		if err != nil {
 			t.Fatalf("Delete request failed: %v", err)
 		}
 		resp.Body.Close()
 
 		// Get the object to verify soft deletion
-		getResp, _ := http.Get(baseURL + "/apis/test.orlop.thetechnick.ninja/v1/namespaces/" + namespace + "/objects/" + name)
+		getResp, _ := insecureClient.Get(baseURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + name)
 		var softDeleted map[string]interface{}
 		json.NewDecoder(getResp.Body).Decode(&softDeleted)
 		getResp.Body.Close()
@@ -242,12 +242,12 @@ func TestFinalizerDeletion(t *testing.T) {
 		updateJSON, _ := json.Marshal(updateBody)
 		updateReq, _ := http.NewRequest(
 			"PUT",
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/"+namespace+"/objects/"+name,
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects/"+name,
 			bytes.NewBuffer(updateJSON),
 		)
 		updateReq.Header.Set("Content-Type", "application/json")
 
-		updateResp, err := http.DefaultClient.Do(updateReq)
+		updateResp, err := insecureClient.Do(updateReq)
 		if err != nil {
 			t.Fatalf("Update request failed: %v", err)
 		}
@@ -258,21 +258,22 @@ func TestFinalizerDeletion(t *testing.T) {
 			t.Fatalf("Expected 200 OK for finalizer removal, got %d: %s", updateResp.StatusCode, body)
 		}
 
-		// The response should be a Status object indicating deletion
+		// GenericAPIServer returns the updated object (not a Status) from PUT.
+		// The hard deletion happens internally but the response is the last state of the object.
 		var result map[string]interface{}
 		if err := json.NewDecoder(updateResp.Body).Decode(&result); err != nil {
 			t.Fatalf("Failed to decode response: %v", err)
 		}
 
-		if result["kind"] != "Status" {
-			t.Errorf("Expected Status response after finalizer removal, got %v", result["kind"])
+		if result["kind"] != "Object" {
+			t.Errorf("Expected Object response after finalizer removal update, got %v", result["kind"])
 		}
 
 		// Wait a moment for deletion to complete
 		time.Sleep(100 * time.Millisecond)
 
 		// Verify object is hard deleted
-		finalGetResp, err := http.Get(baseURL + "/apis/test.orlop.thetechnick.ninja/v1/namespaces/" + namespace + "/objects/" + name)
+		finalGetResp, err := insecureClient.Get(baseURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + name)
 		if err != nil {
 			t.Fatalf("Final get request failed: %v", err)
 		}
@@ -290,12 +291,12 @@ func TestFinalizerDeletion(t *testing.T) {
 
 		// Create object with finalizer
 		createBody := map[string]interface{}{
-			"apiVersion": "test.orlop.thetechnick.ninja/v1",
+			"apiVersion": "test.orlop.gcp.managed.openshift.io/v1",
 			"kind":       "Object",
 			"metadata": map[string]interface{}{
 				"name": name,
 				"finalizers": []string{
-					"test.orlop.thetechnick.ninja/finalizer",
+					"test.orlop.gcp.managed.openshift.io/finalizer",
 				},
 			},
 			"spec": map[string]interface{}{
@@ -308,8 +309,8 @@ func TestFinalizerDeletion(t *testing.T) {
 			},
 		}
 		createJSON, _ := json.Marshal(createBody)
-		createResp, err := http.Post(
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/"+namespace+"/objects",
+		createResp, err := insecureClient.Post(
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects",
 			"application/json",
 			bytes.NewBuffer(createJSON),
 		)
@@ -321,10 +322,10 @@ func TestFinalizerDeletion(t *testing.T) {
 		// First delete
 		req1, _ := http.NewRequest(
 			"DELETE",
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/"+namespace+"/objects/"+name,
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects/"+name,
 			nil,
 		)
-		resp1, err := http.DefaultClient.Do(req1)
+		resp1, err := insecureClient.Do(req1)
 		if err != nil {
 			t.Fatalf("First delete request failed: %v", err)
 		}
@@ -333,10 +334,10 @@ func TestFinalizerDeletion(t *testing.T) {
 		// Second delete (should still succeed but not change anything)
 		req2, _ := http.NewRequest(
 			"DELETE",
-			baseURL+"/apis/test.orlop.thetechnick.ninja/v1/namespaces/"+namespace+"/objects/"+name,
+			baseURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects/"+name,
 			nil,
 		)
-		resp2, err := http.DefaultClient.Do(req2)
+		resp2, err := insecureClient.Do(req2)
 		if err != nil {
 			t.Fatalf("Second delete request failed: %v", err)
 		}
@@ -348,7 +349,7 @@ func TestFinalizerDeletion(t *testing.T) {
 		}
 
 		// Object should still exist with deletionTimestamp
-		getResp, _ := http.Get(baseURL + "/apis/test.orlop.thetechnick.ninja/v1/namespaces/" + namespace + "/objects/" + name)
+		getResp, _ := insecureClient.Get(baseURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + name)
 		defer getResp.Body.Close()
 
 		if getResp.StatusCode != http.StatusOK {
