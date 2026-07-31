@@ -277,8 +277,38 @@ func (s *SpannerStore) List(ctx context.Context, opts storage.ListOptions) (clie
 		return nil, err
 	}
 
-	query, params := s.buildListQuery(opts, filterValue)
+	qb := NewQueryBuilder(s.tableName, "namespace", "name", "resource_version", "data")
 
+	if s.contextFilterKey != nil {
+		qb.WhereContextFilter(filterValue)
+	}
+	qb.WhereNamespace(opts.Namespace)
+
+	if opts.LabelSelector != "" {
+		selector, err := labels.Parse(opts.LabelSelector)
+		if err != nil {
+			return nil, err
+		}
+		qb.WhereLabelSelector(selector)
+	}
+
+	qb.WhereShardSelector(opts.ShardSelector)
+	qb.WhereFieldFilters(opts.FieldFilters)
+
+	if opts.Continue != "" {
+		token, err := storage.DecodeContinueToken(opts.Continue)
+		if err == nil {
+			qb.WhereContinueToken(token)
+		}
+	}
+
+	qb.OrderBy("namespace", "name")
+
+	if opts.Limit > 0 {
+		qb.Limit(opts.Limit + 1)
+	}
+
+	query, params := qb.Build()
 	stmt := spanner.Statement{SQL: query, Params: params}
 	iter := s.client.Single().Query(ctx, stmt)
 	defer iter.Stop()
@@ -319,33 +349,6 @@ func (s *SpannerStore) List(ctx context.Context, opts storage.ListOptions) (clie
 			return nil, err
 		}
 
-		// Client-side label filtering
-		if opts.LabelSelector != "" {
-			selector, err := labels.Parse(opts.LabelSelector)
-			if err != nil {
-				return nil, err
-			}
-			if !selector.Matches(labels.Set(obj.GetLabels())) {
-				rowCount--
-				continue
-			}
-		}
-
-		// Client-side shard filtering
-		if opts.ShardSelector != nil {
-			matches, err := storage.MatchesShard(obj, opts.ShardSelector)
-			if err != nil || !matches {
-				rowCount--
-				continue
-			}
-		}
-
-		// Client-side field filtering
-		if len(opts.FieldFilters) > 0 && !matchesFieldFilters(obj, opts.FieldFilters) {
-			rowCount--
-			continue
-		}
-
 		items = append(items, *obj)
 		if rv > maxRV {
 			maxRV = rv
@@ -380,47 +383,6 @@ func (s *SpannerStore) List(ctx context.Context, opts storage.ListOptions) (clie
 	}
 
 	return list, nil
-}
-
-func (s *SpannerStore) buildListQuery(opts storage.ListOptions, filterValue string) (string, map[string]interface{}) {
-	params := map[string]interface{}{}
-	var conditions []string
-
-	if s.contextFilterKey != nil {
-		conditions = append(conditions, "context_filter = @contextFilter")
-		params["contextFilter"] = filterValue
-	}
-
-	if opts.Namespace != "" {
-		conditions = append(conditions, "namespace = @namespace")
-		params["namespace"] = opts.Namespace
-	}
-
-	if opts.Continue != "" {
-		token, err := storage.DecodeContinueToken(opts.Continue)
-		if err == nil {
-			conditions = append(conditions, "(namespace > @contNs OR (namespace = @contNs AND name > @contName))")
-			params["contNs"] = token.Namespace
-			params["contName"] = token.Name
-		}
-	}
-
-	whereClause := "1=1"
-	if len(conditions) > 0 {
-		whereClause = strings.Join(conditions, " AND ")
-	}
-
-	query := fmt.Sprintf(
-		"SELECT namespace, name, resource_version, data FROM %s WHERE %s ORDER BY namespace, name",
-		s.tableName, whereClause,
-	)
-
-	if opts.Limit > 0 {
-		query += " LIMIT @queryLimit"
-		params["queryLimit"] = opts.Limit + 1
-	}
-
-	return query, params
 }
 
 func (s *SpannerStore) Update(ctx context.Context, obj client.Object) error {

@@ -3,6 +3,7 @@ package spanner
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 
 	"cloud.google.com/go/spanner"
@@ -62,6 +63,8 @@ func NewStorageFactory(config StorageFactoryConfig) (func(string, *runtime.Schem
 		if err := ensureTable(ctx, adminClient, config.Database, resourcesTable, resourcesSchema(resourcesTable)); err != nil {
 			return nil, fmt.Errorf("failed to create resources table: %w", err)
 		}
+
+		ensureSearchIndex(ctx, adminClient, config.Database, resourcesTable)
 
 		if err := ensureTable(ctx, adminClient, config.Database, eventLogTable, eventLogSchema(eventLogTable)); err != nil {
 			return nil, fmt.Errorf("failed to create event log table: %w", err)
@@ -219,4 +222,40 @@ func ensureChangeStream(ctx context.Context, adminClient *database.DatabaseAdmin
 	}
 
 	return nil
+}
+
+func searchIndexSchema(tableName string) []string {
+	return []string{
+		fmt.Sprintf(`ALTER TABLE %s ADD COLUMN labels_tokens TOKENLIST AS (TOKENIZE_JSON_OBJECT(labels)) HIDDEN`, tableName),
+		fmt.Sprintf(`CREATE SEARCH INDEX idx_%s_labels ON %s(labels_tokens)`, tableName, tableName),
+	}
+}
+
+func ensureSearchIndex(ctx context.Context, adminClient *database.DatabaseAdminClient, dbPath string, tableName string) {
+	resp, err := adminClient.GetDatabaseDdl(ctx, &databasepb.GetDatabaseDdlRequest{
+		Database: dbPath,
+	})
+	if err != nil {
+		return
+	}
+
+	indexName := fmt.Sprintf("idx_%s_labels", tableName)
+	for _, stmt := range resp.Statements {
+		if strings.Contains(strings.ToLower(stmt), strings.ToLower("CREATE SEARCH INDEX "+indexName)) {
+			return
+		}
+	}
+
+	op, err := adminClient.UpdateDatabaseDdl(ctx, &databasepb.UpdateDatabaseDdlRequest{
+		Database:   dbPath,
+		Statements: searchIndexSchema(tableName),
+	})
+	if err != nil {
+		log.Printf("Search index not supported, label queries will work without index: %v", err)
+		return
+	}
+
+	if err := op.Wait(ctx); err != nil {
+		log.Printf("Search index creation failed, label queries will work without index: %v", err)
+	}
 }
