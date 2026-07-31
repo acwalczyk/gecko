@@ -204,10 +204,13 @@ func TestMain(m *testing.M) {
 	eventLogTable = "event_log_" + suffix
 	countersTable = "counters_" + suffix
 
+	changeStreamName := "cs_" + eventLogTable
+
 	var ddl []string
 	ddl = append(ddl, countersSchema(countersTable)...)
 	ddl = append(ddl, resourcesSchema(resourcesTable)...)
 	ddl = append(ddl, eventLogSchema(eventLogTable)...)
+	ddl = append(ddl, changeStreamSchema(changeStreamName, eventLogTable)...)
 
 	ddlOp, err := sharedDBAdmin.UpdateDatabaseDdl(ctx, &databasepb.UpdateDatabaseDdlRequest{
 		Database:   sharedDBPath,

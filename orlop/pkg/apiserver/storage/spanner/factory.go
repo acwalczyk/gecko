@@ -67,11 +67,17 @@ func NewStorageFactory(config StorageFactoryConfig) (func(string, *runtime.Schem
 			return nil, fmt.Errorf("failed to create event log table: %w", err)
 		}
 
+		changeStreamName := "cs_" + eventLogTable
+		if err := ensureChangeStream(ctx, adminClient, config.Database, changeStreamName, changeStreamSchema(changeStreamName, eventLogTable)); err != nil {
+			return nil, fmt.Errorf("failed to create change stream: %w", err)
+		}
+
 		broadcaster, err := NewSpannerBroadcaster(ctx, SpannerBroadcasterConfig{
-			Client:    client,
-			TableName: eventLogTable,
-			Scheme:    scheme,
-			GVK:       gvk,
+			Client:           client,
+			TableName:        eventLogTable,
+			ChangeStreamName: changeStreamName,
+			Scheme:           scheme,
+			GVK:              gvk,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create broadcaster: %w", err)
@@ -153,6 +159,45 @@ func ensureTable(ctx context.Context, adminClient *database.DatabaseAdminClient,
 
 	for _, stmt := range resp.Statements {
 		if strings.Contains(strings.ToLower(stmt), strings.ToLower("CREATE TABLE "+tableName)) {
+			return nil
+		}
+	}
+
+	op, err := adminClient.UpdateDatabaseDdl(ctx, &databasepb.UpdateDatabaseDdlRequest{
+		Database:   dbPath,
+		Statements: ddlStatements,
+	})
+	if err != nil {
+		st, ok := status.FromError(err)
+		if ok && st.Code() == codes.AlreadyExists {
+			return nil
+		}
+		return fmt.Errorf("failed to update DDL: %w", err)
+	}
+
+	if err := op.Wait(ctx); err != nil {
+		return fmt.Errorf("DDL update failed: %w", err)
+	}
+
+	return nil
+}
+
+func changeStreamSchema(streamName, tableName string) []string {
+	return []string{
+		fmt.Sprintf(`CREATE CHANGE STREAM %s FOR %s OPTIONS (value_capture_type = 'NEW_ROW', retention_period = '24h')`, streamName, tableName),
+	}
+}
+
+func ensureChangeStream(ctx context.Context, adminClient *database.DatabaseAdminClient, dbPath string, streamName string, ddlStatements []string) error {
+	resp, err := adminClient.GetDatabaseDdl(ctx, &databasepb.GetDatabaseDdlRequest{
+		Database: dbPath,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to get database DDL: %w", err)
+	}
+
+	for _, stmt := range resp.Statements {
+		if strings.Contains(strings.ToLower(stmt), strings.ToLower("CREATE CHANGE STREAM "+streamName)) {
 			return nil
 		}
 	}
