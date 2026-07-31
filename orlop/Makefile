@@ -88,6 +88,50 @@ test-postgres: postgres-start
 	@POSTGRES_TEST_URL=$(POSTGRES_TEST_URL) go test -v ./pkg/apiserver/storage/postgres/...
 	@echo "Done!"
 
+# Spanner emulator configuration
+SPANNER_EMULATOR_PORT ?= 9010
+SPANNER_EMULATOR_HOST ?= localhost:$(SPANNER_EMULATOR_PORT)
+SPANNER_EMULATOR_PID_FILE ?= /tmp/spanner-emulator.pid
+
+.PHONY: spanner-start
+spanner-start:
+	@if [ -f $(SPANNER_EMULATOR_PID_FILE) ] && kill -0 $$(cat $(SPANNER_EMULATOR_PID_FILE)) 2>/dev/null; then \
+		echo "Spanner emulator already running (PID $$(cat $(SPANNER_EMULATOR_PID_FILE)))"; \
+	else \
+		echo "Stopping any leftover emulator processes..."; \
+		pgrep -f '[e]mulator_main' | xargs -r kill 2>/dev/null || true; \
+		pgrep -f '[g]ateway_main' | xargs -r kill 2>/dev/null || true; \
+		sleep 1; \
+		echo "Starting Spanner emulator on port $(SPANNER_EMULATOR_PORT)..."; \
+		setsid gcloud emulators spanner start --host-port=$(SPANNER_EMULATOR_HOST) > /tmp/spanner-emulator.log 2>&1 & \
+		echo $$! > $(SPANNER_EMULATOR_PID_FILE); \
+		echo "Waiting for Spanner emulator to be ready..."; \
+		for i in $$(seq 1 30); do \
+			if grep -q "Cloud Spanner Emulator running" /tmp/spanner-emulator.log 2>/dev/null; then break; fi; \
+			sleep 1; \
+		done; \
+		echo "Spanner emulator started (PID $$(cat $(SPANNER_EMULATOR_PID_FILE)))"; \
+	fi
+
+.PHONY: spanner-stop
+spanner-stop:
+	@if [ -f $(SPANNER_EMULATOR_PID_FILE) ]; then \
+		echo "Stopping Spanner emulator..."; \
+		kill $$(cat $(SPANNER_EMULATOR_PID_FILE)) 2>/dev/null || true; \
+		pgrep -f '[e]mulator_main' | xargs -r kill 2>/dev/null || true; \
+		pgrep -f '[g]ateway_main' | xargs -r kill 2>/dev/null || true; \
+		rm -f $(SPANNER_EMULATOR_PID_FILE); \
+		echo "Spanner emulator stopped"; \
+	else \
+		echo "No Spanner emulator PID file found"; \
+	fi
+
+.PHONY: test-spanner
+test-spanner: spanner-start
+	@echo "Running Spanner integration tests..."
+	@SPANNER_EMULATOR_HOST=$(SPANNER_EMULATOR_HOST) go test -v -count=1 ./pkg/apiserver/storage/spanner/...
+	@echo "Done!"
+
 .PHONY: test-all
 test-all: postgres-start
 	@echo "Running all tests with PostgreSQL..."
