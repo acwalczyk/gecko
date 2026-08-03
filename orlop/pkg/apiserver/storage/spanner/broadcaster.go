@@ -513,16 +513,23 @@ func (b *spannerBroadcaster) Subscribe(sinceResourceVersion string) (<-chan stor
 	go func() {
 		defer close(outCh)
 
-		// Replay historical events first
+		var lastReplayedRV int64
 		if sinceResourceVersion != "" {
-			if !b.sendHistoricalEvents(outCh, sinceResourceVersion) {
+			var ok bool
+			lastReplayedRV, ok = b.sendHistoricalEvents(outCh, sinceResourceVersion)
+			if !ok {
 				b.unsubscribe(id)
 				return
 			}
 		}
 
-		// Forward live events
 		for event := range liveCh {
+			if lastReplayedRV > 0 {
+				rv, _ := strconv.ParseInt(event.ResourceVersion, 10, 64)
+				if rv <= lastReplayedRV {
+					continue
+				}
+			}
 			select {
 			case outCh <- event:
 			default:
@@ -539,12 +546,13 @@ func (b *spannerBroadcaster) Subscribe(sinceResourceVersion string) (<-chan stor
 	return outCh, stopFunc, nil
 }
 
-// sendHistoricalEvents replays events since the given RV. Returns false if the
-// output channel is full (watch should be cancelled).
-func (b *spannerBroadcaster) sendHistoricalEvents(outCh chan storage.ResourceEvent, sinceResourceVersion string) bool {
+// sendHistoricalEvents replays events since the given RV. Returns the last
+// replayed RV (for deduplication against live events) and false if the output
+// channel is full (watch should be cancelled).
+func (b *spannerBroadcaster) sendHistoricalEvents(outCh chan storage.ResourceEvent, sinceResourceVersion string) (int64, bool) {
 	rv, err := strconv.ParseInt(sinceResourceVersion, 10, 64)
 	if err != nil {
-		return true
+		return 0, true
 	}
 
 	stmt := spanner.Statement{
@@ -561,13 +569,14 @@ func (b *spannerBroadcaster) sendHistoricalEvents(outCh chan storage.ResourceEve
 	iter := b.client.Single().Query(b.ctx, stmt)
 	defer iter.Stop()
 
+	var lastRV int64
 	for {
 		row, err := iter.Next()
 		if err == iterator.Done {
 			break
 		}
 		if err != nil {
-			return true
+			return lastRV, true
 		}
 
 		var eventRV int64
@@ -599,11 +608,12 @@ func (b *spannerBroadcaster) sendHistoricalEvents(outCh chan storage.ResourceEve
 
 		select {
 		case outCh <- event:
+			lastRV = eventRV
 		default:
-			return false
+			return lastRV, false
 		}
 	}
-	return true
+	return lastRV, true
 }
 
 func (b *spannerBroadcaster) unsubscribe(id int) {

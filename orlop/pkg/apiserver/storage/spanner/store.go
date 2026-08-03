@@ -140,20 +140,6 @@ func (s *SpannerStore) incrementCounter(txn *spanner.ReadWriteTransaction, ctx c
 	return current + 1, nil
 }
 
-func (s *SpannerStore) readCounter(ctx context.Context) (int64, error) {
-	row, err := s.client.Single().ReadRow(ctx, s.countersTable, spanner.Key{s.counterID}, []string{"value"})
-	if err != nil {
-		if spanner.ErrCode(err) == codes.NotFound {
-			return 0, nil
-		}
-		return 0, err
-	}
-	var current int64
-	if err := row.Column(0, &current); err != nil {
-		return 0, err
-	}
-	return current, nil
-}
 
 func (s *SpannerStore) eventLogMutation(rv int64, eventType storage.EventType, data []byte, contextFilter string) *spanner.Mutation {
 	if s.eventLogTable == "" {
@@ -325,7 +311,11 @@ func (s *SpannerStore) List(ctx context.Context, opts storage.ListOptions) (clie
 
 	query, params := qb.build()
 	stmt := spanner.Statement{SQL: query, Params: params}
-	iter := s.client.Single().Query(ctx, stmt)
+
+	txn := s.client.ReadOnlyTransaction()
+	defer txn.Close()
+
+	iter := txn.Query(ctx, stmt)
 	defer iter.Stop()
 
 	var items []unstructured.Unstructured
@@ -366,9 +356,16 @@ func (s *SpannerStore) List(ctx context.Context, opts storage.ListOptions) (clie
 		items = append(items, *obj)
 	}
 
-	globalRV, err := s.readCounter(ctx)
+	counterRow, err := txn.ReadRow(ctx, s.countersTable, spanner.Key{s.counterID}, []string{"value"})
+	var globalRV int64
 	if err != nil {
-		return nil, fmt.Errorf("failed to read global resource version: %w", err)
+		if spanner.ErrCode(err) != codes.NotFound {
+			return nil, fmt.Errorf("failed to read global resource version: %w", err)
+		}
+	} else {
+		if err := counterRow.Column(0, &globalRV); err != nil {
+			return nil, fmt.Errorf("failed to read global resource version: %w", err)
+		}
 	}
 
 	listGVK := s.gvk.GroupVersion().WithKind(s.gvk.Kind + "List")
