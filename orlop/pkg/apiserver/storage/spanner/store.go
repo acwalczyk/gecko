@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"cloud.google.com/go/spanner"
@@ -525,9 +526,10 @@ func (s *SpannerStore) Delete(ctx context.Context, namespace, name string) error
 
 		if s.eventLogTable != "" {
 			dataBytes, err := json.Marshal(dataJSON.Value)
-			if err == nil {
-				mutations = append(mutations, s.eventLogMutation(rv, storage.EventDeleted, namespace, name, dataBytes, filterValue))
+			if err != nil {
+				return fmt.Errorf("failed to marshal deleted object data: %w", err)
 			}
+			mutations = append(mutations, s.eventLogMutation(rv, storage.EventDeleted, namespace, name, dataBytes, filterValue))
 		}
 
 		return txn.BufferWrite(mutations)
@@ -613,8 +615,9 @@ func (s *SpannerStore) Watch(ctx context.Context, opts storage.ListOptions, reso
 		}
 	}()
 
+	var stopOnce sync.Once
 	stopFunc := func() {
-		close(stopCh)
+		stopOnce.Do(func() { close(stopCh) })
 	}
 
 	return outCh, stopFunc, nil

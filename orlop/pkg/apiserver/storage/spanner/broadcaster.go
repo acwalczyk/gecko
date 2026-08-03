@@ -261,12 +261,22 @@ func (b *spannerBroadcaster) handleDataChangeRecord(dcr *csDataChangeRecord) {
 		eventType, _ := newValues["event_type"].(string)
 		contextFilter, _ := newValues["context_filter"].(string)
 
-		objectDataStr, _ := newValues["data"].(string)
-		if objectDataStr == "" {
+		objectData := newValues["data"]
+		if objectData == nil {
 			continue
 		}
+		var objectDataBytes []byte
+		switch v := objectData.(type) {
+		case string:
+			objectDataBytes = []byte(v)
+		default:
+			objectDataBytes, err = json.Marshal(v)
+			if err != nil {
+				continue
+			}
+		}
 
-		obj, err := b.reconstructObject([]byte(objectDataStr))
+		obj, err := b.reconstructObject(objectDataBytes)
 		if err != nil {
 			continue
 		}
@@ -285,6 +295,9 @@ func (b *spannerBroadcaster) handleDataChangeRecord(dcr *csDataChangeRecord) {
 		b.mu.Lock()
 		if rv > b.lastRV {
 			b.lastRV = rv
+		}
+		if dcr.CommitTimestamp.After(b.startTimestamp) {
+			b.startTimestamp = dcr.CommitTimestamp
 		}
 		b.mu.Unlock()
 	}

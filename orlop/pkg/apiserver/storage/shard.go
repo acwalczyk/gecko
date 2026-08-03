@@ -29,11 +29,15 @@ func ComputeObjectShard(obj client.Object, shardCount int) (int, error) {
 	h.Write([]byte(name))
 	hashBytes := h.Sum(nil)
 
-	// Convert first 8 bytes to uint64
-	hashValue := binary.BigEndian.Uint64(hashBytes[:8])
+	// Convert first 8 bytes to int64 to match Spanner's INT64 type
+	hashValue := int64(binary.BigEndian.Uint64(hashBytes[:8]))
 
-	// Modulo to get shard index
-	return int(hashValue % uint64(shardCount)), nil
+	// Double-mod to ensure non-negative result, matching the SQL MOD(MOD(h,c)+c,c) pattern
+	mod := hashValue % int64(shardCount)
+	if mod < 0 {
+		mod += int64(shardCount)
+	}
+	return int(mod), nil
 }
 
 // MatchesShard determines if the given object belongs to the specified shard.
