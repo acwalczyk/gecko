@@ -11,12 +11,13 @@ import (
 )
 
 var validLabelKeyRe = regexp.MustCompile(`^[a-zA-Z0-9._\-/]+$`)
+var validFieldPathRe = regexp.MustCompile(`^[a-zA-Z0-9._\-/]+$`)
 
 type QueryBuilder struct {
 	tableName string
 	columns   []string
 	where     []string
-	params    map[string]interface{}
+	params    map[string]any
 	orderBy   []string
 	limit     int64
 	paramSeq  int
@@ -29,11 +30,11 @@ func NewQueryBuilder(tableName string, columns ...string) *QueryBuilder {
 	return &QueryBuilder{
 		tableName: tableName,
 		columns:   columns,
-		params:    map[string]interface{}{},
+		params:    map[string]any{},
 	}
 }
 
-func (qb *QueryBuilder) nextParam(value interface{}) string {
+func (qb *QueryBuilder) nextParam(value any) string {
 	name := fmt.Sprintf("p%d", qb.paramSeq)
 	qb.paramSeq++
 	qb.params[name] = value
@@ -123,13 +124,16 @@ func buildShardHashSQL() string {
 	var parts []string
 	for i := range 8 {
 		shift := 56 - (i * 8)
-		parts = append(parts, fmt.Sprintf("CAST(%s[OFFSET(%d)] AS INT64) << %d", hashExpr, i, shift))
+		parts = append(parts, fmt.Sprintf("CAST(h[OFFSET(%d)] AS INT64) << %d", i, shift))
 	}
-	return "(" + strings.Join(parts, " | ") + ")"
+	return fmt.Sprintf("(SELECT %s FROM UNNEST([%s]) AS h)", strings.Join(parts, " | "), hashExpr)
 }
 
 func (qb *QueryBuilder) WhereFieldFilters(filters map[string]string) *QueryBuilder {
 	for path, value := range filters {
+		if !validFieldPathRe.MatchString(path) {
+			continue
+		}
 		p := qb.nextParam(value)
 		qb.Where(fmt.Sprintf("JSON_VALUE(data, '$.%s') = %s", path, p))
 	}
@@ -163,7 +167,7 @@ func (qb *QueryBuilder) Limit(limit int64) *QueryBuilder {
 	return qb
 }
 
-func (qb *QueryBuilder) Build() (string, map[string]interface{}) {
+func (qb *QueryBuilder) Build() (string, map[string]any) {
 	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(qb.columns, ", "), qb.tableName)
 
 	if len(qb.where) > 0 {

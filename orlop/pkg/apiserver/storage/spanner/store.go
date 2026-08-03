@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/spanner"
+	"github.com/go-logr/logr"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 	"google.golang.org/api/iterator"
 	"google.golang.org/grpc/codes"
@@ -29,9 +30,11 @@ type SpannerStore struct {
 	gvk              schema.GroupVersionKind
 	broadcaster      storage.EventBroadcaster
 	tableName        string
+	eventLogTable    string
 	countersTable    string
 	counterID        string
 	contextFilterKey any
+	logger           logr.Logger
 }
 
 type SpannerStoreConfig struct {
@@ -41,8 +44,10 @@ type SpannerStoreConfig struct {
 	GVK              schema.GroupVersionKind
 	Broadcaster      storage.EventBroadcaster
 	TableName        string
+	EventLogTable    string
 	CountersTable    string
 	ContextFilterKey any
+	Logger           logr.Logger
 }
 
 func NewSpannerStore(config SpannerStoreConfig) (*SpannerStore, error) {
@@ -65,6 +70,11 @@ func NewSpannerStore(config SpannerStoreConfig) (*SpannerStore, error) {
 		countersTable = "counters"
 	}
 
+	storeLogger := config.Logger
+	if storeLogger.GetSink() == nil {
+		storeLogger = logr.Discard()
+	}
+
 	return &SpannerStore{
 		client:           config.Client,
 		resourceType:     config.ResourceType,
@@ -72,35 +82,12 @@ func NewSpannerStore(config SpannerStoreConfig) (*SpannerStore, error) {
 		gvk:              config.GVK,
 		broadcaster:      config.Broadcaster,
 		tableName:        tableName,
+		eventLogTable:    config.EventLogTable,
 		countersTable:    countersTable,
 		counterID:        "rv_" + config.ResourceType,
 		contextFilterKey: config.ContextFilterKey,
+		logger:           storeLogger,
 	}, nil
-}
-
-func (s *SpannerStore) nextResourceVersion(ctx context.Context) (int64, error) {
-	var rv int64
-	_, err := s.client.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
-		row, err := txn.ReadRow(ctx, s.countersTable, spanner.Key{s.counterID}, []string{"value"})
-		if err != nil {
-			if spanner.ErrCode(err) == codes.NotFound {
-				rv = 1
-				return txn.BufferWrite([]*spanner.Mutation{
-					spanner.Insert(s.countersTable, []string{"counter_id", "value"}, []interface{}{s.counterID, int64(1)}),
-				})
-			}
-			return err
-		}
-		var current int64
-		if err := row.Column(0, &current); err != nil {
-			return err
-		}
-		rv = current + 1
-		return txn.BufferWrite([]*spanner.Mutation{
-			spanner.Update(s.countersTable, []string{"counter_id", "value"}, []interface{}{s.counterID, rv}),
-		})
-	})
-	return rv, err
 }
 
 func (s *SpannerStore) contextFilterValue(ctx context.Context) (string, error) {
@@ -136,6 +123,46 @@ func unmarshalData(data []byte, rv int64) (*unstructured.Unstructured, error) {
 	}
 	obj.SetResourceVersion(strconv.FormatInt(rv, 10))
 	return obj, nil
+}
+
+func (s *SpannerStore) incrementCounter(txn *spanner.ReadWriteTransaction, ctx context.Context) (int64, error) {
+	row, err := txn.ReadRow(ctx, s.countersTable, spanner.Key{s.counterID}, []string{"value"})
+	if err != nil {
+		if spanner.ErrCode(err) == codes.NotFound {
+			return 1, nil
+		}
+		return 0, err
+	}
+	var current int64
+	if err := row.Column(0, &current); err != nil {
+		return 0, err
+	}
+	return current + 1, nil
+}
+
+func (s *SpannerStore) readCounter(ctx context.Context) (int64, error) {
+	row, err := s.client.Single().ReadRow(ctx, s.countersTable, spanner.Key{s.counterID}, []string{"value"})
+	if err != nil {
+		if spanner.ErrCode(err) == codes.NotFound {
+			return 0, nil
+		}
+		return 0, err
+	}
+	var current int64
+	if err := row.Column(0, &current); err != nil {
+		return 0, err
+	}
+	return current, nil
+}
+
+func (s *SpannerStore) eventLogMutation(rv int64, eventType storage.EventType, data []byte, contextFilter string) *spanner.Mutation {
+	if s.eventLogTable == "" {
+		return nil
+	}
+	return spanner.Insert(s.eventLogTable,
+		[]string{"rv", "event_type", "object_data", "context_filter", "created_at"},
+		[]any{rv, string(eventType), spanner.NullJSON{Value: json.RawMessage(data), Valid: true}, contextFilter, time.Now()},
+	)
 }
 
 func (s *SpannerStore) Create(ctx context.Context, obj client.Object) error {
@@ -177,28 +204,22 @@ func (s *SpannerStore) Create(ctx context.Context, obj client.Object) error {
 
 		var rv int64
 		_, err = s.client.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
-			// Get next resource version
-			row, readErr := txn.ReadRow(ctx, s.countersTable, spanner.Key{s.counterID}, []string{"value"})
-			if readErr != nil {
-				if spanner.ErrCode(readErr) == codes.NotFound {
-					rv = 1
-				} else {
-					return readErr
-				}
-			} else {
-				var current int64
-				if err := row.Column(0, &current); err != nil {
-					return err
-				}
-				rv = current + 1
+			rv = 0
+			var counterErr error
+			rv, counterErr = s.incrementCounter(txn, ctx)
+			if counterErr != nil {
+				return counterErr
 			}
 
 			mutations := []*spanner.Mutation{
-				spanner.InsertOrUpdate(s.countersTable, []string{"counter_id", "value"}, []interface{}{s.counterID, rv}),
+				spanner.InsertOrUpdate(s.countersTable, []string{"counter_id", "value"}, []any{s.counterID, rv}),
 				spanner.Insert(s.tableName,
 					[]string{"context_filter", "namespace", "name", "resource_version", "labels", "data", "created_at", "updated_at"},
-					[]interface{}{filterValue, namespace, name, rv, spanner.NullJSON{Value: json.RawMessage(labelsJSON), Valid: true}, spanner.NullJSON{Value: json.RawMessage(data), Valid: true}, now, now},
+					[]any{filterValue, namespace, name, rv, spanner.NullJSON{Value: json.RawMessage(labelsJSON), Valid: true}, spanner.NullJSON{Value: json.RawMessage(data), Valid: true}, now, now},
 				),
+			}
+			if m := s.eventLogMutation(rv, storage.EventAdded, data, filterValue); m != nil {
+				mutations = append(mutations, m)
 			}
 			return txn.BufferWrite(mutations)
 		})
@@ -216,16 +237,6 @@ func (s *SpannerStore) Create(ctx context.Context, obj client.Object) error {
 		}
 
 		obj.SetResourceVersion(strconv.FormatInt(rv, 10))
-
-		if s.broadcaster != nil {
-			s.broadcaster.Broadcast(storage.ResourceEvent{
-				Type:               storage.EventAdded,
-				Object:             obj.DeepCopyObject().(client.Object),
-				ResourceVersion:    strconv.FormatInt(rv, 10),
-				ContextFilterValue: filterValue,
-			})
-		}
-
 		return nil
 	}
 
@@ -277,6 +288,12 @@ func (s *SpannerStore) List(ctx context.Context, opts storage.ListOptions) (clie
 		return nil, err
 	}
 
+	if opts.Continue != "" {
+		if _, err := storage.DecodeContinueToken(opts.Continue); err != nil {
+			return nil, errors.NewResourceExpired("invalid continue token")
+		}
+	}
+
 	qb := NewQueryBuilder(s.tableName, "namespace", "name", "resource_version", "data")
 
 	if s.contextFilterKey != nil {
@@ -296,10 +313,8 @@ func (s *SpannerStore) List(ctx context.Context, opts storage.ListOptions) (clie
 	qb.WhereFieldFilters(opts.FieldFilters)
 
 	if opts.Continue != "" {
-		token, err := storage.DecodeContinueToken(opts.Continue)
-		if err == nil {
-			qb.WhereContinueToken(token)
-		}
+		token, _ := storage.DecodeContinueToken(opts.Continue)
+		qb.WhereContinueToken(token)
 	}
 
 	qb.OrderBy("namespace", "name")
@@ -314,7 +329,6 @@ func (s *SpannerStore) List(ctx context.Context, opts storage.ListOptions) (clie
 	defer iter.Stop()
 
 	var items []unstructured.Unstructured
-	var maxRV int64
 	rowCount := int64(0)
 
 	for {
@@ -350,9 +364,11 @@ func (s *SpannerStore) List(ctx context.Context, opts storage.ListOptions) (clie
 		}
 
 		items = append(items, *obj)
-		if rv > maxRV {
-			maxRV = rv
-		}
+	}
+
+	globalRV, err := s.readCounter(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read global resource version: %w", err)
 	}
 
 	listGVK := s.gvk.GroupVersion().WithKind(s.gvk.Kind + "List")
@@ -361,8 +377,17 @@ func (s *SpannerStore) List(ctx context.Context, opts storage.ListOptions) (clie
 		return nil, fmt.Errorf("failed to create list object: %w", err)
 	}
 
-	list := listObj.(*unstructured.UnstructuredList)
-	list.SetResourceVersion(strconv.FormatInt(maxRV, 10))
+	list, ok := listObj.(*unstructured.UnstructuredList)
+	if !ok {
+		listAccessor, err := meta.ListAccessor(listObj)
+		if err != nil {
+			return nil, fmt.Errorf("object does not support list operations: %w", err)
+		}
+		listAccessor.SetResourceVersion(strconv.FormatInt(globalRV, 10))
+		return listObj.(client.ObjectList), nil
+	}
+
+	list.SetResourceVersion(strconv.FormatInt(globalRV, 10))
 	list.Items = items
 
 	hasMore := opts.Limit > 0 && rowCount > opts.Limit
@@ -373,7 +398,7 @@ func (s *SpannerStore) List(ctx context.Context, opts storage.ListOptions) (clie
 			token := &storage.ContinueToken{
 				Namespace:       lastItem.GetNamespace(),
 				Name:            lastItem.GetName(),
-				ResourceVersion: strconv.FormatInt(maxRV, 10),
+				ResourceVersion: strconv.FormatInt(globalRV, 10),
 			}
 			continueStr, err := storage.EncodeContinueToken(token)
 			if err == nil {
@@ -394,11 +419,6 @@ func (s *SpannerStore) Update(ctx context.Context, obj client.Object) error {
 	namespace := obj.GetNamespace()
 	name := obj.GetName()
 
-	_, err = s.Get(ctx, namespace, name)
-	if err != nil {
-		return err
-	}
-
 	data, err := marshalData(obj)
 	if err != nil {
 		return err
@@ -409,10 +429,13 @@ func (s *SpannerStore) Update(ctx context.Context, obj client.Object) error {
 		return fmt.Errorf("failed to marshal labels: %w", err)
 	}
 
+	expectedRV, _ := strconv.ParseInt(obj.GetResourceVersion(), 10, 64)
+
 	var rv int64
 	_, err = s.client.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
-		// Verify object still exists
-		_, readErr := txn.ReadRow(ctx, s.tableName,
+		rv = 0
+
+		row, readErr := txn.ReadRow(ctx, s.tableName,
 			spanner.Key{filterValue, namespace, name},
 			[]string{"resource_version"},
 		)
@@ -423,46 +446,39 @@ func (s *SpannerStore) Update(ctx context.Context, obj client.Object) error {
 			return readErr
 		}
 
-		// Get next resource version
-		counterRow, readErr := txn.ReadRow(ctx, s.countersTable, spanner.Key{s.counterID}, []string{"value"})
-		if readErr != nil {
-			if spanner.ErrCode(readErr) == codes.NotFound {
-				rv = 1
-			} else {
-				return readErr
-			}
-		} else {
-			var current int64
-			if err := counterRow.Column(0, &current); err != nil {
-				return err
-			}
-			rv = current + 1
+		var storedRV int64
+		if err := row.Column(0, &storedRV); err != nil {
+			return err
+		}
+		if expectedRV != 0 && storedRV != expectedRV {
+			return errors.NewConflict(schema.GroupResource{Resource: s.resourceType}, name,
+				fmt.Errorf("resource version %d does not match %d", expectedRV, storedRV))
+		}
+
+		var counterErr error
+		rv, counterErr = s.incrementCounter(txn, ctx)
+		if counterErr != nil {
+			return counterErr
 		}
 
 		now := time.Now()
-		return txn.BufferWrite([]*spanner.Mutation{
-			spanner.InsertOrUpdate(s.countersTable, []string{"counter_id", "value"}, []interface{}{s.counterID, rv}),
+		mutations := []*spanner.Mutation{
+			spanner.InsertOrUpdate(s.countersTable, []string{"counter_id", "value"}, []any{s.counterID, rv}),
 			spanner.Update(s.tableName,
 				[]string{"context_filter", "namespace", "name", "resource_version", "labels", "data", "updated_at"},
-				[]interface{}{filterValue, namespace, name, rv, spanner.NullJSON{Value: json.RawMessage(labelsJSON), Valid: true}, spanner.NullJSON{Value: json.RawMessage(data), Valid: true}, now},
+				[]any{filterValue, namespace, name, rv, spanner.NullJSON{Value: json.RawMessage(labelsJSON), Valid: true}, spanner.NullJSON{Value: json.RawMessage(data), Valid: true}, now},
 			),
-		})
+		}
+		if m := s.eventLogMutation(rv, storage.EventModified, data, filterValue); m != nil {
+			mutations = append(mutations, m)
+		}
+		return txn.BufferWrite(mutations)
 	})
 	if err != nil {
 		return fmt.Errorf("failed to update object: %w", err)
 	}
 
 	obj.SetResourceVersion(strconv.FormatInt(rv, 10))
-
-	if s.broadcaster != nil {
-		s.broadcaster.Broadcast(storage.ResourceEvent{
-			Type:               storage.EventModified,
-			Object:             obj.DeepCopyObject().(client.Object),
-			ResourceVersion:    strconv.FormatInt(rv, 10),
-			ContextFilterValue: filterValue,
-		})
-	}
-
 	return nil
 }
 
@@ -472,17 +488,13 @@ func (s *SpannerStore) Delete(ctx context.Context, namespace, name string) error
 		return err
 	}
 
-	obj, err := s.Get(ctx, namespace, name)
-	if err != nil {
-		return err
-	}
-
 	var rv int64
 	_, err = s.client.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
-		// Verify still exists
-		_, readErr := txn.ReadRow(ctx, s.tableName,
+		rv = 0
+
+		row, readErr := txn.ReadRow(ctx, s.tableName,
 			spanner.Key{filterValue, namespace, name},
-			[]string{"resource_version"},
+			[]string{"resource_version", "data"},
 		)
 		if readErr != nil {
 			if spanner.ErrCode(readErr) == codes.NotFound {
@@ -491,38 +503,34 @@ func (s *SpannerStore) Delete(ctx context.Context, namespace, name string) error
 			return readErr
 		}
 
-		// Get next resource version
-		counterRow, readErr := txn.ReadRow(ctx, s.countersTable, spanner.Key{s.counterID}, []string{"value"})
-		if readErr != nil {
-			if spanner.ErrCode(readErr) == codes.NotFound {
-				rv = 1
-			} else {
-				return readErr
-			}
-		} else {
-			var current int64
-			if err := counterRow.Column(0, &current); err != nil {
-				return err
-			}
-			rv = current + 1
+		var storedRV int64
+		var dataJSON spanner.NullJSON
+		if err := row.Columns(&storedRV, &dataJSON); err != nil {
+			return err
 		}
 
-		return txn.BufferWrite([]*spanner.Mutation{
-			spanner.InsertOrUpdate(s.countersTable, []string{"counter_id", "value"}, []interface{}{s.counterID, rv}),
+		var counterErr error
+		rv, counterErr = s.incrementCounter(txn, ctx)
+		if counterErr != nil {
+			return counterErr
+		}
+
+		mutations := []*spanner.Mutation{
+			spanner.InsertOrUpdate(s.countersTable, []string{"counter_id", "value"}, []any{s.counterID, rv}),
 			spanner.Delete(s.tableName, spanner.Key{filterValue, namespace, name}),
-		})
+		}
+
+		if s.eventLogTable != "" {
+			dataBytes, err := json.Marshal(dataJSON.Value)
+			if err == nil {
+				mutations = append(mutations, s.eventLogMutation(rv, storage.EventDeleted, dataBytes, filterValue))
+			}
+		}
+
+		return txn.BufferWrite(mutations)
 	})
 	if err != nil {
 		return fmt.Errorf("failed to delete object: %w", err)
-	}
-
-	if s.broadcaster != nil {
-		s.broadcaster.Broadcast(storage.ResourceEvent{
-			Type:               storage.EventDeleted,
-			Object:             obj,
-			ResourceVersion:    strconv.FormatInt(rv, 10),
-			ContextFilterValue: filterValue,
-		})
 	}
 
 	return nil
@@ -574,27 +582,22 @@ func (s *SpannerStore) Watch(ctx context.Context, opts storage.ListOptions, reso
 					}
 				}
 
-				clientObj, ok := event.Object.(client.Object)
-				if !ok {
+				if opts.Namespace != "" && event.Object.GetNamespace() != opts.Namespace {
 					continue
 				}
 
-				if opts.Namespace != "" && clientObj.GetNamespace() != opts.Namespace {
-					continue
-				}
-
-				if labelSelector != nil && !labelSelector.Matches(labels.Set(clientObj.GetLabels())) {
+				if labelSelector != nil && !labelSelector.Matches(labels.Set(event.Object.GetLabels())) {
 					continue
 				}
 
 				if opts.ShardSelector != nil {
-					matches, err := storage.MatchesShard(clientObj, opts.ShardSelector)
+					matches, err := storage.MatchesShard(event.Object, opts.ShardSelector)
 					if err != nil || !matches {
 						continue
 					}
 				}
 
-				if len(opts.FieldFilters) > 0 && !matchesFieldFilters(clientObj, opts.FieldFilters) {
+				if len(opts.FieldFilters) > 0 && !matchesFieldFilters(event.Object, opts.FieldFilters) {
 					continue
 				}
 
@@ -619,7 +622,7 @@ func matchesFieldFilters(obj client.Object, filters map[string]string) bool {
 	if err != nil {
 		return false
 	}
-	var objMap map[string]interface{}
+	var objMap map[string]any
 	if err := json.Unmarshal(data, &objMap); err != nil {
 		return false
 	}
@@ -631,11 +634,11 @@ func matchesFieldFilters(obj client.Object, filters map[string]string) bool {
 	return true
 }
 
-func fieldValueFromMap(m map[string]interface{}, path string) string {
+func fieldValueFromMap(m map[string]any, path string) string {
 	parts := strings.Split(path, ".")
-	current := interface{}(m)
+	current := any(m)
 	for _, part := range parts {
-		cm, ok := current.(map[string]interface{})
+		cm, ok := current.(map[string]any)
 		if !ok {
 			return ""
 		}

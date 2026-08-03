@@ -3,12 +3,12 @@ package spanner
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 
 	"cloud.google.com/go/spanner"
 	database "cloud.google.com/go/spanner/admin/database/apiv1"
 	"cloud.google.com/go/spanner/admin/database/apiv1/databasepb"
+	"github.com/go-logr/logr"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc/codes"
@@ -24,12 +24,18 @@ type StorageFactoryConfig struct {
 	TablePrefix string
 	Context     context.Context
 	ClientOpts  []option.ClientOption
+	Logger      logr.Logger
 }
 
 func NewStorageFactory(config StorageFactoryConfig) (func(string, *runtime.Scheme, schema.GroupVersionKind) (storage.ResourceStore, error), error) {
 	ctx := config.Context
 	if ctx == nil {
 		ctx = context.Background()
+	}
+
+	logger := config.Logger
+	if logger.GetSink() == nil {
+		logger = logr.Discard()
 	}
 
 	client := config.Client
@@ -56,6 +62,7 @@ func NewStorageFactory(config StorageFactoryConfig) (func(string, *runtime.Schem
 	}
 
 	factory := func(resourceType string, scheme *runtime.Scheme, gvk schema.GroupVersionKind) (storage.ResourceStore, error) {
+		resourceLogger := logger.WithValues("resource", resourceType)
 		safeType := sanitizeTableName(resourceType)
 		resourcesTable := config.TablePrefix + "resources_" + safeType
 		eventLogTable := config.TablePrefix + "event_log_" + safeType
@@ -64,7 +71,7 @@ func NewStorageFactory(config StorageFactoryConfig) (func(string, *runtime.Schem
 			return nil, fmt.Errorf("failed to create resources table: %w", err)
 		}
 
-		ensureSearchIndex(ctx, adminClient, config.Database, resourcesTable)
+		ensureSearchIndex(ctx, adminClient, config.Database, resourcesTable, resourceLogger)
 
 		if err := ensureTable(ctx, adminClient, config.Database, eventLogTable, eventLogSchema(eventLogTable)); err != nil {
 			return nil, fmt.Errorf("failed to create event log table: %w", err)
@@ -81,6 +88,7 @@ func NewStorageFactory(config StorageFactoryConfig) (func(string, *runtime.Schem
 			ChangeStreamName: changeStreamName,
 			Scheme:           scheme,
 			GVK:              gvk,
+			Logger:           resourceLogger,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create broadcaster: %w", err)
@@ -93,7 +101,9 @@ func NewStorageFactory(config StorageFactoryConfig) (func(string, *runtime.Schem
 			GVK:           gvk,
 			Broadcaster:   broadcaster,
 			TableName:     resourcesTable,
+			EventLogTable: eventLogTable,
 			CountersTable: countersTable,
+			Logger:        resourceLogger,
 		})
 		if err != nil {
 			broadcaster.Close()
@@ -231,7 +241,7 @@ func searchIndexSchema(tableName string) []string {
 	}
 }
 
-func ensureSearchIndex(ctx context.Context, adminClient *database.DatabaseAdminClient, dbPath string, tableName string) {
+func ensureSearchIndex(ctx context.Context, adminClient *database.DatabaseAdminClient, dbPath string, tableName string, logger logr.Logger) {
 	resp, err := adminClient.GetDatabaseDdl(ctx, &databasepb.GetDatabaseDdlRequest{
 		Database: dbPath,
 	})
@@ -251,11 +261,11 @@ func ensureSearchIndex(ctx context.Context, adminClient *database.DatabaseAdminC
 		Statements: searchIndexSchema(tableName),
 	})
 	if err != nil {
-		log.Printf("Search index not supported, label queries will work without index: %v", err)
+		logger.V(1).Info("Search index not supported, label queries will work without index", "error", err)
 		return
 	}
 
 	if err := op.Wait(ctx); err != nil {
-		log.Printf("Search index creation failed, label queries will work without index: %v", err)
+		logger.V(1).Info("Search index creation failed, label queries will work without index", "error", err)
 	}
 }

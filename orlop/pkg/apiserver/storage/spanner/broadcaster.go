@@ -4,12 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strconv"
 	"sync"
 	"time"
 
 	"cloud.google.com/go/spanner"
+	"github.com/go-logr/logr"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 	"google.golang.org/api/iterator"
 	"google.golang.org/grpc/codes"
@@ -56,6 +56,7 @@ type SpannerBroadcaster struct {
 	cancel           context.CancelFunc
 	scheme           *runtime.Scheme
 	gvk              schema.GroupVersionKind
+	logger           logr.Logger
 
 	mu             sync.RWMutex
 	subscribers    map[int]chan storage.ResourceEvent
@@ -72,6 +73,7 @@ type SpannerBroadcasterConfig struct {
 	ChangeStreamName string
 	Scheme           *runtime.Scheme
 	GVK              schema.GroupVersionKind
+	Logger           logr.Logger
 }
 
 func NewSpannerBroadcaster(ctx context.Context, config SpannerBroadcasterConfig) (*SpannerBroadcaster, error) {
@@ -86,6 +88,11 @@ func NewSpannerBroadcaster(ctx context.Context, config SpannerBroadcasterConfig)
 
 	bCtx, cancel := context.WithCancel(ctx)
 
+	broadcasterLogger := config.Logger
+	if broadcasterLogger.GetSink() == nil {
+		broadcasterLogger = logr.Discard()
+	}
+
 	b := &SpannerBroadcaster{
 		client:           config.Client,
 		tableName:        tableName,
@@ -94,22 +101,19 @@ func NewSpannerBroadcaster(ctx context.Context, config SpannerBroadcasterConfig)
 		cancel:           cancel,
 		scheme:           config.Scheme,
 		gvk:              config.GVK,
+		logger:           broadcasterLogger,
 		subscribers:      make(map[int]chan storage.ResourceEvent),
 		startTimestamp:   time.Now(),
 	}
 
 	if b.changeStreamName != "" {
-		b.wg.Add(1)
-		go func() {
-			defer b.wg.Done()
+		b.wg.Go(func() {
 			b.readChangeStream(bCtx, nil)
-		}()
+		})
 	} else {
-		b.wg.Add(1)
-		go func() {
-			defer b.wg.Done()
+		b.wg.Go(func() {
 			b.pollForEvents()
-		}()
+		})
 	}
 
 	return b, nil
@@ -155,12 +159,12 @@ func (b *SpannerBroadcaster) readChangeStream(ctx context.Context, partitionToke
 		if err != nil {
 			st, ok := status.FromError(err)
 			if ok && (st.Code() == codes.Unimplemented || st.Code() == codes.NotFound || st.Code() == codes.InvalidArgument) {
-				log.Printf("Change stream not supported, falling back to polling: %v", err)
+				b.logger.Info("Change stream not supported, falling back to polling", "error", err)
 				b.pollForEvents()
 				return
 			}
 
-			log.Printf("Change stream read error, retrying in %v: %v", backoff, err)
+			b.logger.Error(err, "Change stream read error, retrying", "backoff", backoff)
 			select {
 			case <-ctx.Done():
 				return
@@ -272,11 +276,9 @@ func (b *SpannerBroadcaster) handleHeartbeatRecord(hr heartbeatRecord) {
 func (b *SpannerBroadcaster) handleChildPartitionsRecord(ctx context.Context, cpr childPartitionsRecord) {
 	for _, cp := range cpr.ChildPartitions {
 		token := cp.Token
-		b.wg.Add(1)
-		go func() {
-			defer b.wg.Done()
+		b.wg.Go(func() {
 			b.readChangeStream(ctx, &token)
-		}()
+		})
 	}
 }
 
@@ -337,7 +339,7 @@ func (b *SpannerBroadcaster) fetchNewEvents() {
 			"SELECT rv, event_type, object_data, context_filter FROM %s WHERE rv > @lastRV ORDER BY rv ASC LIMIT 100",
 			b.tableName,
 		),
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"lastRV": lastRV,
 		},
 	}
@@ -425,13 +427,16 @@ func (b *SpannerBroadcaster) reconstructObject(data []byte) (client.Object, erro
 }
 
 func (b *SpannerBroadcaster) broadcastToSubscribers(event storage.ResourceEvent) {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
 
-	for _, ch := range b.subscribers {
+	for id, ch := range b.subscribers {
 		select {
 		case ch <- event:
 		default:
+			// Channel full — cancel this watch so the controller knows to relist
+			close(ch)
+			delete(b.subscribers, id)
 		}
 	}
 }
@@ -460,43 +465,67 @@ func (b *SpannerBroadcaster) Broadcast(event storage.ResourceEvent) {
 	_, err = b.client.Apply(b.ctx, []*spanner.Mutation{
 		spanner.Insert(b.tableName,
 			[]string{"rv", "event_type", "object_data", "context_filter", "created_at"},
-			[]interface{}{rv, string(event.Type), spanner.NullJSON{Value: json.RawMessage(objectData), Valid: true}, contextFilter, now},
+			[]any{rv, string(event.Type), spanner.NullJSON{Value: json.RawMessage(objectData), Valid: true}, contextFilter, now},
 		),
 	})
 	if err != nil {
-		fmt.Printf("Failed to insert event: %v\n", err)
+		b.logger.Error(err, "Failed to insert event")
 	}
 }
 
 func (b *SpannerBroadcaster) Subscribe(sinceResourceVersion string) (<-chan storage.ResourceEvent, func(), error) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-
 	if b.closed {
+		b.mu.Unlock()
 		return nil, nil, fmt.Errorf("broadcaster is closed")
 	}
 
 	id := b.nextID
 	b.nextID++
 
-	ch := make(chan storage.ResourceEvent, 100)
-	b.subscribers[id] = ch
+	// Internal channel receives live events immediately
+	liveCh := make(chan storage.ResourceEvent, 100)
+	b.subscribers[id] = liveCh
+	b.mu.Unlock()
 
-	if sinceResourceVersion != "" {
-		go b.sendHistoricalEvents(ch, sinceResourceVersion)
-	}
+	// Output channel returned to caller — events arrive in order
+	outCh := make(chan storage.ResourceEvent, 100)
+
+	go func() {
+		defer close(outCh)
+
+		// Replay historical events first
+		if sinceResourceVersion != "" {
+			if !b.sendHistoricalEvents(outCh, sinceResourceVersion) {
+				b.unsubscribe(id)
+				return
+			}
+		}
+
+		// Forward live events
+		for event := range liveCh {
+			select {
+			case outCh <- event:
+			default:
+				b.unsubscribe(id)
+				return
+			}
+		}
+	}()
 
 	stopFunc := func() {
 		b.unsubscribe(id)
 	}
 
-	return ch, stopFunc, nil
+	return outCh, stopFunc, nil
 }
 
-func (b *SpannerBroadcaster) sendHistoricalEvents(ch chan storage.ResourceEvent, sinceResourceVersion string) {
+// sendHistoricalEvents replays events since the given RV. Returns false if the
+// output channel is full (watch should be cancelled).
+func (b *SpannerBroadcaster) sendHistoricalEvents(outCh chan storage.ResourceEvent, sinceResourceVersion string) bool {
 	rv, err := strconv.ParseInt(sinceResourceVersion, 10, 64)
 	if err != nil {
-		return
+		return true
 	}
 
 	stmt := spanner.Statement{
@@ -504,12 +533,12 @@ func (b *SpannerBroadcaster) sendHistoricalEvents(ch chan storage.ResourceEvent,
 			"SELECT rv, event_type, object_data, context_filter FROM %s WHERE rv > @sinceRV ORDER BY rv ASC LIMIT 1000",
 			b.tableName,
 		),
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"sinceRV": rv,
 		},
 	}
 
-	iter := b.client.Single().Query(context.Background(), stmt)
+	iter := b.client.Single().Query(b.ctx, stmt)
 	defer iter.Stop()
 
 	for {
@@ -518,7 +547,7 @@ func (b *SpannerBroadcaster) sendHistoricalEvents(ch chan storage.ResourceEvent,
 			break
 		}
 		if err != nil {
-			return
+			return true
 		}
 
 		var eventRV int64
@@ -549,11 +578,12 @@ func (b *SpannerBroadcaster) sendHistoricalEvents(ch chan storage.ResourceEvent,
 		}
 
 		select {
-		case ch <- event:
+		case outCh <- event:
 		default:
-			return
+			return false
 		}
 	}
+	return true
 }
 
 func (b *SpannerBroadcaster) unsubscribe(id int) {
@@ -592,7 +622,7 @@ func (b *SpannerBroadcaster) PruneOldEvents(ctx context.Context, olderThan time.
 
 	stmt := spanner.Statement{
 		SQL: fmt.Sprintf("DELETE FROM %s WHERE created_at < @cutoff", b.tableName),
-		Params: map[string]interface{}{
+		Params: map[string]any{
 			"cutoff": cutoff,
 		},
 	}
@@ -602,7 +632,7 @@ func (b *SpannerBroadcaster) PruneOldEvents(ctx context.Context, olderThan time.
 		return fmt.Errorf("failed to prune events: %w", err)
 	}
 
-	fmt.Printf("Pruned %d old events\n", count)
+	b.logger.V(1).Info("Pruned old events", "count", count)
 	return nil
 }
 
