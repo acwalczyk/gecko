@@ -72,6 +72,7 @@ type csRecord struct {
 
 type spannerBroadcaster struct {
 	client           *spanner.Client
+	resourceType     string
 	tableName        string
 	changeStreamName string
 	ctx              context.Context
@@ -91,6 +92,7 @@ type spannerBroadcaster struct {
 
 type spannerBroadcasterConfig struct {
 	Client           *spanner.Client
+	ResourceType     string
 	TableName        string
 	ChangeStreamName string
 	Scheme           *runtime.Scheme
@@ -117,6 +119,7 @@ func newSpannerBroadcaster(ctx context.Context, config spannerBroadcasterConfig)
 
 	b := &spannerBroadcaster{
 		client:           config.Client,
+		resourceType:     config.ResourceType,
 		tableName:        tableName,
 		changeStreamName: config.ChangeStreamName,
 		ctx:              bCtx,
@@ -243,11 +246,16 @@ func (b *spannerBroadcaster) handleDataChangeRecord(dcr *csDataChangeRecord) {
 			continue
 		}
 
-		rv, _ := jsonInt64(newValues["rv"])
+		resourceType, _ := newValues["resource_type"].(string)
+		if resourceType != b.resourceType {
+			continue
+		}
+
+		rv, _ := jsonInt64(newValues["resource_version"])
 		eventType, _ := newValues["event_type"].(string)
 		contextFilter, _ := newValues["context_filter"].(string)
 
-		objectDataStr, _ := newValues["object_data"].(string)
+		objectDataStr, _ := newValues["data"].(string)
 		if objectDataStr == "" {
 			continue
 		}
@@ -347,11 +355,12 @@ func (b *spannerBroadcaster) fetchNewEvents() {
 
 	stmt := spanner.Statement{
 		SQL: fmt.Sprintf(
-			"SELECT rv, event_type, object_data, context_filter FROM %s WHERE rv > @lastRV ORDER BY rv ASC LIMIT 100",
+			"SELECT resource_version, event_type, data, context_filter FROM %s WHERE resource_type = @resourceType AND resource_version > @lastRV ORDER BY resource_version ASC LIMIT 100",
 			b.tableName,
 		),
 		Params: map[string]any{
-			"lastRV": lastRV,
+			"resourceType": b.resourceType,
+			"lastRV":       lastRV,
 		},
 	}
 
@@ -472,11 +481,10 @@ func (b *spannerBroadcaster) Broadcast(event storage.ResourceEvent) {
 		contextFilter = event.ContextFilterValue
 	}
 
-	now := time.Now()
 	_, err = b.client.Apply(b.ctx, []*spanner.Mutation{
 		spanner.Insert(b.tableName,
-			[]string{"rv", "event_type", "object_data", "context_filter", "created_at"},
-			[]any{rv, string(event.Type), spanner.NullJSON{Value: json.RawMessage(objectData), Valid: true}, contextFilter, now},
+			[]string{"resource_type", "resource_version", "event_type", "context_filter", "data", "created_at"},
+			[]any{b.resourceType, rv, string(event.Type), contextFilter, spanner.NullJSON{Value: json.RawMessage(objectData), Valid: true}, spanner.CommitTimestamp},
 		),
 	})
 	if err != nil {
@@ -541,11 +549,12 @@ func (b *spannerBroadcaster) sendHistoricalEvents(outCh chan storage.ResourceEve
 
 	stmt := spanner.Statement{
 		SQL: fmt.Sprintf(
-			"SELECT rv, event_type, object_data, context_filter FROM %s WHERE rv > @sinceRV ORDER BY rv ASC LIMIT 1000",
+			"SELECT resource_version, event_type, data, context_filter FROM %s WHERE resource_type = @resourceType AND resource_version > @sinceRV ORDER BY resource_version ASC LIMIT 1000",
 			b.tableName,
 		),
 		Params: map[string]any{
-			"sinceRV": rv,
+			"resourceType": b.resourceType,
+			"sinceRV":      rv,
 		},
 	}
 
@@ -628,26 +637,4 @@ func (b *spannerBroadcaster) Close() error {
 	return nil
 }
 
-func (b *spannerBroadcaster) PruneOldEvents(ctx context.Context, olderThan time.Duration) error {
-	cutoff := time.Now().Add(-olderThan)
-
-	stmt := spanner.Statement{
-		SQL: fmt.Sprintf("DELETE FROM %s WHERE created_at < @cutoff", b.tableName),
-		Params: map[string]any{
-			"cutoff": cutoff,
-		},
-	}
-
-	count, err := b.client.PartitionedUpdate(ctx, stmt)
-	if err != nil {
-		return fmt.Errorf("failed to prune events: %w", err)
-	}
-
-	b.logger.V(1).Info("Pruned old events", "count", count)
-	return nil
-}
-
-var (
-	_ storage.EventBroadcaster = (*spannerBroadcaster)(nil)
-	_ storage.EventPruner      = (*spannerBroadcaster)(nil)
-)
+var _ storage.EventBroadcaster = (*spannerBroadcaster)(nil)

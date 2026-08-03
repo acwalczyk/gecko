@@ -30,6 +30,7 @@ func setupBroadcasterWithStore(t *testing.T, changeStreamName string) (*spannerB
 
 	broadcaster, err := newSpannerBroadcaster(context.Background(), spannerBroadcasterConfig{
 		Client:           sharedClient,
+		ResourceType:     "testobjects",
 		TableName:        eventLogTable,
 		ChangeStreamName: changeStreamName,
 		Scheme:           scheme,

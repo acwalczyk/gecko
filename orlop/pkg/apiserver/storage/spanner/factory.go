@@ -61,11 +61,20 @@ func NewStorageFactory(config StorageFactoryConfig) (func(string, *runtime.Schem
 		return nil, fmt.Errorf("failed to create counters table: %w", err)
 	}
 
+	eventLogTable := config.TablePrefix + "event_log"
+	if err := ensureTable(ctx, adminClient, config.Database, eventLogTable, eventLogSchema(eventLogTable)); err != nil {
+		return nil, fmt.Errorf("failed to create event log table: %w", err)
+	}
+
+	changeStreamName := config.TablePrefix + "cs_event_log"
+	if err := ensureChangeStream(ctx, adminClient, config.Database, changeStreamName, changeStreamSchema(changeStreamName, eventLogTable)); err != nil {
+		return nil, fmt.Errorf("failed to create change stream: %w", err)
+	}
+
 	factory := func(resourceType string, scheme *runtime.Scheme, gvk schema.GroupVersionKind) (storage.ResourceStore, error) {
 		resourceLogger := logger.WithValues("resource", resourceType)
 		safeType := sanitizeTableName(resourceType)
 		resourcesTable := config.TablePrefix + "resources_" + safeType
-		eventLogTable := config.TablePrefix + "event_log_" + safeType
 
 		if err := ensureTable(ctx, adminClient, config.Database, resourcesTable, resourcesSchema(resourcesTable)); err != nil {
 			return nil, fmt.Errorf("failed to create resources table: %w", err)
@@ -73,17 +82,9 @@ func NewStorageFactory(config StorageFactoryConfig) (func(string, *runtime.Schem
 
 		ensureSearchIndex(ctx, adminClient, config.Database, resourcesTable, resourceLogger)
 
-		if err := ensureTable(ctx, adminClient, config.Database, eventLogTable, eventLogSchema(eventLogTable)); err != nil {
-			return nil, fmt.Errorf("failed to create event log table: %w", err)
-		}
-
-		changeStreamName := "cs_" + eventLogTable
-		if err := ensureChangeStream(ctx, adminClient, config.Database, changeStreamName, changeStreamSchema(changeStreamName, eventLogTable)); err != nil {
-			return nil, fmt.Errorf("failed to create change stream: %w", err)
-		}
-
 		broadcaster, err := newSpannerBroadcaster(ctx, spannerBroadcasterConfig{
 			Client:           client,
+			ResourceType:     resourceType,
 			TableName:        eventLogTable,
 			ChangeStreamName: changeStreamName,
 			Scheme:           scheme,
@@ -151,13 +152,14 @@ func resourcesSchema(tableName string) []string {
 func eventLogSchema(tableName string) []string {
 	return []string{
 		fmt.Sprintf(`CREATE TABLE %s (
-			rv INT64 NOT NULL,
+			resource_type STRING(253) NOT NULL,
+			resource_version INT64 NOT NULL,
 			event_type STRING(20) NOT NULL,
-			object_data JSON NOT NULL,
 			context_filter STRING(253) NOT NULL,
-			created_at TIMESTAMP NOT NULL,
-		) PRIMARY KEY (rv)`, tableName),
-		fmt.Sprintf(`CREATE INDEX idx_%s_created_at ON %s(created_at)`, tableName, tableName),
+			data JSON NOT NULL,
+			created_at TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp = true),
+		) PRIMARY KEY (resource_type, resource_version),
+		ROW DELETION POLICY (OLDER_THAN(created_at, INTERVAL 7 DAY))`, tableName),
 	}
 }
 

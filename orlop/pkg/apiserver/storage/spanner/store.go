@@ -160,8 +160,8 @@ func (s *SpannerStore) eventLogMutation(rv int64, eventType storage.EventType, d
 		return nil
 	}
 	return spanner.Insert(s.eventLogTable,
-		[]string{"rv", "event_type", "object_data", "context_filter", "created_at"},
-		[]any{rv, string(eventType), spanner.NullJSON{Value: json.RawMessage(data), Valid: true}, contextFilter, time.Now()},
+		[]string{"resource_type", "resource_version", "event_type", "context_filter", "data", "created_at"},
+		[]any{s.resourceType, rv, string(eventType), contextFilter, spanner.NullJSON{Value: json.RawMessage(data), Valid: true}, spanner.CommitTimestamp},
 	)
 }
 
