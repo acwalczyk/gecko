@@ -88,7 +88,6 @@ var (
 	sharedDBAdmin   *database.DatabaseAdminClient
 	sharedDBPath    string
 	resourcesTable  string
-	eventLogTable   string
 	countersTable   string
 	testCounterSeq  atomic.Int64
 )
@@ -201,16 +200,14 @@ func TestMain(m *testing.M) {
 	// Create tables with unique names for this test run
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	resourcesTable = "resources_" + suffix
-	eventLogTable = "event_log_" + suffix
 	countersTable = "counters_" + suffix
 
-	changeStreamName := "cs_" + eventLogTable
+	changeStreamName := "cs_" + resourcesTable
 
 	var ddl []string
 	ddl = append(ddl, countersSchema(countersTable)...)
 	ddl = append(ddl, resourcesSchema(resourcesTable)...)
-	ddl = append(ddl, eventLogSchema(eventLogTable)...)
-	ddl = append(ddl, changeStreamSchema(changeStreamName, eventLogTable)...)
+	ddl = append(ddl, changeStreamSchema(changeStreamName, resourcesTable)...)
 
 	ddlOp, err := sharedDBAdmin.UpdateDatabaseDdl(ctx, &databasepb.UpdateDatabaseDdlRequest{
 		Database:   sharedDBPath,

@@ -12,8 +12,6 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 	"google.golang.org/api/iterator"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -107,7 +105,7 @@ func newSpannerBroadcaster(ctx context.Context, config spannerBroadcasterConfig)
 
 	tableName := config.TableName
 	if tableName == "" {
-		tableName = "event_log"
+		tableName = "resources"
 	}
 
 	bCtx, cancel := context.WithCancel(ctx)
@@ -131,15 +129,9 @@ func newSpannerBroadcaster(ctx context.Context, config spannerBroadcasterConfig)
 		startTimestamp:   time.Now(),
 	}
 
-	if b.changeStreamName != "" {
-		b.wg.Go(func() {
-			b.readChangeStream(bCtx, nil)
-		})
-	} else {
-		b.wg.Go(func() {
-			b.pollForEvents()
-		})
-	}
+	b.wg.Go(func() {
+		b.readChangeStream(bCtx, nil)
+	})
 
 	return b, nil
 }
@@ -182,13 +174,6 @@ func (b *spannerBroadcaster) readChangeStream(ctx context.Context, partitionToke
 		}
 
 		if err != nil {
-			st, ok := status.FromError(err)
-			if ok && (st.Code() == codes.Unimplemented || st.Code() == codes.NotFound || st.Code() == codes.InvalidArgument) {
-				b.logger.Info("Change stream not supported, falling back to polling", "error", err)
-				b.pollForEvents()
-				return
-			}
-
 			b.logger.Error(err, "Change stream read error, retrying", "backoff", backoff)
 			select {
 			case <-ctx.Done():
@@ -222,9 +207,6 @@ func (b *spannerBroadcaster) processChangeRecords(ctx context.Context, iter *spa
 
 		for _, rec := range records {
 			for _, dcr := range rec.DataChangeRecords {
-				if dcr.ModType != "INSERT" {
-					continue
-				}
 				b.handleDataChangeRecord(dcr)
 			}
 
@@ -240,6 +222,18 @@ func (b *spannerBroadcaster) processChangeRecords(ctx context.Context, iter *spa
 }
 
 func (b *spannerBroadcaster) handleDataChangeRecord(dcr *csDataChangeRecord) {
+	var eventType storage.EventType
+	switch dcr.ModType {
+	case "INSERT":
+		eventType = storage.EventAdded
+	case "UPDATE":
+		eventType = storage.EventModified
+	case "DELETE":
+		eventType = storage.EventDeleted
+	default:
+		return
+	}
+
 	for _, m := range dcr.Mods {
 		keys, err := csModToMap(m.Keys)
 		if err != nil {
@@ -251,17 +245,22 @@ func (b *spannerBroadcaster) handleDataChangeRecord(dcr *csDataChangeRecord) {
 			continue
 		}
 
-		rv, _ := jsonInt64(keys["resource_version"])
+		contextFilter, _ := keys["context_filter"].(string)
 
-		newValues, err := csModToMap(m.NewValues)
+		// For DELETE, new_values is empty — read from old_values instead
+		var values map[string]any
+		if dcr.ModType == "DELETE" {
+			values, err = csModToMap(m.OldValues)
+		} else {
+			values, err = csModToMap(m.NewValues)
+		}
 		if err != nil {
 			continue
 		}
 
-		eventType, _ := newValues["event_type"].(string)
-		contextFilter, _ := newValues["context_filter"].(string)
+		rv, _ := jsonInt64(values["resource_version"])
 
-		objectData := newValues["data"]
+		objectData := values["data"]
 		if objectData == nil {
 			continue
 		}
@@ -284,7 +283,7 @@ func (b *spannerBroadcaster) handleDataChangeRecord(dcr *csDataChangeRecord) {
 		obj.SetResourceVersion(strconv.FormatInt(rv, 10))
 
 		event := storage.ResourceEvent{
-			Type:               storage.EventType(eventType),
+			Type:               eventType,
 			ResourceVersion:    strconv.FormatInt(rv, 10),
 			Object:             obj,
 			ContextFilterValue: contextFilter,
@@ -348,90 +347,6 @@ func (b *spannerBroadcaster) handleChildPartitionsRecord(ctx context.Context, cp
 	}
 }
 
-func (b *spannerBroadcaster) pollForEvents() {
-	ticker := time.NewTicker(200 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-b.ctx.Done():
-			return
-		case <-ticker.C:
-			b.fetchNewEvents()
-		}
-	}
-}
-
-func (b *spannerBroadcaster) fetchNewEvents() {
-	b.mu.RLock()
-	lastRV := b.lastRV
-	subscriberCount := len(b.subscribers)
-	b.mu.RUnlock()
-
-	if subscriberCount == 0 {
-		return
-	}
-
-	stmt := spanner.Statement{
-		SQL: fmt.Sprintf(
-			"SELECT resource_version, event_type, data, context_filter FROM %s WHERE resource_type = @resourceType AND resource_version > @lastRV ORDER BY resource_version ASC LIMIT 100",
-			b.tableName,
-		),
-		Params: map[string]any{
-			"resourceType": b.resourceType,
-			"lastRV":       lastRV,
-		},
-	}
-
-	iter := b.client.Single().Query(b.ctx, stmt)
-	defer iter.Stop()
-
-	for {
-		row, err := iter.Next()
-		if err == iterator.Done {
-			break
-		}
-		if err != nil {
-			return
-		}
-
-		var rv int64
-		var eventType string
-		var objectDataJSON spanner.NullJSON
-		var contextFilter string
-		if err := row.Columns(&rv, &eventType, &objectDataJSON, &contextFilter); err != nil {
-			continue
-		}
-
-		objectDataBytes, err := json.Marshal(objectDataJSON.Value)
-		if err != nil {
-			continue
-		}
-
-		obj, err := b.reconstructObject(objectDataBytes)
-		if err != nil {
-			continue
-		}
-
-		obj.SetResourceVersion(strconv.FormatInt(rv, 10))
-
-		event := storage.ResourceEvent{
-			Type:               storage.EventType(eventType),
-			ResourceVersion:    strconv.FormatInt(rv, 10),
-			Object:             obj,
-			ContextFilterValue: contextFilter,
-		}
-
-		b.broadcastToSubscribers(event)
-
-		b.mu.Lock()
-		if rv > b.lastRV {
-			b.lastRV = rv
-		}
-		b.mu.Unlock()
-	}
-}
-
 func (b *spannerBroadcaster) reconstructObject(data []byte) (client.Object, error) {
 	if b.scheme == nil || b.gvk.Empty() {
 		obj := &unstructured.Unstructured{}
@@ -481,34 +396,6 @@ func (b *spannerBroadcaster) broadcastToSubscribers(event storage.ResourceEvent)
 }
 
 func (b *spannerBroadcaster) Broadcast(event storage.ResourceEvent) {
-	b.mu.RLock()
-	if b.closed {
-		b.mu.RUnlock()
-		return
-	}
-	b.mu.RUnlock()
-
-	rv, _ := strconv.ParseInt(event.ResourceVersion, 10, 64)
-
-	objectData, err := marshalData(event.Object)
-	if err != nil {
-		return
-	}
-
-	contextFilter := ""
-	if event.ContextFilterValue != "" {
-		contextFilter = event.ContextFilterValue
-	}
-
-	_, err = b.client.Apply(b.ctx, []*spanner.Mutation{
-		spanner.Insert(b.tableName,
-			[]string{"resource_type", "resource_version", "event_type", "namespace", "name", "context_filter", "data", "created_at"},
-			[]any{b.resourceType, rv, string(event.Type), event.Object.GetNamespace(), event.Object.GetName(), contextFilter, spanner.NullJSON{Value: json.RawMessage(objectData), Valid: true}, spanner.CommitTimestamp},
-		),
-	})
-	if err != nil {
-		b.logger.Error(err, "Failed to insert event")
-	}
 }
 
 func (b *spannerBroadcaster) Subscribe(sinceResourceVersion string) (<-chan storage.ResourceEvent, func(), error) {
@@ -576,7 +463,7 @@ func (b *spannerBroadcaster) sendHistoricalEvents(outCh chan storage.ResourceEve
 
 	stmt := spanner.Statement{
 		SQL: fmt.Sprintf(
-			"SELECT resource_version, event_type, data, context_filter FROM %s WHERE resource_type = @resourceType AND resource_version > @sinceRV ORDER BY resource_version ASC LIMIT 1000",
+			"SELECT resource_version, data, context_filter FROM %s WHERE resource_type = @resourceType AND resource_version > @sinceRV ORDER BY resource_version ASC LIMIT 1000",
 			b.tableName,
 		),
 		Params: map[string]any{
@@ -599,10 +486,9 @@ func (b *spannerBroadcaster) sendHistoricalEvents(outCh chan storage.ResourceEve
 		}
 
 		var eventRV int64
-		var eventType string
 		var objectDataJSON spanner.NullJSON
 		var contextFilter string
-		if err := row.Columns(&eventRV, &eventType, &objectDataJSON, &contextFilter); err != nil {
+		if err := row.Columns(&eventRV, &objectDataJSON, &contextFilter); err != nil {
 			continue
 		}
 
@@ -619,7 +505,7 @@ func (b *spannerBroadcaster) sendHistoricalEvents(outCh chan storage.ResourceEve
 		obj.SetResourceVersion(strconv.FormatInt(eventRV, 10))
 
 		event := storage.ResourceEvent{
-			Type:               storage.EventType(eventType),
+			Type:               storage.EventAdded,
 			ResourceVersion:    strconv.FormatInt(eventRV, 10),
 			Object:             obj,
 			ContextFilterValue: contextFilter,

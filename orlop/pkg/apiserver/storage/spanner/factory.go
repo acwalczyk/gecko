@@ -68,13 +68,8 @@ func NewStorageFactory(config StorageFactoryConfig) (func(string, *runtime.Schem
 
 	ensureSearchIndex(ctx, adminClient, config.Database, resourcesTable, logger)
 
-	eventLogTable := config.TablePrefix + "event_log"
-	if err := ensureTable(ctx, adminClient, config.Database, eventLogTable, eventLogSchema(eventLogTable)); err != nil {
-		return nil, fmt.Errorf("failed to create event log table: %w", err)
-	}
-
-	changeStreamName := config.TablePrefix + "cs_event_log"
-	if err := ensureChangeStream(ctx, adminClient, config.Database, changeStreamName, changeStreamSchema(changeStreamName, eventLogTable)); err != nil {
+	changeStreamName := config.TablePrefix + "cs_resources"
+	if err := ensureChangeStream(ctx, adminClient, config.Database, changeStreamName, changeStreamSchema(changeStreamName, resourcesTable)); err != nil {
 		return nil, fmt.Errorf("failed to create change stream: %w", err)
 	}
 
@@ -85,7 +80,7 @@ func NewStorageFactory(config StorageFactoryConfig) (func(string, *runtime.Schem
 		broadcaster, err := newSpannerBroadcaster(ctx, spannerBroadcasterConfig{
 			Client:           client,
 			ResourceType:     rt,
-			TableName:        eventLogTable,
+			TableName:        resourcesTable,
 			ChangeStreamName: changeStreamName,
 			Scheme:           scheme,
 			GVK:              gvk,
@@ -102,7 +97,6 @@ func NewStorageFactory(config StorageFactoryConfig) (func(string, *runtime.Schem
 			GVK:           gvk,
 			Broadcaster:   broadcaster,
 			TableName:     resourcesTable,
-			EventLogTable: eventLogTable,
 			CountersTable: countersTable,
 			Logger:        resourceLogger,
 		})
@@ -151,22 +145,6 @@ func resourcesSchema(tableName string) []string {
 		fmt.Sprintf(`CREATE INDEX idx_%s_namespace ON %s(resource_type, namespace)`, tableName, tableName),
 		fmt.Sprintf(`CREATE INDEX idx_%s_rv ON %s(resource_type, resource_version) STORING (data, labels)`, tableName, tableName),
 		fmt.Sprintf(`CREATE NULL_FILTERED INDEX idx_%s_deletion_timestamp ON %s(deletion_timestamp)`, tableName, tableName),
-	}
-}
-
-func eventLogSchema(tableName string) []string {
-	return []string{
-		fmt.Sprintf(`CREATE TABLE %s (
-			resource_type STRING(253) NOT NULL,
-			resource_version INT64 NOT NULL,
-			event_type STRING(20) NOT NULL,
-			namespace STRING(253) NOT NULL,
-			name STRING(253) NOT NULL,
-			context_filter STRING(253) NOT NULL,
-			data JSON NOT NULL,
-			created_at TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp = true),
-		) PRIMARY KEY (resource_type, resource_version),
-		ROW DELETION POLICY (OLDER_THAN(created_at, INTERVAL 7 DAY))`, tableName),
 	}
 }
 

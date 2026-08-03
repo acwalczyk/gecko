@@ -33,7 +33,6 @@ type SpannerStore struct {
 	gvk              schema.GroupVersionKind
 	broadcaster      storage.EventBroadcaster
 	tableName        string
-	eventLogTable    string
 	countersTable    string
 	counterID        string
 	contextFilterKey any
@@ -47,7 +46,6 @@ type SpannerStoreConfig struct {
 	GVK              schema.GroupVersionKind
 	Broadcaster      storage.EventBroadcaster
 	TableName        string
-	EventLogTable    string
 	CountersTable    string
 	ContextFilterKey any
 	Logger           logr.Logger
@@ -85,7 +83,6 @@ func NewSpannerStore(config SpannerStoreConfig) (*SpannerStore, error) {
 		gvk:              config.GVK,
 		broadcaster:      config.Broadcaster,
 		tableName:        tableName,
-		eventLogTable:    config.EventLogTable,
 		countersTable:    countersTable,
 		counterID:        config.ResourceType,
 		contextFilterKey: config.ContextFilterKey,
@@ -144,16 +141,6 @@ func (s *SpannerStore) incrementCounter(txn *spanner.ReadWriteTransaction, ctx c
 }
 
 
-func (s *SpannerStore) eventLogMutation(rv int64, eventType storage.EventType, namespace, name string, data []byte, contextFilter string) *spanner.Mutation {
-	if s.eventLogTable == "" {
-		return nil
-	}
-	return spanner.Insert(s.eventLogTable,
-		[]string{"resource_type", "resource_version", "event_type", "namespace", "name", "context_filter", "data", "created_at"},
-		[]any{s.resourceType, rv, string(eventType), namespace, name, contextFilter, spanner.NullJSON{Value: json.RawMessage(data), Valid: true}, spanner.CommitTimestamp},
-	)
-}
-
 func (s *SpannerStore) Create(ctx context.Context, obj client.Object) error {
 	filterValue, err := s.contextFilterValue(ctx)
 	if err != nil {
@@ -203,17 +190,13 @@ func (s *SpannerStore) Create(ctx context.Context, obj client.Object) error {
 				return counterErr
 			}
 
-			mutations := []*spanner.Mutation{
+			return txn.BufferWrite([]*spanner.Mutation{
 				spanner.InsertOrUpdate(s.countersTable, []string{"counter_id", "value"}, []any{s.counterID, rv}),
 				spanner.Insert(s.tableName,
 					[]string{"resource_type", "context_filter", "namespace", "name", "uid", "resource_version", "object_version", "labels", "data", "created_at", "updated_at"},
 					[]any{s.resourceType, filterValue, namespace, name, uid, rv, int64(1), spanner.NullJSON{Value: json.RawMessage(labelsJSON), Valid: true}, spanner.NullJSON{Value: json.RawMessage(data), Valid: true}, now, now},
 				),
-			}
-			if m := s.eventLogMutation(rv, storage.EventAdded, namespace, name, data, filterValue); m != nil {
-				mutations = append(mutations, m)
-			}
-			return txn.BufferWrite(mutations)
+			})
 		})
 		if err != nil {
 			if spanner.ErrCode(err) == codes.AlreadyExists {
@@ -466,17 +449,13 @@ func (s *SpannerStore) Update(ctx context.Context, obj client.Object) error {
 		}
 
 		now := time.Now()
-		mutations := []*spanner.Mutation{
+		return txn.BufferWrite([]*spanner.Mutation{
 			spanner.InsertOrUpdate(s.countersTable, []string{"counter_id", "value"}, []any{s.counterID, rv}),
 			spanner.Update(s.tableName,
 				[]string{"resource_type", "context_filter", "namespace", "name", "resource_version", "object_version", "labels", "data", "updated_at"},
 				[]any{s.resourceType, filterValue, namespace, name, rv, objectVersion + 1, spanner.NullJSON{Value: json.RawMessage(labelsJSON), Valid: true}, spanner.NullJSON{Value: json.RawMessage(data), Valid: true}, now},
 			),
-		}
-		if m := s.eventLogMutation(rv, storage.EventModified, namespace, name, data, filterValue); m != nil {
-			mutations = append(mutations, m)
-		}
-		return txn.BufferWrite(mutations)
+		})
 	})
 	if err != nil {
 		return fmt.Errorf("failed to update object: %w", err)
@@ -492,13 +471,10 @@ func (s *SpannerStore) Delete(ctx context.Context, namespace, name string) error
 		return err
 	}
 
-	var rv int64
 	_, err = s.client.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
-		rv = 0
-
-		row, readErr := txn.ReadRow(ctx, s.tableName,
+		_, readErr := txn.ReadRow(ctx, s.tableName,
 			spanner.Key{s.resourceType, filterValue, namespace, name},
-			[]string{"resource_version", "data"},
+			[]string{"resource_version"},
 		)
 		if readErr != nil {
 			if spanner.ErrCode(readErr) == codes.NotFound {
@@ -507,32 +483,15 @@ func (s *SpannerStore) Delete(ctx context.Context, namespace, name string) error
 			return readErr
 		}
 
-		var storedRV int64
-		var dataJSON spanner.NullJSON
-		if err := row.Columns(&storedRV, &dataJSON); err != nil {
-			return err
-		}
-
-		var counterErr error
-		rv, counterErr = s.incrementCounter(txn, ctx)
+		rv, counterErr := s.incrementCounter(txn, ctx)
 		if counterErr != nil {
 			return counterErr
 		}
 
-		mutations := []*spanner.Mutation{
+		return txn.BufferWrite([]*spanner.Mutation{
 			spanner.InsertOrUpdate(s.countersTable, []string{"counter_id", "value"}, []any{s.counterID, rv}),
 			spanner.Delete(s.tableName, spanner.Key{s.resourceType, filterValue, namespace, name}),
-		}
-
-		if s.eventLogTable != "" {
-			dataBytes, err := json.Marshal(dataJSON.Value)
-			if err != nil {
-				return fmt.Errorf("failed to marshal deleted object data: %w", err)
-			}
-			mutations = append(mutations, s.eventLogMutation(rv, storage.EventDeleted, namespace, name, dataBytes, filterValue))
-		}
-
-		return txn.BufferWrite(mutations)
+		})
 	})
 	if err != nil {
 		return fmt.Errorf("failed to delete object: %w", err)

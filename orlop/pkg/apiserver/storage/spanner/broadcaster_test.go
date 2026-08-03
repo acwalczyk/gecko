@@ -23,17 +23,19 @@ func testSchemeAndGVK() (*runtime.Scheme, schema.GroupVersionKind) {
 	return scheme, gvk
 }
 
-func setupBroadcasterWithStore(t *testing.T, changeStreamName string) (*spannerBroadcaster, *SpannerStore) {
+func setupBroadcasterWithStore(t *testing.T) (*spannerBroadcaster, *SpannerStore) {
 	t.Helper()
 
 	scheme, gvk := testSchemeAndGVK()
 
 	rt := gvkString(gvk)
 
+	changeStreamName := "cs_" + resourcesTable
+
 	broadcaster, err := newSpannerBroadcaster(context.Background(), spannerBroadcasterConfig{
 		Client:           sharedClient,
 		ResourceType:     rt,
-		TableName:        eventLogTable,
+		TableName:        resourcesTable,
 		ChangeStreamName: changeStreamName,
 		Scheme:           scheme,
 		GVK:              gvk,
@@ -50,7 +52,6 @@ func setupBroadcasterWithStore(t *testing.T, changeStreamName string) (*spannerB
 		gvk:           gvk,
 		broadcaster:   broadcaster,
 		tableName:     resourcesTable,
-		eventLogTable: eventLogTable,
 		countersTable: countersTable,
 		counterID:     broadcasterCounterID,
 	}
@@ -83,7 +84,7 @@ func drainUntil(t *testing.T, ch <-chan storage.ResourceEvent, ns, name string, 
 const eventTimeout = 10 * time.Second
 
 func TestBroadcaster_SubscribeReceivesLiveEvents(t *testing.T) {
-	_, store := setupBroadcasterWithStore(t, "")
+	_, store := setupBroadcasterWithStore(t)
 	ns := uniqueNS("bc-live")
 
 	eventCh, stop, err := store.broadcaster.Subscribe("")
@@ -104,7 +105,7 @@ func TestBroadcaster_SubscribeReceivesLiveEvents(t *testing.T) {
 }
 
 func TestBroadcaster_SubscribeReplaysHistoricalEvents(t *testing.T) {
-	_, store := setupBroadcasterWithStore(t, "")
+	_, store := setupBroadcasterWithStore(t)
 	ns := uniqueNS("bc-hist")
 
 	obj := newTestObject(withName("obj"), withNamespace(ns))
@@ -122,7 +123,7 @@ func TestBroadcaster_SubscribeReplaysHistoricalEvents(t *testing.T) {
 }
 
 func TestBroadcaster_SubscribeSinceResourceVersion(t *testing.T) {
-	_, store := setupBroadcasterWithStore(t, "")
+	_, store := setupBroadcasterWithStore(t)
 	ns := uniqueNS("bc-since")
 
 	obj1 := newTestObject(withName("before"), withNamespace(ns))
@@ -165,7 +166,7 @@ func TestBroadcaster_SubscribeSinceResourceVersion(t *testing.T) {
 }
 
 func TestBroadcaster_MultipleSubscribers(t *testing.T) {
-	_, store := setupBroadcasterWithStore(t, "")
+	_, store := setupBroadcasterWithStore(t)
 	ns := uniqueNS("bc-multi")
 
 	ch1, stop1, err := store.broadcaster.Subscribe("")
@@ -190,7 +191,7 @@ func TestBroadcaster_MultipleSubscribers(t *testing.T) {
 }
 
 func TestBroadcaster_UnsubscribeStopsDelivery(t *testing.T) {
-	broadcaster, _ := setupBroadcasterWithStore(t, "")
+	broadcaster, _ := setupBroadcasterWithStore(t)
 
 	eventCh, stop, err := broadcaster.Subscribe("")
 	if err != nil {
@@ -210,7 +211,7 @@ func TestBroadcaster_UnsubscribeStopsDelivery(t *testing.T) {
 }
 
 func TestBroadcaster_CloseShutdown(t *testing.T) {
-	broadcaster, _ := setupBroadcasterWithStore(t, "")
+	broadcaster, _ := setupBroadcasterWithStore(t)
 
 	eventCh, _, err := broadcaster.Subscribe("")
 	if err != nil {
@@ -243,24 +244,3 @@ func TestBroadcaster_CloseShutdown(t *testing.T) {
 	}
 }
 
-func TestBroadcaster_ChangeStream(t *testing.T) {
-	changeStreamName := "cs_" + eventLogTable
-	_, store := setupBroadcasterWithStore(t, changeStreamName)
-	ns := uniqueNS("bc-cs")
-
-	eventCh, stop, err := store.broadcaster.Subscribe("")
-	if err != nil {
-		t.Fatalf("Subscribe() failed: %v", err)
-	}
-	defer stop()
-
-	obj := newTestObject(withName("obj"), withNamespace(ns))
-	if err := store.Create(context.Background(), obj); err != nil {
-		t.Fatalf("Create() failed: %v", err)
-	}
-
-	event := drainUntil(t, eventCh, ns, "obj", eventTimeout)
-	if event.Type != storage.EventAdded {
-		t.Errorf("expected event type %s, got %s", storage.EventAdded, event.Type)
-	}
-}
