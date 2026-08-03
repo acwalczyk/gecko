@@ -48,7 +48,7 @@ type childPartition struct {
 	Token string `json:"token"`
 }
 
-type SpannerBroadcaster struct {
+type spannerBroadcaster struct {
 	client           *spanner.Client
 	tableName        string
 	changeStreamName string
@@ -67,7 +67,7 @@ type SpannerBroadcaster struct {
 	wg             sync.WaitGroup
 }
 
-type SpannerBroadcasterConfig struct {
+type spannerBroadcasterConfig struct {
 	Client           *spanner.Client
 	TableName        string
 	ChangeStreamName string
@@ -76,7 +76,7 @@ type SpannerBroadcasterConfig struct {
 	Logger           logr.Logger
 }
 
-func NewSpannerBroadcaster(ctx context.Context, config SpannerBroadcasterConfig) (*SpannerBroadcaster, error) {
+func newSpannerBroadcaster(ctx context.Context, config spannerBroadcasterConfig) (*spannerBroadcaster, error) {
 	if config.Client == nil {
 		return nil, fmt.Errorf("spanner client is required")
 	}
@@ -93,7 +93,7 @@ func NewSpannerBroadcaster(ctx context.Context, config SpannerBroadcasterConfig)
 		broadcasterLogger = logr.Discard()
 	}
 
-	b := &SpannerBroadcaster{
+	b := &spannerBroadcaster{
 		client:           config.Client,
 		tableName:        tableName,
 		changeStreamName: config.ChangeStreamName,
@@ -119,7 +119,7 @@ func NewSpannerBroadcaster(ctx context.Context, config SpannerBroadcasterConfig)
 	return b, nil
 }
 
-func (b *SpannerBroadcaster) readChangeStream(ctx context.Context, partitionToken *string) {
+func (b *spannerBroadcaster) readChangeStream(ctx context.Context, partitionToken *string) {
 	backoff := time.Second
 
 	for {
@@ -180,7 +180,7 @@ func (b *SpannerBroadcaster) readChangeStream(ctx context.Context, partitionToke
 	}
 }
 
-func (b *SpannerBroadcaster) processChangeRecords(ctx context.Context, iter *spanner.RowIterator) error {
+func (b *spannerBroadcaster) processChangeRecords(ctx context.Context, iter *spanner.RowIterator) error {
 	for {
 		row, err := iter.Next()
 		if err == iterator.Done {
@@ -228,7 +228,7 @@ func (b *SpannerBroadcaster) processChangeRecords(ctx context.Context, iter *spa
 	}
 }
 
-func (b *SpannerBroadcaster) handleDataChangeRecord(dcr dataChangeRecord) {
+func (b *spannerBroadcaster) handleDataChangeRecord(dcr dataChangeRecord) {
 	for _, m := range dcr.Mods {
 		rv, _ := toInt64(m.NewValues["rv"])
 		eventType, _ := m.NewValues["event_type"].(string)
@@ -263,7 +263,7 @@ func (b *SpannerBroadcaster) handleDataChangeRecord(dcr dataChangeRecord) {
 	}
 }
 
-func (b *SpannerBroadcaster) handleHeartbeatRecord(hr heartbeatRecord) {
+func (b *spannerBroadcaster) handleHeartbeatRecord(hr heartbeatRecord) {
 	ts, err := time.Parse(time.RFC3339Nano, hr.Timestamp)
 	if err != nil {
 		return
@@ -273,7 +273,7 @@ func (b *SpannerBroadcaster) handleHeartbeatRecord(hr heartbeatRecord) {
 	b.mu.Unlock()
 }
 
-func (b *SpannerBroadcaster) handleChildPartitionsRecord(ctx context.Context, cpr childPartitionsRecord) {
+func (b *spannerBroadcaster) handleChildPartitionsRecord(ctx context.Context, cpr childPartitionsRecord) {
 	for _, cp := range cpr.ChildPartitions {
 		token := cp.Token
 		b.wg.Go(func() {
@@ -310,7 +310,7 @@ func extractObjectData(v any) ([]byte, error) {
 	}
 }
 
-func (b *SpannerBroadcaster) pollForEvents() {
+func (b *spannerBroadcaster) pollForEvents() {
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -324,7 +324,7 @@ func (b *SpannerBroadcaster) pollForEvents() {
 	}
 }
 
-func (b *SpannerBroadcaster) fetchNewEvents() {
+func (b *spannerBroadcaster) fetchNewEvents() {
 	b.mu.RLock()
 	lastRV := b.lastRV
 	subscriberCount := len(b.subscribers)
@@ -393,7 +393,7 @@ func (b *SpannerBroadcaster) fetchNewEvents() {
 	}
 }
 
-func (b *SpannerBroadcaster) reconstructObject(data []byte) (client.Object, error) {
+func (b *spannerBroadcaster) reconstructObject(data []byte) (client.Object, error) {
 	if b.scheme == nil || b.gvk.Empty() {
 		obj := &unstructured.Unstructured{}
 		if err := json.Unmarshal(data, &obj.Object); err != nil {
@@ -426,7 +426,7 @@ func (b *SpannerBroadcaster) reconstructObject(data []byte) (client.Object, erro
 	return clientObj, nil
 }
 
-func (b *SpannerBroadcaster) broadcastToSubscribers(event storage.ResourceEvent) {
+func (b *spannerBroadcaster) broadcastToSubscribers(event storage.ResourceEvent) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -441,7 +441,7 @@ func (b *SpannerBroadcaster) broadcastToSubscribers(event storage.ResourceEvent)
 	}
 }
 
-func (b *SpannerBroadcaster) Broadcast(event storage.ResourceEvent) {
+func (b *spannerBroadcaster) Broadcast(event storage.ResourceEvent) {
 	b.mu.RLock()
 	if b.closed {
 		b.mu.RUnlock()
@@ -473,7 +473,7 @@ func (b *SpannerBroadcaster) Broadcast(event storage.ResourceEvent) {
 	}
 }
 
-func (b *SpannerBroadcaster) Subscribe(sinceResourceVersion string) (<-chan storage.ResourceEvent, func(), error) {
+func (b *spannerBroadcaster) Subscribe(sinceResourceVersion string) (<-chan storage.ResourceEvent, func(), error) {
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
@@ -522,7 +522,7 @@ func (b *SpannerBroadcaster) Subscribe(sinceResourceVersion string) (<-chan stor
 
 // sendHistoricalEvents replays events since the given RV. Returns false if the
 // output channel is full (watch should be cancelled).
-func (b *SpannerBroadcaster) sendHistoricalEvents(outCh chan storage.ResourceEvent, sinceResourceVersion string) bool {
+func (b *spannerBroadcaster) sendHistoricalEvents(outCh chan storage.ResourceEvent, sinceResourceVersion string) bool {
 	rv, err := strconv.ParseInt(sinceResourceVersion, 10, 64)
 	if err != nil {
 		return true
@@ -586,7 +586,7 @@ func (b *SpannerBroadcaster) sendHistoricalEvents(outCh chan storage.ResourceEve
 	return true
 }
 
-func (b *SpannerBroadcaster) unsubscribe(id int) {
+func (b *spannerBroadcaster) unsubscribe(id int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -596,7 +596,7 @@ func (b *SpannerBroadcaster) unsubscribe(id int) {
 	}
 }
 
-func (b *SpannerBroadcaster) Close() error {
+func (b *spannerBroadcaster) Close() error {
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
@@ -617,7 +617,7 @@ func (b *SpannerBroadcaster) Close() error {
 	return nil
 }
 
-func (b *SpannerBroadcaster) PruneOldEvents(ctx context.Context, olderThan time.Duration) error {
+func (b *spannerBroadcaster) PruneOldEvents(ctx context.Context, olderThan time.Duration) error {
 	cutoff := time.Now().Add(-olderThan)
 
 	stmt := spanner.Statement{
@@ -637,6 +637,6 @@ func (b *SpannerBroadcaster) PruneOldEvents(ctx context.Context, olderThan time.
 }
 
 var (
-	_ storage.EventBroadcaster = (*SpannerBroadcaster)(nil)
-	_ storage.EventPruner      = (*SpannerBroadcaster)(nil)
+	_ storage.EventBroadcaster = (*spannerBroadcaster)(nil)
+	_ storage.EventPruner      = (*spannerBroadcaster)(nil)
 )

@@ -294,36 +294,36 @@ func (s *SpannerStore) List(ctx context.Context, opts storage.ListOptions) (clie
 		}
 	}
 
-	qb := NewQueryBuilder(s.tableName, "namespace", "name", "resource_version", "data")
+	qb := newQueryBuilder(s.tableName, "namespace", "name", "resource_version", "data")
 
 	if s.contextFilterKey != nil {
-		qb.WhereContextFilter(filterValue)
+		qb.whereContextFilter(filterValue)
 	}
-	qb.WhereNamespace(opts.Namespace)
+	qb.whereNamespace(opts.Namespace)
 
 	if opts.LabelSelector != "" {
 		selector, err := labels.Parse(opts.LabelSelector)
 		if err != nil {
 			return nil, err
 		}
-		qb.WhereLabelSelector(selector)
+		qb.whereLabelSelector(selector)
 	}
 
-	qb.WhereShardSelector(opts.ShardSelector)
-	qb.WhereFieldFilters(opts.FieldFilters)
+	qb.whereShardSelector(opts.ShardSelector)
+	qb.whereFieldFilters(opts.FieldFilters)
 
 	if opts.Continue != "" {
 		token, _ := storage.DecodeContinueToken(opts.Continue)
-		qb.WhereContinueToken(token)
+		qb.whereContinueToken(token)
 	}
 
-	qb.OrderBy("namespace", "name")
+	qb.setOrderBy("namespace", "name")
 
 	if opts.Limit > 0 {
-		qb.Limit(opts.Limit + 1)
+		qb.setLimit(opts.Limit + 1)
 	}
 
-	query, params := qb.Build()
+	query, params := qb.build()
 	stmt := spanner.Statement{SQL: query, Params: params}
 	iter := s.client.Single().Query(ctx, stmt)
 	defer iter.Stop()

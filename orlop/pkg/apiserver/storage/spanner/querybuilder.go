@@ -13,7 +13,7 @@ import (
 var validLabelKeyRe = regexp.MustCompile(`^[a-zA-Z0-9._\-/]+$`)
 var validFieldPathRe = regexp.MustCompile(`^[a-zA-Z0-9._\-/]+$`)
 
-type QueryBuilder struct {
+type queryBuilder struct {
 	tableName string
 	columns   []string
 	where     []string
@@ -23,45 +23,45 @@ type QueryBuilder struct {
 	paramSeq  int
 }
 
-func NewQueryBuilder(tableName string, columns ...string) *QueryBuilder {
+func newQueryBuilder(tableName string, columns ...string) *queryBuilder {
 	if len(columns) == 0 {
 		columns = []string{"*"}
 	}
-	return &QueryBuilder{
+	return &queryBuilder{
 		tableName: tableName,
 		columns:   columns,
 		params:    map[string]any{},
 	}
 }
 
-func (qb *QueryBuilder) nextParam(value any) string {
+func (qb *queryBuilder) nextParam(value any) string {
 	name := fmt.Sprintf("p%d", qb.paramSeq)
 	qb.paramSeq++
 	qb.params[name] = value
 	return "@" + name
 }
 
-func (qb *QueryBuilder) Where(condition string) *QueryBuilder {
+func (qb *queryBuilder) appendWhere(condition string) *queryBuilder {
 	qb.where = append(qb.where, condition)
 	return qb
 }
 
-func (qb *QueryBuilder) WhereContextFilter(value string) *QueryBuilder {
+func (qb *queryBuilder) whereContextFilter(value string) *queryBuilder {
 	p := qb.nextParam(value)
-	qb.Where(fmt.Sprintf("context_filter = %s", p))
+	qb.appendWhere(fmt.Sprintf("context_filter = %s", p))
 	return qb
 }
 
-func (qb *QueryBuilder) WhereNamespace(namespace string) *QueryBuilder {
+func (qb *queryBuilder) whereNamespace(namespace string) *queryBuilder {
 	if namespace == "" {
 		return qb
 	}
 	p := qb.nextParam(namespace)
-	qb.Where(fmt.Sprintf("namespace = %s", p))
+	qb.appendWhere(fmt.Sprintf("namespace = %s", p))
 	return qb
 }
 
-func (qb *QueryBuilder) WhereLabelSelector(selector labels.Selector) *QueryBuilder {
+func (qb *queryBuilder) whereLabelSelector(selector labels.Selector) *queryBuilder {
 	if selector == nil {
 		return qb
 	}
@@ -72,7 +72,7 @@ func (qb *QueryBuilder) WhereLabelSelector(selector labels.Selector) *QueryBuild
 	return qb
 }
 
-func (qb *QueryBuilder) addLabelRequirement(req labels.Requirement) {
+func (qb *queryBuilder) addLabelRequirement(req labels.Requirement) {
 	key := req.Key()
 	if !validLabelKeyRe.MatchString(key) {
 		return
@@ -83,39 +83,39 @@ func (qb *QueryBuilder) addLabelRequirement(req labels.Requirement) {
 
 	switch req.Operator() {
 	case selection.Exists:
-		qb.Where(fmt.Sprintf("%s IS NOT NULL", jsonPath))
+		qb.appendWhere(fmt.Sprintf("%s IS NOT NULL", jsonPath))
 
 	case selection.DoesNotExist:
-		qb.Where(fmt.Sprintf("%s IS NULL", jsonPath))
+		qb.appendWhere(fmt.Sprintf("%s IS NULL", jsonPath))
 
 	case selection.Equals, selection.DoubleEquals, selection.In:
 		if values.Len() == 1 {
 			p := qb.nextParam(values.List()[0])
-			qb.Where(fmt.Sprintf("%s = %s", jsonPath, p))
+			qb.appendWhere(fmt.Sprintf("%s = %s", jsonPath, p))
 		} else {
 			p := qb.nextParam(values.List())
-			qb.Where(fmt.Sprintf("%s IN UNNEST(%s)", jsonPath, p))
+			qb.appendWhere(fmt.Sprintf("%s IN UNNEST(%s)", jsonPath, p))
 		}
 
 	case selection.NotEquals, selection.NotIn:
 		if values.Len() == 1 {
 			p := qb.nextParam(values.List()[0])
-			qb.Where(fmt.Sprintf("(%s IS NULL OR %s != %s)", jsonPath, jsonPath, p))
+			qb.appendWhere(fmt.Sprintf("(%s IS NULL OR %s != %s)", jsonPath, jsonPath, p))
 		} else {
 			p := qb.nextParam(values.List())
-			qb.Where(fmt.Sprintf("(%s IS NULL OR %s NOT IN UNNEST(%s))", jsonPath, jsonPath, p))
+			qb.appendWhere(fmt.Sprintf("(%s IS NULL OR %s NOT IN UNNEST(%s))", jsonPath, jsonPath, p))
 		}
 	}
 }
 
-func (qb *QueryBuilder) WhereShardSelector(selector *storage.ShardSelector) *QueryBuilder {
+func (qb *queryBuilder) whereShardSelector(selector *storage.ShardSelector) *queryBuilder {
 	if selector == nil {
 		return qb
 	}
 	hashSQL := buildShardHashSQL()
 	pCount := qb.nextParam(int64(selector.Count))
 	pIndex := qb.nextParam(int64(selector.Index))
-	qb.Where(fmt.Sprintf("MOD(MOD(%s, %s) + %s, %s) = %s", hashSQL, pCount, pCount, pCount, pIndex))
+	qb.appendWhere(fmt.Sprintf("MOD(MOD(%s, %s) + %s, %s) = %s", hashSQL, pCount, pCount, pCount, pIndex))
 	return qb
 }
 
@@ -129,45 +129,45 @@ func buildShardHashSQL() string {
 	return fmt.Sprintf("(SELECT %s FROM UNNEST([%s]) AS h)", strings.Join(parts, " | "), hashExpr)
 }
 
-func (qb *QueryBuilder) WhereFieldFilters(filters map[string]string) *QueryBuilder {
+func (qb *queryBuilder) whereFieldFilters(filters map[string]string) *queryBuilder {
 	for path, value := range filters {
 		if !validFieldPathRe.MatchString(path) {
 			continue
 		}
 		p := qb.nextParam(value)
-		qb.Where(fmt.Sprintf("JSON_VALUE(data, '$.%s') = %s", path, p))
+		qb.appendWhere(fmt.Sprintf("JSON_VALUE(data, '$.%s') = %s", path, p))
 	}
 	return qb
 }
 
-func (qb *QueryBuilder) WhereContinueToken(token *storage.ContinueToken) *QueryBuilder {
+func (qb *queryBuilder) whereContinueToken(token *storage.ContinueToken) *queryBuilder {
 	if token == nil {
 		return qb
 	}
 	if token.Namespace != "" {
 		pNs := qb.nextParam(token.Namespace)
 		pName := qb.nextParam(token.Name)
-		qb.Where(fmt.Sprintf("(namespace > %s OR (namespace = %s AND name > %s))", pNs, pNs, pName))
+		qb.appendWhere(fmt.Sprintf("(namespace > %s OR (namespace = %s AND name > %s))", pNs, pNs, pName))
 	} else {
 		pName := qb.nextParam(token.Name)
-		qb.Where(fmt.Sprintf("name > %s", pName))
+		qb.appendWhere(fmt.Sprintf("name > %s", pName))
 	}
 	return qb
 }
 
-func (qb *QueryBuilder) OrderBy(columns ...string) *QueryBuilder {
+func (qb *queryBuilder) setOrderBy(columns ...string) *queryBuilder {
 	qb.orderBy = append(qb.orderBy, columns...)
 	return qb
 }
 
-func (qb *QueryBuilder) Limit(limit int64) *QueryBuilder {
+func (qb *queryBuilder) setLimit(limit int64) *queryBuilder {
 	if limit > 0 {
 		qb.limit = limit
 	}
 	return qb
 }
 
-func (qb *QueryBuilder) Build() (string, map[string]any) {
+func (qb *queryBuilder) build() (string, map[string]any) {
 	query := fmt.Sprintf("SELECT %s FROM %s", strings.Join(qb.columns, ", "), qb.tableName)
 
 	if len(qb.where) > 0 {

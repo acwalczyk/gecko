@@ -82,7 +82,7 @@ func NewStorageFactory(config StorageFactoryConfig) (func(string, *runtime.Schem
 			return nil, fmt.Errorf("failed to create change stream: %w", err)
 		}
 
-		broadcaster, err := NewSpannerBroadcaster(ctx, SpannerBroadcasterConfig{
+		broadcaster, err := newSpannerBroadcaster(ctx, spannerBroadcasterConfig{
 			Client:           client,
 			TableName:        eventLogTable,
 			ChangeStreamName: changeStreamName,
