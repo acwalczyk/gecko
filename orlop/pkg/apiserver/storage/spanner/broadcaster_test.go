@@ -28,9 +28,11 @@ func setupBroadcasterWithStore(t *testing.T, changeStreamName string) (*spannerB
 
 	scheme, gvk := testSchemeAndGVK()
 
+	rt := gvkString(gvk)
+
 	broadcaster, err := newSpannerBroadcaster(context.Background(), spannerBroadcasterConfig{
 		Client:           sharedClient,
-		ResourceType:     "testobjects",
+		ResourceType:     rt,
 		TableName:        eventLogTable,
 		ChangeStreamName: changeStreamName,
 		Scheme:           scheme,
@@ -43,7 +45,7 @@ func setupBroadcasterWithStore(t *testing.T, changeStreamName string) (*spannerB
 
 	store := &SpannerStore{
 		client:        sharedClient,
-		resourceType:  "testobjects",
+		resourceType:  rt,
 		scheme:        scheme,
 		gvk:           gvk,
 		broadcaster:   broadcaster,

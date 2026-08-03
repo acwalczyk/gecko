@@ -46,6 +46,12 @@ func (qb *queryBuilder) appendWhere(condition string) *queryBuilder {
 	return qb
 }
 
+func (qb *queryBuilder) whereResourceType(rt string) *queryBuilder {
+	p := qb.nextParam(rt)
+	qb.appendWhere(fmt.Sprintf("resource_type = %s", p))
+	return qb
+}
+
 func (qb *queryBuilder) whereContextFilter(value string) *queryBuilder {
 	p := qb.nextParam(value)
 	qb.appendWhere(fmt.Sprintf("context_filter = %s", p))

@@ -61,6 +61,13 @@ func NewStorageFactory(config StorageFactoryConfig) (func(string, *runtime.Schem
 		return nil, fmt.Errorf("failed to create counters table: %w", err)
 	}
 
+	resourcesTable := config.TablePrefix + "resources"
+	if err := ensureTable(ctx, adminClient, config.Database, resourcesTable, resourcesSchema(resourcesTable)); err != nil {
+		return nil, fmt.Errorf("failed to create resources table: %w", err)
+	}
+
+	ensureSearchIndex(ctx, adminClient, config.Database, resourcesTable, logger)
+
 	eventLogTable := config.TablePrefix + "event_log"
 	if err := ensureTable(ctx, adminClient, config.Database, eventLogTable, eventLogSchema(eventLogTable)); err != nil {
 		return nil, fmt.Errorf("failed to create event log table: %w", err)
@@ -72,19 +79,12 @@ func NewStorageFactory(config StorageFactoryConfig) (func(string, *runtime.Schem
 	}
 
 	factory := func(resourceType string, scheme *runtime.Scheme, gvk schema.GroupVersionKind) (storage.ResourceStore, error) {
-		resourceLogger := logger.WithValues("resource", resourceType)
-		safeType := sanitizeTableName(resourceType)
-		resourcesTable := config.TablePrefix + "resources_" + safeType
-
-		if err := ensureTable(ctx, adminClient, config.Database, resourcesTable, resourcesSchema(resourcesTable)); err != nil {
-			return nil, fmt.Errorf("failed to create resources table: %w", err)
-		}
-
-		ensureSearchIndex(ctx, adminClient, config.Database, resourcesTable, resourceLogger)
+		rt := gvkString(gvk)
+		resourceLogger := logger.WithValues("resource", rt)
 
 		broadcaster, err := newSpannerBroadcaster(ctx, spannerBroadcasterConfig{
 			Client:           client,
-			ResourceType:     resourceType,
+			ResourceType:     rt,
 			TableName:        eventLogTable,
 			ChangeStreamName: changeStreamName,
 			Scheme:           scheme,
@@ -97,7 +97,7 @@ func NewStorageFactory(config StorageFactoryConfig) (func(string, *runtime.Schem
 
 		store, err := NewSpannerStore(SpannerStoreConfig{
 			Client:        client,
-			ResourceType:  resourceType,
+			ResourceType:  rt,
 			Scheme:        scheme,
 			GVK:           gvk,
 			Broadcaster:   broadcaster,
@@ -117,10 +117,8 @@ func NewStorageFactory(config StorageFactoryConfig) (func(string, *runtime.Schem
 	return factory, nil
 }
 
-func sanitizeTableName(name string) string {
-	name = strings.ReplaceAll(name, ".", "_")
-	name = strings.ReplaceAll(name, "-", "_")
-	return name
+func gvkString(gvk schema.GroupVersionKind) string {
+	return gvk.Group + "/" + gvk.Version + "/" + gvk.Kind
 }
 
 func countersSchema(tableName string) []string {
@@ -135,6 +133,7 @@ func countersSchema(tableName string) []string {
 func resourcesSchema(tableName string) []string {
 	return []string{
 		fmt.Sprintf(`CREATE TABLE %s (
+			resource_type STRING(253) NOT NULL,
 			context_filter STRING(253) NOT NULL,
 			namespace STRING(253) NOT NULL,
 			name STRING(253) NOT NULL,
@@ -146,10 +145,11 @@ func resourcesSchema(tableName string) []string {
 			deletion_timestamp TIMESTAMP,
 			created_at TIMESTAMP NOT NULL,
 			updated_at TIMESTAMP NOT NULL,
-		) PRIMARY KEY (context_filter, namespace, name)`, tableName),
+		) PRIMARY KEY (resource_type, context_filter, namespace, name)`, tableName),
+		fmt.Sprintf(`CREATE INDEX idx_%s_resource_type ON %s(resource_type)`, tableName, tableName),
 		fmt.Sprintf(`CREATE UNIQUE INDEX idx_%s_uid ON %s(uid)`, tableName, tableName),
-		fmt.Sprintf(`CREATE INDEX idx_%s_namespace ON %s(namespace)`, tableName, tableName),
-		fmt.Sprintf(`CREATE INDEX idx_%s_rv ON %s(resource_version) STORING (data, labels)`, tableName, tableName),
+		fmt.Sprintf(`CREATE INDEX idx_%s_namespace ON %s(resource_type, namespace)`, tableName, tableName),
+		fmt.Sprintf(`CREATE INDEX idx_%s_rv ON %s(resource_type, resource_version) STORING (data, labels)`, tableName, tableName),
 		fmt.Sprintf(`CREATE NULL_FILTERED INDEX idx_%s_deletion_timestamp ON %s(deletion_timestamp)`, tableName, tableName),
 	}
 }

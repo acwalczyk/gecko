@@ -65,7 +65,7 @@ func NewSpannerStore(config SpannerStoreConfig) (*SpannerStore, error) {
 
 	tableName := config.TableName
 	if tableName == "" {
-		tableName = "resources_" + config.ResourceType
+		tableName = "resources"
 	}
 	countersTable := config.CountersTable
 	if countersTable == "" {
@@ -86,7 +86,7 @@ func NewSpannerStore(config SpannerStoreConfig) (*SpannerStore, error) {
 		tableName:        tableName,
 		eventLogTable:    config.EventLogTable,
 		countersTable:    countersTable,
-		counterID:        "rv_" + config.ResourceType,
+		counterID:        config.ResourceType,
 		contextFilterKey: config.ContextFilterKey,
 		logger:           storeLogger,
 	}, nil
@@ -205,8 +205,8 @@ func (s *SpannerStore) Create(ctx context.Context, obj client.Object) error {
 			mutations := []*spanner.Mutation{
 				spanner.InsertOrUpdate(s.countersTable, []string{"counter_id", "value"}, []any{s.counterID, rv}),
 				spanner.Insert(s.tableName,
-					[]string{"context_filter", "namespace", "name", "uid", "resource_version", "object_version", "labels", "data", "created_at", "updated_at"},
-					[]any{filterValue, namespace, name, uid, rv, int64(1), spanner.NullJSON{Value: json.RawMessage(labelsJSON), Valid: true}, spanner.NullJSON{Value: json.RawMessage(data), Valid: true}, now, now},
+					[]string{"resource_type", "context_filter", "namespace", "name", "uid", "resource_version", "object_version", "labels", "data", "created_at", "updated_at"},
+					[]any{s.resourceType, filterValue, namespace, name, uid, rv, int64(1), spanner.NullJSON{Value: json.RawMessage(labelsJSON), Valid: true}, spanner.NullJSON{Value: json.RawMessage(data), Valid: true}, now, now},
 				),
 			}
 			if m := s.eventLogMutation(rv, storage.EventAdded, namespace, name, data, filterValue); m != nil {
@@ -241,7 +241,7 @@ func (s *SpannerStore) Get(ctx context.Context, namespace, name string) (client.
 	}
 
 	row, err := s.client.Single().ReadRow(ctx, s.tableName,
-		spanner.Key{filterValue, namespace, name},
+		spanner.Key{s.resourceType, filterValue, namespace, name},
 		[]string{"data", "resource_version"},
 	)
 	if err != nil {
@@ -286,6 +286,7 @@ func (s *SpannerStore) List(ctx context.Context, opts storage.ListOptions) (clie
 	}
 
 	qb := newQueryBuilder(s.tableName, "namespace", "name", "resource_version", "data")
+	qb.whereResourceType(s.resourceType)
 
 	if s.contextFilterKey != nil {
 		qb.whereContextFilter(filterValue)
@@ -438,7 +439,7 @@ func (s *SpannerStore) Update(ctx context.Context, obj client.Object) error {
 		rv = 0
 
 		row, readErr := txn.ReadRow(ctx, s.tableName,
-			spanner.Key{filterValue, namespace, name},
+			spanner.Key{s.resourceType, filterValue, namespace, name},
 			[]string{"resource_version", "object_version"},
 		)
 		if readErr != nil {
@@ -467,8 +468,8 @@ func (s *SpannerStore) Update(ctx context.Context, obj client.Object) error {
 		mutations := []*spanner.Mutation{
 			spanner.InsertOrUpdate(s.countersTable, []string{"counter_id", "value"}, []any{s.counterID, rv}),
 			spanner.Update(s.tableName,
-				[]string{"context_filter", "namespace", "name", "resource_version", "object_version", "labels", "data", "updated_at"},
-				[]any{filterValue, namespace, name, rv, objectVersion + 1, spanner.NullJSON{Value: json.RawMessage(labelsJSON), Valid: true}, spanner.NullJSON{Value: json.RawMessage(data), Valid: true}, now},
+				[]string{"resource_type", "context_filter", "namespace", "name", "resource_version", "object_version", "labels", "data", "updated_at"},
+				[]any{s.resourceType, filterValue, namespace, name, rv, objectVersion + 1, spanner.NullJSON{Value: json.RawMessage(labelsJSON), Valid: true}, spanner.NullJSON{Value: json.RawMessage(data), Valid: true}, now},
 			),
 		}
 		if m := s.eventLogMutation(rv, storage.EventModified, namespace, name, data, filterValue); m != nil {
@@ -495,7 +496,7 @@ func (s *SpannerStore) Delete(ctx context.Context, namespace, name string) error
 		rv = 0
 
 		row, readErr := txn.ReadRow(ctx, s.tableName,
-			spanner.Key{filterValue, namespace, name},
+			spanner.Key{s.resourceType, filterValue, namespace, name},
 			[]string{"resource_version", "data"},
 		)
 		if readErr != nil {
@@ -519,7 +520,7 @@ func (s *SpannerStore) Delete(ctx context.Context, namespace, name string) error
 
 		mutations := []*spanner.Mutation{
 			spanner.InsertOrUpdate(s.countersTable, []string{"counter_id", "value"}, []any{s.counterID, rv}),
-			spanner.Delete(s.tableName, spanner.Key{filterValue, namespace, name}),
+			spanner.Delete(s.tableName, spanner.Key{s.resourceType, filterValue, namespace, name}),
 		}
 
 		if s.eventLogTable != "" {

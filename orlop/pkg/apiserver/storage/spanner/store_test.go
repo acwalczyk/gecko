@@ -273,7 +273,7 @@ func setupTestStore(t *testing.T) *SpannerStore {
 
 	store := &SpannerStore{
 		client:        sharedClient,
-		resourceType:  "testobjects",
+		resourceType:  gvkString(gvk),
 		scheme:        scheme,
 		gvk:           gvk,
 		tableName:     resourcesTable,
