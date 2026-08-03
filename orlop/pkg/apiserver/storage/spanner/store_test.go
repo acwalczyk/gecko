@@ -415,6 +415,42 @@ func TestSpannerStore_Create(t *testing.T) {
 			t.Error("Creation timestamp not set")
 		}
 	})
+
+	t.Run("assigns unique UID", func(t *testing.T) {
+		store := setupTestStore(t)
+
+		obj1 := newTestObject(withName("uid1"), withNamespace("test-uid"))
+		obj2 := newTestObject(withName("uid2"), withNamespace("test-uid"))
+
+		if err := store.Create(context.Background(), obj1); err != nil {
+			t.Fatalf("Create() obj1 failed: %v", err)
+		}
+		if err := store.Create(context.Background(), obj2); err != nil {
+			t.Fatalf("Create() obj2 failed: %v", err)
+		}
+
+		retrieved1, err := store.Get(context.Background(), "test-uid", "uid1")
+		if err != nil {
+			t.Fatalf("Get() obj1 failed: %v", err)
+		}
+		retrieved2, err := store.Get(context.Background(), "test-uid", "uid2")
+		if err != nil {
+			t.Fatalf("Get() obj2 failed: %v", err)
+		}
+
+		uid1 := string(retrieved1.GetUID())
+		uid2 := string(retrieved2.GetUID())
+
+		if uid1 == "" {
+			t.Error("UID not set on obj1")
+		}
+		if uid2 == "" {
+			t.Error("UID not set on obj2")
+		}
+		if uid1 == uid2 {
+			t.Errorf("UIDs should be unique, both are %s", uid1)
+		}
+	})
 }
 
 func TestSpannerStore_Get(t *testing.T) {

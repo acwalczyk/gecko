@@ -10,6 +10,7 @@ import (
 
 	"cloud.google.com/go/spanner"
 	"github.com/go-logr/logr"
+	"github.com/google/uuid"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 	"google.golang.org/api/iterator"
 	"google.golang.org/grpc/codes"
@@ -20,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -141,13 +143,13 @@ func (s *SpannerStore) incrementCounter(txn *spanner.ReadWriteTransaction, ctx c
 }
 
 
-func (s *SpannerStore) eventLogMutation(rv int64, eventType storage.EventType, data []byte, contextFilter string) *spanner.Mutation {
+func (s *SpannerStore) eventLogMutation(rv int64, eventType storage.EventType, namespace, name string, data []byte, contextFilter string) *spanner.Mutation {
 	if s.eventLogTable == "" {
 		return nil
 	}
 	return spanner.Insert(s.eventLogTable,
-		[]string{"resource_type", "resource_version", "event_type", "context_filter", "data", "created_at"},
-		[]any{s.resourceType, rv, string(eventType), contextFilter, spanner.NullJSON{Value: json.RawMessage(data), Valid: true}, spanner.CommitTimestamp},
+		[]string{"resource_type", "resource_version", "event_type", "namespace", "name", "context_filter", "data", "created_at"},
+		[]any{s.resourceType, rv, string(eventType), namespace, name, contextFilter, spanner.NullJSON{Value: json.RawMessage(data), Valid: true}, spanner.CommitTimestamp},
 	)
 }
 
@@ -171,6 +173,9 @@ func (s *SpannerStore) Create(ctx context.Context, obj client.Object) error {
 			name = storage.GenerateName(obj.GetGenerateName())
 			obj.SetName(name)
 		}
+
+		uid := uuid.NewString()
+		obj.SetUID(types.UID(uid))
 
 		now := time.Now()
 		creationTime := obj.GetCreationTimestamp()
@@ -200,11 +205,11 @@ func (s *SpannerStore) Create(ctx context.Context, obj client.Object) error {
 			mutations := []*spanner.Mutation{
 				spanner.InsertOrUpdate(s.countersTable, []string{"counter_id", "value"}, []any{s.counterID, rv}),
 				spanner.Insert(s.tableName,
-					[]string{"context_filter", "namespace", "name", "resource_version", "labels", "data", "created_at", "updated_at"},
-					[]any{filterValue, namespace, name, rv, spanner.NullJSON{Value: json.RawMessage(labelsJSON), Valid: true}, spanner.NullJSON{Value: json.RawMessage(data), Valid: true}, now, now},
+					[]string{"context_filter", "namespace", "name", "uid", "resource_version", "object_version", "labels", "data", "created_at", "updated_at"},
+					[]any{filterValue, namespace, name, uid, rv, int64(1), spanner.NullJSON{Value: json.RawMessage(labelsJSON), Valid: true}, spanner.NullJSON{Value: json.RawMessage(data), Valid: true}, now, now},
 				),
 			}
-			if m := s.eventLogMutation(rv, storage.EventAdded, data, filterValue); m != nil {
+			if m := s.eventLogMutation(rv, storage.EventAdded, namespace, name, data, filterValue); m != nil {
 				mutations = append(mutations, m)
 			}
 			return txn.BufferWrite(mutations)
@@ -434,7 +439,7 @@ func (s *SpannerStore) Update(ctx context.Context, obj client.Object) error {
 
 		row, readErr := txn.ReadRow(ctx, s.tableName,
 			spanner.Key{filterValue, namespace, name},
-			[]string{"resource_version"},
+			[]string{"resource_version", "object_version"},
 		)
 		if readErr != nil {
 			if spanner.ErrCode(readErr) == codes.NotFound {
@@ -443,8 +448,8 @@ func (s *SpannerStore) Update(ctx context.Context, obj client.Object) error {
 			return readErr
 		}
 
-		var storedRV int64
-		if err := row.Column(0, &storedRV); err != nil {
+		var storedRV, objectVersion int64
+		if err := row.Columns(&storedRV, &objectVersion); err != nil {
 			return err
 		}
 		if expectedRV != 0 && storedRV != expectedRV {
@@ -462,11 +467,11 @@ func (s *SpannerStore) Update(ctx context.Context, obj client.Object) error {
 		mutations := []*spanner.Mutation{
 			spanner.InsertOrUpdate(s.countersTable, []string{"counter_id", "value"}, []any{s.counterID, rv}),
 			spanner.Update(s.tableName,
-				[]string{"context_filter", "namespace", "name", "resource_version", "labels", "data", "updated_at"},
-				[]any{filterValue, namespace, name, rv, spanner.NullJSON{Value: json.RawMessage(labelsJSON), Valid: true}, spanner.NullJSON{Value: json.RawMessage(data), Valid: true}, now},
+				[]string{"context_filter", "namespace", "name", "resource_version", "object_version", "labels", "data", "updated_at"},
+				[]any{filterValue, namespace, name, rv, objectVersion + 1, spanner.NullJSON{Value: json.RawMessage(labelsJSON), Valid: true}, spanner.NullJSON{Value: json.RawMessage(data), Valid: true}, now},
 			),
 		}
-		if m := s.eventLogMutation(rv, storage.EventModified, data, filterValue); m != nil {
+		if m := s.eventLogMutation(rv, storage.EventModified, namespace, name, data, filterValue); m != nil {
 			mutations = append(mutations, m)
 		}
 		return txn.BufferWrite(mutations)
@@ -520,7 +525,7 @@ func (s *SpannerStore) Delete(ctx context.Context, namespace, name string) error
 		if s.eventLogTable != "" {
 			dataBytes, err := json.Marshal(dataJSON.Value)
 			if err == nil {
-				mutations = append(mutations, s.eventLogMutation(rv, storage.EventDeleted, dataBytes, filterValue))
+				mutations = append(mutations, s.eventLogMutation(rv, storage.EventDeleted, namespace, name, dataBytes, filterValue))
 			}
 		}
 

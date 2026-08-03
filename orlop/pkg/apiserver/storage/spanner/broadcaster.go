@@ -483,8 +483,8 @@ func (b *spannerBroadcaster) Broadcast(event storage.ResourceEvent) {
 
 	_, err = b.client.Apply(b.ctx, []*spanner.Mutation{
 		spanner.Insert(b.tableName,
-			[]string{"resource_type", "resource_version", "event_type", "context_filter", "data", "created_at"},
-			[]any{b.resourceType, rv, string(event.Type), contextFilter, spanner.NullJSON{Value: json.RawMessage(objectData), Valid: true}, spanner.CommitTimestamp},
+			[]string{"resource_type", "resource_version", "event_type", "namespace", "name", "context_filter", "data", "created_at"},
+			[]any{b.resourceType, rv, string(event.Type), event.Object.GetNamespace(), event.Object.GetName(), contextFilter, spanner.NullJSON{Value: json.RawMessage(objectData), Valid: true}, spanner.CommitTimestamp},
 		),
 	})
 	if err != nil {
