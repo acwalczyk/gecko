@@ -98,10 +98,69 @@ spec:
             - name: tls
               mountPath: /etc/tls
               readOnly: true
+        {{- if .Values.esp.enabled }}
+        - name: esp
+          image: {{ .Values.esp.image }}
+          args:
+            - --listener_port={{ .Values.esp.port }}
+            - --backend=127.0.0.1:{{ .Values.publicApi.port }}
+            - '--service={{ required "esp.serviceName must be set when esp is enabled" .Values.esp.serviceName }}'
+            - --rollout_strategy=managed
+            - --cors_preset=cors_with_regex
+            - --cors_allow_origin_regex=^https://(console|hybrid-cloud-console)\.redhat\.com$
+            - --cors_allow_methods=GET,POST,PATCH,DELETE,OPTIONS
+            - --cors_allow_headers=Content-Type,Authorization,X-Request-ID
+            - --cors_allow_credentials
+            - --cors_max_age=86400s
+            - --healthz=/healthz
+          ports:
+            - name: esp-http
+              containerPort: {{ .Values.esp.port }}
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.esp.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.esp.port }}
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 111
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              memory: 128Mi
+              cpu: 100m
+            limits:
+              memory: 256Mi
+              cpu: 250m
+          volumeMounts:
+            - name: esp-tmp
+              mountPath: /tmp
+        {{- end }}
       volumes:
         - name: tls
           secret:
             secretName: {{ include "platform-api-server.fullname" . }}-tls
+        {{- if .Values.esp.enabled }}
+        - name: esp-tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
