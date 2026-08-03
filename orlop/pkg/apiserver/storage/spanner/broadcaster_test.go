@@ -257,22 +257,8 @@ func TestBroadcaster_ChangeStream(t *testing.T) {
 		t.Fatalf("Create() failed: %v", err)
 	}
 
-	// The emulator may not deliver change stream events; skip if so
-	deadline := time.After(5 * time.Second)
-	for {
-		select {
-		case event, ok := <-eventCh:
-			if !ok {
-				t.Fatal("event channel closed unexpectedly")
-			}
-			if event.Object.GetNamespace() == ns && event.Object.GetName() == "obj" {
-				if event.Type != storage.EventAdded {
-					t.Errorf("expected event type %s, got %s", storage.EventAdded, event.Type)
-				}
-				return
-			}
-		case <-deadline:
-			t.Skip("change stream did not deliver events (emulator may not support real-time change stream delivery)")
-		}
+	event := drainUntil(t, eventCh, ns, "obj", eventTimeout)
+	if event.Type != storage.EventAdded {
+		t.Errorf("expected event type %s, got %s", storage.EventAdded, event.Type)
 	}
 }

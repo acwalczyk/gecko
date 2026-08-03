@@ -241,17 +241,23 @@ func (b *spannerBroadcaster) processChangeRecords(ctx context.Context, iter *spa
 
 func (b *spannerBroadcaster) handleDataChangeRecord(dcr *csDataChangeRecord) {
 	for _, m := range dcr.Mods {
+		keys, err := csModToMap(m.Keys)
+		if err != nil {
+			continue
+		}
+
+		resourceType, _ := keys["resource_type"].(string)
+		if resourceType != b.resourceType {
+			continue
+		}
+
+		rv, _ := jsonInt64(keys["resource_version"])
+
 		newValues, err := csModToMap(m.NewValues)
 		if err != nil {
 			continue
 		}
 
-		resourceType, _ := newValues["resource_type"].(string)
-		if resourceType != b.resourceType {
-			continue
-		}
-
-		rv, _ := jsonInt64(newValues["resource_version"])
 		eventType, _ := newValues["event_type"].(string)
 		contextFilter, _ := newValues["context_filter"].(string)
 
