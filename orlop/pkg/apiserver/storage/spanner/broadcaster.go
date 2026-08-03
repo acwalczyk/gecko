@@ -20,32 +20,54 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-type changeRecord struct {
-	DataChangeRecords      []dataChangeRecord      `json:"data_change_record"`
-	HeartbeatRecords       []heartbeatRecord        `json:"heartbeat_record"`
-	ChildPartitionsRecords []childPartitionsRecord  `json:"child_partitions_record"`
+type csColumnType struct {
+	Name           string           `spanner:"name"`
+	Type           spanner.NullJSON `spanner:"type"`
+	IsPrimaryKey   bool             `spanner:"is_primary_key"`
+	OrdinalPosition int64           `spanner:"ordinal_position"`
 }
 
-type dataChangeRecord struct {
-	CommitTimestamp string `json:"commit_timestamp"`
-	ModType        string `json:"mod_type"`
-	Mods           []mod  `json:"mods"`
+type csMod struct {
+	Keys      spanner.NullJSON `spanner:"keys"`
+	NewValues spanner.NullJSON `spanner:"new_values"`
+	OldValues spanner.NullJSON `spanner:"old_values"`
 }
 
-type mod struct {
-	NewValues map[string]any `json:"new_values"`
+type csDataChangeRecord struct {
+	CommitTimestamp                       time.Time      `spanner:"commit_timestamp"`
+	RecordSequence                       string         `spanner:"record_sequence"`
+	ServerTransactionID                  string         `spanner:"server_transaction_id"`
+	IsLastRecordInTransactionInPartition bool           `spanner:"is_last_record_in_transaction_in_partition"`
+	TableName                            string         `spanner:"table_name"`
+	ColumnTypes                          []*csColumnType `spanner:"column_types"`
+	Mods                                 []*csMod       `spanner:"mods"`
+	ModType                              string         `spanner:"mod_type"`
+	ValueCaptureType                     string         `spanner:"value_capture_type"`
+	NumberOfRecordsInTransaction         int64          `spanner:"number_of_records_in_transaction"`
+	NumberOfPartitionsInTransaction      int64          `spanner:"number_of_partitions_in_transaction"`
+	TransactionTag                       string         `spanner:"transaction_tag"`
+	IsSystemTransaction                  bool           `spanner:"is_system_transaction"`
 }
 
-type heartbeatRecord struct {
-	Timestamp string `json:"timestamp"`
+type csHeartbeatRecord struct {
+	Timestamp time.Time `spanner:"timestamp"`
 }
 
-type childPartitionsRecord struct {
-	ChildPartitions []childPartition `json:"child_partitions"`
+type csChildPartition struct {
+	Token                 string   `spanner:"token"`
+	ParentPartitionTokens []string `spanner:"parent_partition_tokens"`
 }
 
-type childPartition struct {
-	Token string `json:"token"`
+type csChildPartitionsRecord struct {
+	StartTimestamp  time.Time          `spanner:"start_timestamp"`
+	RecordSequence  string             `spanner:"record_sequence"`
+	ChildPartitions []*csChildPartition `spanner:"child_partitions"`
+}
+
+type csRecord struct {
+	DataChangeRecords      []*csDataChangeRecord      `spanner:"data_change_record"`
+	HeartbeatRecords       []*csHeartbeatRecord        `spanner:"heartbeat_record"`
+	ChildPartitionsRecords []*csChildPartitionsRecord  `spanner:"child_partitions_record"`
 }
 
 type spannerBroadcaster struct {
@@ -190,23 +212,9 @@ func (b *spannerBroadcaster) processChangeRecords(ctx context.Context, iter *spa
 			return err
 		}
 
-		var recordJSON spanner.NullJSON
-		if err := row.Columns(&recordJSON); err != nil {
+		var records []*csRecord
+		if err := row.Column(0, &records); err != nil {
 			continue
-		}
-
-		recordBytes, err := json.Marshal(recordJSON.Value)
-		if err != nil {
-			continue
-		}
-
-		var records []changeRecord
-		if err := json.Unmarshal(recordBytes, &records); err != nil {
-			var single changeRecord
-			if err2 := json.Unmarshal(recordBytes, &single); err2 != nil {
-				continue
-			}
-			records = []changeRecord{single}
 		}
 
 		for _, rec := range records {
@@ -228,18 +236,23 @@ func (b *spannerBroadcaster) processChangeRecords(ctx context.Context, iter *spa
 	}
 }
 
-func (b *spannerBroadcaster) handleDataChangeRecord(dcr dataChangeRecord) {
+func (b *spannerBroadcaster) handleDataChangeRecord(dcr *csDataChangeRecord) {
 	for _, m := range dcr.Mods {
-		rv, _ := toInt64(m.NewValues["rv"])
-		eventType, _ := m.NewValues["event_type"].(string)
-		contextFilter, _ := m.NewValues["context_filter"].(string)
-
-		objectData, err := extractObjectData(m.NewValues["object_data"])
+		newValues, err := csModToMap(m.NewValues)
 		if err != nil {
 			continue
 		}
 
-		obj, err := b.reconstructObject(objectData)
+		rv, _ := jsonInt64(newValues["rv"])
+		eventType, _ := newValues["event_type"].(string)
+		contextFilter, _ := newValues["context_filter"].(string)
+
+		objectDataStr, _ := newValues["object_data"].(string)
+		if objectDataStr == "" {
+			continue
+		}
+
+		obj, err := b.reconstructObject([]byte(objectDataStr))
 		if err != nil {
 			continue
 		}
@@ -263,26 +276,22 @@ func (b *spannerBroadcaster) handleDataChangeRecord(dcr dataChangeRecord) {
 	}
 }
 
-func (b *spannerBroadcaster) handleHeartbeatRecord(hr heartbeatRecord) {
-	ts, err := time.Parse(time.RFC3339Nano, hr.Timestamp)
+func csModToMap(nj spanner.NullJSON) (map[string]any, error) {
+	if !nj.Valid {
+		return nil, fmt.Errorf("null JSON")
+	}
+	data, err := json.Marshal(nj.Value)
 	if err != nil {
-		return
+		return nil, err
 	}
-	b.mu.Lock()
-	b.startTimestamp = ts
-	b.mu.Unlock()
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
-func (b *spannerBroadcaster) handleChildPartitionsRecord(ctx context.Context, cpr childPartitionsRecord) {
-	for _, cp := range cpr.ChildPartitions {
-		token := cp.Token
-		b.wg.Go(func() {
-			b.readChangeStream(ctx, &token)
-		})
-	}
-}
-
-func toInt64(v any) (int64, bool) {
+func jsonInt64(v any) (int64, bool) {
 	switch n := v.(type) {
 	case float64:
 		return int64(n), true
@@ -292,21 +301,23 @@ func toInt64(v any) (int64, bool) {
 	case string:
 		i, err := strconv.ParseInt(n, 10, 64)
 		return i, err == nil
-	case int64:
-		return n, true
 	default:
 		return 0, false
 	}
 }
 
-func extractObjectData(v any) ([]byte, error) {
-	switch d := v.(type) {
-	case map[string]any:
-		return json.Marshal(d)
-	case string:
-		return []byte(d), nil
-	default:
-		return json.Marshal(d)
+func (b *spannerBroadcaster) handleHeartbeatRecord(hr *csHeartbeatRecord) {
+	b.mu.Lock()
+	b.startTimestamp = hr.Timestamp
+	b.mu.Unlock()
+}
+
+func (b *spannerBroadcaster) handleChildPartitionsRecord(ctx context.Context, cpr *csChildPartitionsRecord) {
+	for _, cp := range cpr.ChildPartitions {
+		token := cp.Token
+		b.wg.Go(func() {
+			b.readChangeStream(ctx, &token)
+		})
 	}
 }
 
