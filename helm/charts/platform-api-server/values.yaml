@@ -77,6 +77,39 @@ podAnnotations: {}
 podLabels: {}
 imagePullSecrets: []
 
+gateway:
+  enabled: true
+  name: platform-external-gateway
+  namespace: platform-gateway
+  hostname: ""
+  projectId: ""
+  service:
+    name: platform-api-gateway-svc
+    port: 8081
+  healthCheck:
+    requestPath: /livez
+    type: HTTP
+    checkIntervalSec: 10
+    timeoutSec: 5
+    healthyThreshold: 2
+    unhealthyThreshold: 3
+  certificate:
+    enabled: true
+    name: platform-api-cert
+    certificateMap:
+      name: platform-gateway-certmap
+
+# ESPv2 sidecar for Cloud Endpoints integration.
+# Requires the pod's service account to have roles/servicemanagement.serviceController
+# on the GCP project that owns the Cloud Endpoints service (serviceName).
+# Configure Workload Identity via serviceAccount.annotations to bind the KSA to a GSA
+# with the required IAM role.
+esp:
+  enabled: true
+  image: gcr.io/endpoints-release/endpoints-runtime:2.55.6
+  port: 9080
+  serviceName: ""
+
 alloydb:
   enabled: false
   projectId: ""

@@ -1,0 +1,26 @@
+{{- if .Values.gateway.enabled }}
+---
+apiVersion: networking.gke.io/v1
+kind: HealthCheckPolicy
+metadata:
+  name: {{ include "platform-api-server.fullname" . }}-health-check
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "platform-api-server.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway-health-check
+spec:
+  targetRef:
+    group: ""
+    kind: Service
+    name: {{ .Values.gateway.service.name }}
+  default:
+    checkIntervalSec: {{ .Values.gateway.healthCheck.checkIntervalSec }}
+    timeoutSec: {{ .Values.gateway.healthCheck.timeoutSec }}
+    healthyThreshold: {{ .Values.gateway.healthCheck.healthyThreshold }}
+    unhealthyThreshold: {{ .Values.gateway.healthCheck.unhealthyThreshold }}
+    config:
+      type: {{ .Values.gateway.healthCheck.type }}
+      httpHealthCheck:
+        portSpecification: USE_SERVING_PORT
+        requestPath: {{ if .Values.esp.enabled }}/healthz{{ else }}{{ .Values.gateway.healthCheck.requestPath }}{{ end }}
+{{- end }}

@@ -1,0 +1,18 @@
+{{- if and .Values.gateway.enabled .Values.gateway.certificate.enabled }}
+---
+apiVersion: certificatemanager.cnrm.cloud.google.com/v1beta1
+kind: CertificateManagerCertificate
+metadata:
+  name: {{ .Values.gateway.certificate.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "platform-api-server.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway-certificate
+spec:
+  location: global
+  managed:
+    domains:
+      - {{ required "gateway.hostname must be set when gateway is enabled" .Values.gateway.hostname }}
+  projectRef:
+    external: {{ required "gateway.projectId must be set when gateway is enabled" .Values.gateway.projectId }}
+{{- end }}
