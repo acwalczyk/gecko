@@ -79,13 +79,12 @@ type spannerBroadcaster struct {
 	gvk              schema.GroupVersionKind
 	logger           logr.Logger
 
-	mu             sync.RWMutex
-	subscribers    map[int]chan storage.ResourceEvent
-	nextID         int
-	closed         bool
-	lastRV         int64
-	startTimestamp time.Time
-	wg             sync.WaitGroup
+	mu          sync.RWMutex
+	subscribers map[int]chan storage.ResourceEvent
+	nextID      int
+	closed      bool
+	lastRV      int64
+	wg          sync.WaitGroup
 
 	// pendingChildren tracks child partition tokens during partition merges.
 	// When multiple parents merge into one child, each parent independently
@@ -131,20 +130,24 @@ func newSpannerBroadcaster(ctx context.Context, config spannerBroadcasterConfig)
 		scheme:           config.Scheme,
 		gvk:              config.GVK,
 		logger:           broadcasterLogger,
-		subscribers:      make(map[int]chan storage.ResourceEvent),
-		startTimestamp:   time.Now(),
+		subscribers:     make(map[int]chan storage.ResourceEvent),
 		pendingChildren: make(map[string]int),
 	}
 
+	startTs := time.Now()
 	b.wg.Go(func() {
-		b.readChangeStream(bCtx, nil)
+		b.readChangeStream(bCtx, nil, startTs)
 	})
 
 	return b, nil
 }
 
-func (b *spannerBroadcaster) readChangeStream(ctx context.Context, partitionToken *string) {
+// readChangeStream reads a single change stream partition. Each partition
+// tracks its own checkpoint (lastTs) so that a reconnect resumes from where
+// this partition left off, not from the most-advanced partition's timestamp.
+func (b *spannerBroadcaster) readChangeStream(ctx context.Context, partitionToken *string, startTs time.Time) {
 	backoff := time.Second
+	lastTs := startTs
 
 	for {
 		select {
@@ -153,12 +156,8 @@ func (b *spannerBroadcaster) readChangeStream(ctx context.Context, partitionToke
 		default:
 		}
 
-		b.mu.RLock()
-		ts := b.startTimestamp
-		b.mu.RUnlock()
-
 		params := map[string]any{
-			"startTimestamp":        ts,
+			"startTimestamp":        lastTs,
 			"endTimestamp":          (*time.Time)(nil),
 			"partitionToken":       partitionToken,
 			"heartbeatMilliseconds": int64(5000),
@@ -173,7 +172,7 @@ func (b *spannerBroadcaster) readChangeStream(ctx context.Context, partitionToke
 		}
 
 		iter := b.client.Single().Query(ctx, stmt)
-		err := b.processChangeRecords(ctx, iter)
+		err := b.processChangeRecords(ctx, iter, &lastTs)
 		iter.Stop()
 
 		if ctx.Err() != nil {
@@ -197,7 +196,7 @@ func (b *spannerBroadcaster) readChangeStream(ctx context.Context, partitionToke
 	}
 }
 
-func (b *spannerBroadcaster) processChangeRecords(ctx context.Context, iter *spanner.RowIterator) error {
+func (b *spannerBroadcaster) processChangeRecords(ctx context.Context, iter *spanner.RowIterator, lastTs *time.Time) error {
 	for {
 		row, err := iter.Next()
 		if err == iterator.Done {
@@ -215,10 +214,15 @@ func (b *spannerBroadcaster) processChangeRecords(ctx context.Context, iter *spa
 		for _, rec := range records {
 			for _, dcr := range rec.DataChangeRecords {
 				b.handleDataChangeRecord(dcr)
+				if dcr.CommitTimestamp.After(*lastTs) {
+					*lastTs = dcr.CommitTimestamp
+				}
 			}
 
 			for _, hr := range rec.HeartbeatRecords {
-				b.handleHeartbeatRecord(hr)
+				if hr.Timestamp.After(*lastTs) {
+					*lastTs = hr.Timestamp
+				}
 			}
 
 			for _, cpr := range rec.ChildPartitionsRecords {
@@ -302,9 +306,6 @@ func (b *spannerBroadcaster) handleDataChangeRecord(dcr *csDataChangeRecord) {
 		if rv > b.lastRV {
 			b.lastRV = rv
 		}
-		if dcr.CommitTimestamp.After(b.startTimestamp) {
-			b.startTimestamp = dcr.CommitTimestamp
-		}
 		b.mu.Unlock()
 	}
 }
@@ -339,18 +340,13 @@ func jsonInt64(v any) (int64, bool) {
 	}
 }
 
-func (b *spannerBroadcaster) handleHeartbeatRecord(hr *csHeartbeatRecord) {
-	b.mu.Lock()
-	b.startTimestamp = hr.Timestamp
-	b.mu.Unlock()
-}
-
 func (b *spannerBroadcaster) handleChildPartitionsRecord(ctx context.Context, cpr *csChildPartitionsRecord) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	for _, cp := range cpr.ChildPartitions {
 		token := cp.Token
+		startTs := cpr.StartTimestamp
 
 		if _, exists := b.pendingChildren[token]; !exists {
 			b.pendingChildren[token] = len(cp.ParentPartitionTokens)
@@ -360,7 +356,7 @@ func (b *spannerBroadcaster) handleChildPartitionsRecord(ctx context.Context, cp
 		if b.pendingChildren[token] <= 0 {
 			delete(b.pendingChildren, token)
 			b.wg.Go(func() {
-				b.readChangeStream(ctx, &token)
+				b.readChangeStream(ctx, &token, startTs)
 			})
 		}
 	}
