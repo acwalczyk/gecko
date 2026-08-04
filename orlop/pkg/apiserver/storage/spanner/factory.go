@@ -183,8 +183,10 @@ func ensureTable(ctx context.Context, adminClient *database.DatabaseAdminClient,
 }
 
 func changeStreamSchema(streamName, tableName string) []string {
+	// NEW_ROW_AND_OLD_VALUES: gives all columns in new_values for INSERT/UPDATE,
+	// and the deleted row's columns in old_values for DELETE (NEW_ROW leaves both empty on DELETE).
 	return []string{
-		fmt.Sprintf(`CREATE CHANGE STREAM %s FOR %s OPTIONS (value_capture_type = 'NEW_ROW', retention_period = '24h')`, streamName, tableName),
+		fmt.Sprintf(`CREATE CHANGE STREAM %s FOR %s OPTIONS (value_capture_type = 'NEW_ROW_AND_OLD_VALUES', retention_period = '24h')`, streamName, tableName),
 	}
 }
 

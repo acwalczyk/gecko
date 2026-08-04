@@ -210,6 +210,90 @@ func TestBroadcaster_UnsubscribeStopsDelivery(t *testing.T) {
 	}
 }
 
+func TestBroadcaster_DeleteEvent(t *testing.T) {
+	_, store := setupBroadcasterWithStore(t)
+	ns := uniqueNS("bc-delete")
+
+	obj := newTestObject(withName("to-delete"), withNamespace(ns))
+	if err := store.Create(context.Background(), obj); err != nil {
+		t.Fatalf("Create() failed: %v", err)
+	}
+
+	eventCh, stop, err := store.broadcaster.Subscribe("")
+	if err != nil {
+		t.Fatalf("Subscribe() failed: %v", err)
+	}
+	defer stop()
+
+	// Wait for the CREATE event to arrive before deleting
+	drainUntil(t, eventCh, ns, "to-delete", eventTimeout)
+
+	if err := store.Delete(context.Background(), ns, "to-delete"); err != nil {
+		t.Fatalf("Delete() failed: %v", err)
+	}
+
+	deadline := time.After(eventTimeout)
+	for {
+		select {
+		case event, ok := <-eventCh:
+			if !ok {
+				t.Fatal("event channel closed unexpectedly")
+			}
+			if event.Object.GetNamespace() != ns || event.Object.GetName() != "to-delete" {
+				continue
+			}
+			if event.Type == storage.EventDeleted {
+				return
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for DELETE event")
+		}
+	}
+}
+
+func TestBroadcaster_UpdateEvent(t *testing.T) {
+	_, store := setupBroadcasterWithStore(t)
+	ns := uniqueNS("bc-update")
+
+	obj := newTestObject(withName("to-update"), withNamespace(ns))
+	if err := store.Create(context.Background(), obj); err != nil {
+		t.Fatalf("Create() failed: %v", err)
+	}
+
+	eventCh, stop, err := store.broadcaster.Subscribe("")
+	if err != nil {
+		t.Fatalf("Subscribe() failed: %v", err)
+	}
+	defer stop()
+
+	// Wait for the CREATE event before updating
+	drainUntil(t, eventCh, ns, "to-update", eventTimeout)
+
+	obj.Object["spec"] = map[string]any{"updated": true}
+	if err := store.Update(context.Background(), obj); err != nil {
+		t.Fatalf("Update() failed: %v", err)
+	}
+
+	deadline := time.After(eventTimeout)
+	for {
+		select {
+		case event, ok := <-eventCh:
+			if !ok {
+				t.Fatal("event channel closed unexpectedly")
+			}
+			if event.Object.GetNamespace() != ns || event.Object.GetName() != "to-update" {
+				continue
+			}
+			if event.Type != storage.EventModified {
+				continue // might be the ADDED from create, keep draining
+			}
+			return
+		case <-deadline:
+			t.Fatal("timed out waiting for MODIFIED event")
+		}
+	}
+}
+
 func TestBroadcaster_CloseShutdown(t *testing.T) {
 	broadcaster, _ := setupBroadcasterWithStore(t)
 
