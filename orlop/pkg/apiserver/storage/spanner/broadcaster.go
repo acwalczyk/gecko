@@ -86,6 +86,12 @@ type spannerBroadcaster struct {
 	lastRV         int64
 	startTimestamp time.Time
 	wg             sync.WaitGroup
+
+	// pendingChildren tracks child partition tokens during partition merges.
+	// When multiple parents merge into one child, each parent independently
+	// reports the same child token. The counter tracks how many parents have
+	// yet to finish; the child reader starts only when all parents are done.
+	pendingChildren map[string]int
 }
 
 type spannerBroadcasterConfig struct {
@@ -127,6 +133,7 @@ func newSpannerBroadcaster(ctx context.Context, config spannerBroadcasterConfig)
 		logger:           broadcasterLogger,
 		subscribers:      make(map[int]chan storage.ResourceEvent),
 		startTimestamp:   time.Now(),
+		pendingChildren: make(map[string]int),
 	}
 
 	b.wg.Go(func() {
@@ -339,11 +346,23 @@ func (b *spannerBroadcaster) handleHeartbeatRecord(hr *csHeartbeatRecord) {
 }
 
 func (b *spannerBroadcaster) handleChildPartitionsRecord(ctx context.Context, cpr *csChildPartitionsRecord) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	for _, cp := range cpr.ChildPartitions {
 		token := cp.Token
-		b.wg.Go(func() {
-			b.readChangeStream(ctx, &token)
-		})
+
+		if _, exists := b.pendingChildren[token]; !exists {
+			b.pendingChildren[token] = len(cp.ParentPartitionTokens)
+		}
+		b.pendingChildren[token]--
+
+		if b.pendingChildren[token] <= 0 {
+			delete(b.pendingChildren, token)
+			b.wg.Go(func() {
+				b.readChangeStream(ctx, &token)
+			})
+		}
 	}
 }
 
