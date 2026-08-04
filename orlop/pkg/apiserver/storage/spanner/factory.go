@@ -157,10 +157,8 @@ func ensureTable(ctx context.Context, adminClient *database.DatabaseAdminClient,
 		return fmt.Errorf("failed to get database DDL: %w", err)
 	}
 
-	for _, stmt := range resp.Statements {
-		if strings.Contains(strings.ToLower(stmt), strings.ToLower("CREATE TABLE "+tableName)) {
-			return nil
-		}
+	if ddlContains(resp.Statements, "CREATE TABLE "+tableName) {
+		return nil
 	}
 
 	op, err := adminClient.UpdateDatabaseDdl(ctx, &databasepb.UpdateDatabaseDdlRequest{
@@ -182,6 +180,21 @@ func ensureTable(ctx context.Context, adminClient *database.DatabaseAdminClient,
 	return nil
 }
 
+func ddlContains(statements []string, prefix string) bool {
+	lower := strings.ToLower(prefix)
+	for _, stmt := range statements {
+		s := strings.ToLower(stmt)
+		if !strings.HasPrefix(s, lower) {
+			continue
+		}
+		rest := s[len(lower):]
+		if rest == "" || rest[0] == ' ' || rest[0] == '(' || rest[0] == '\n' {
+			return true
+		}
+	}
+	return false
+}
+
 func changeStreamSchema(streamName, tableName string) []string {
 	// NEW_ROW_AND_OLD_VALUES: gives all columns in new_values for INSERT/UPDATE,
 	// and the deleted row's columns in old_values for DELETE (NEW_ROW leaves both empty on DELETE).
@@ -198,10 +211,8 @@ func ensureChangeStream(ctx context.Context, adminClient *database.DatabaseAdmin
 		return fmt.Errorf("failed to get database DDL: %w", err)
 	}
 
-	for _, stmt := range resp.Statements {
-		if strings.Contains(strings.ToLower(stmt), strings.ToLower("CREATE CHANGE STREAM "+streamName)) {
-			return nil
-		}
+	if ddlContains(resp.Statements, "CREATE CHANGE STREAM "+streamName) {
+		return nil
 	}
 
 	op, err := adminClient.UpdateDatabaseDdl(ctx, &databasepb.UpdateDatabaseDdlRequest{
@@ -239,10 +250,8 @@ func ensureSearchIndex(ctx context.Context, adminClient *database.DatabaseAdminC
 	}
 
 	indexName := fmt.Sprintf("idx_%s_labels", tableName)
-	for _, stmt := range resp.Statements {
-		if strings.Contains(strings.ToLower(stmt), strings.ToLower("CREATE SEARCH INDEX "+indexName)) {
-			return
-		}
+	if ddlContains(resp.Statements, "CREATE SEARCH INDEX "+indexName) {
+		return
 	}
 
 	op, err := adminClient.UpdateDatabaseDdl(ctx, &databasepb.UpdateDatabaseDdlRequest{

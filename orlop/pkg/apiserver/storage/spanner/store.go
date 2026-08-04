@@ -190,11 +190,17 @@ func (s *SpannerStore) Create(ctx context.Context, obj client.Object) error {
 				return counterErr
 			}
 
+			var deletionTs *time.Time
+			if dt := obj.GetDeletionTimestamp(); dt != nil {
+				t := dt.Time
+				deletionTs = &t
+			}
+
 			return txn.BufferWrite([]*spanner.Mutation{
 				spanner.InsertOrUpdate(s.countersTable, []string{"counter_id", "value"}, []any{s.counterID, rv}),
 				spanner.Insert(s.tableName,
-					[]string{"resource_type", "context_filter", "namespace", "name", "uid", "resource_version", "object_version", "labels", "data", "created_at", "updated_at"},
-					[]any{s.resourceType, filterValue, namespace, name, uid, rv, int64(1), spanner.NullJSON{Value: json.RawMessage(labelsJSON), Valid: true}, spanner.NullJSON{Value: json.RawMessage(data), Valid: true}, now, now},
+					[]string{"resource_type", "context_filter", "namespace", "name", "uid", "resource_version", "object_version", "labels", "data", "deletion_timestamp", "created_at", "updated_at"},
+					[]any{s.resourceType, filterValue, namespace, name, uid, rv, int64(1), spanner.NullJSON{Value: json.RawMessage(labelsJSON), Valid: true}, spanner.NullJSON{Value: json.RawMessage(data), Valid: true}, deletionTs, now, now},
 				),
 			})
 		})
@@ -364,37 +370,39 @@ func (s *SpannerStore) List(ctx context.Context, opts storage.ListOptions) (clie
 		return nil, fmt.Errorf("failed to create list object: %w", err)
 	}
 
-	list, ok := listObj.(*unstructured.UnstructuredList)
-	if !ok {
-		listAccessor, err := meta.ListAccessor(listObj)
-		if err != nil {
-			return nil, fmt.Errorf("object does not support list operations: %w", err)
-		}
-		listAccessor.SetResourceVersion(strconv.FormatInt(globalRV, 10))
-		return listObj.(client.ObjectList), nil
+	listAccessor, err := meta.ListAccessor(listObj)
+	if err != nil {
+		return nil, fmt.Errorf("object does not support list operations: %w", err)
 	}
+	listAccessor.SetResourceVersion(strconv.FormatInt(globalRV, 10))
 
-	list.SetResourceVersion(strconv.FormatInt(globalRV, 10))
-	list.Items = items
+	if uList, ok := listObj.(*unstructured.UnstructuredList); ok {
+		uList.Items = items
+	} else {
+		runtimeItems := make([]runtime.Object, len(items))
+		for i := range items {
+			runtimeItems[i] = &items[i]
+		}
+		if err := meta.SetList(listObj, runtimeItems); err != nil {
+			return nil, fmt.Errorf("failed to set list items: %w", err)
+		}
+	}
 
 	hasMore := opts.Limit > 0 && rowCount > opts.Limit
 	if hasMore && len(items) > 0 {
-		listMeta, err := meta.ListAccessor(list)
+		lastItem := &items[len(items)-1]
+		token := &storage.ContinueToken{
+			Namespace:       lastItem.GetNamespace(),
+			Name:            lastItem.GetName(),
+			ResourceVersion: strconv.FormatInt(globalRV, 10),
+		}
+		continueStr, err := storage.EncodeContinueToken(token)
 		if err == nil {
-			lastItem := &items[len(items)-1]
-			token := &storage.ContinueToken{
-				Namespace:       lastItem.GetNamespace(),
-				Name:            lastItem.GetName(),
-				ResourceVersion: strconv.FormatInt(globalRV, 10),
-			}
-			continueStr, err := storage.EncodeContinueToken(token)
-			if err == nil {
-				listMeta.SetContinue(continueStr)
-			}
+			listAccessor.SetContinue(continueStr)
 		}
 	}
 
-	return list, nil
+	return listObj.(client.ObjectList), nil
 }
 
 func (s *SpannerStore) Update(ctx context.Context, obj client.Object) error {
@@ -448,12 +456,18 @@ func (s *SpannerStore) Update(ctx context.Context, obj client.Object) error {
 			return counterErr
 		}
 
+		var deletionTs *time.Time
+		if dt := obj.GetDeletionTimestamp(); dt != nil {
+			t := dt.Time
+			deletionTs = &t
+		}
+
 		now := time.Now()
 		return txn.BufferWrite([]*spanner.Mutation{
 			spanner.InsertOrUpdate(s.countersTable, []string{"counter_id", "value"}, []any{s.counterID, rv}),
 			spanner.Update(s.tableName,
-				[]string{"resource_type", "context_filter", "namespace", "name", "resource_version", "object_version", "labels", "data", "updated_at"},
-				[]any{s.resourceType, filterValue, namespace, name, rv, objectVersion + 1, spanner.NullJSON{Value: json.RawMessage(labelsJSON), Valid: true}, spanner.NullJSON{Value: json.RawMessage(data), Valid: true}, now},
+				[]string{"resource_type", "context_filter", "namespace", "name", "resource_version", "object_version", "labels", "data", "deletion_timestamp", "updated_at"},
+				[]any{s.resourceType, filterValue, namespace, name, rv, objectVersion + 1, spanner.NullJSON{Value: json.RawMessage(labelsJSON), Valid: true}, spanner.NullJSON{Value: json.RawMessage(data), Valid: true}, deletionTs, now},
 			),
 		})
 	})

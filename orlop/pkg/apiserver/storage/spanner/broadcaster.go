@@ -227,6 +227,9 @@ func (b *spannerBroadcaster) processChangeRecords(ctx context.Context, iter *spa
 
 			for _, cpr := range rec.ChildPartitionsRecords {
 				b.handleChildPartitionsRecord(ctx, cpr)
+				if cpr.StartTimestamp.After(*lastTs) {
+					*lastTs = cpr.StartTimestamp
+				}
 			}
 		}
 	}
