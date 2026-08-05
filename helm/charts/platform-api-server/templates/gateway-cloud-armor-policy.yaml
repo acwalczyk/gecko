@@ -13,15 +13,6 @@ spec:
     layer7DdosDefenseConfig:
       enable: true
   rule:
-    - action: "allow"
-      priority: 2147483647
-      description: "Default allow - auth enforced by ESP"
-      match:
-        versionedExpr: "SRC_IPS_V1"
-        config:
-          srcIpRanges:
-            - "*"
-
     - action: "deny(403)"
       priority: 1000
       description: "Block SQL injection attempts"
@@ -86,4 +77,13 @@ spec:
         conformAction: "allow"
         exceedAction: "deny(429)"
         enforceOnKey: "IP"
+
+    - action: "allow"
+      priority: 2147483647
+      description: "Default allow - auth enforced by ESP"
+      match:
+        versionedExpr: "SRC_IPS_V1"
+        config:
+          srcIpRanges:
+            - "*"
 {{- end }}
