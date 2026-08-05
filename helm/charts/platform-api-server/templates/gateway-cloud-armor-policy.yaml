@@ -1,0 +1,89 @@
+{{- if and .Values.gateway.enabled .Values.gateway.cloudArmor.enabled }}
+---
+apiVersion: compute.cnrm.cloud.google.com/v1beta1
+kind: ComputeSecurityPolicy
+metadata:
+  name: {{ include "platform-api-server.fullname" . }}-cloud-armor
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+    cnrm.cloud.google.com/project-id: {{ required "gateway.projectId is required when cloudArmor is enabled" .Values.gateway.projectId | quote }}
+spec:
+  description: "Cloud Armor policy for platform-api-server (rate limiting + WAF)"
+  adaptiveProtectionConfig:
+    layer7DdosDefenseConfig:
+      enable: true
+  rule:
+    - action: "deny(403)"
+      priority: 1000
+      description: "Block SQL injection attempts"
+      match:
+        expr:
+          expression: "evaluatePreconfiguredWaf('sqli-v33-stable')"
+
+    - action: "deny(403)"
+      priority: 1010
+      description: "Block XSS attempts"
+      match:
+        expr:
+          expression: "evaluatePreconfiguredWaf('xss-v33-stable')"
+
+    - action: "deny(403)"
+      priority: 1020
+      description: "Block remote file inclusion"
+      match:
+        expr:
+          expression: "evaluatePreconfiguredWaf('rfi-v33-stable')"
+
+    - action: "deny(403)"
+      priority: 1030
+      description: "Block local file inclusion"
+      match:
+        expr:
+          expression: "evaluatePreconfiguredWaf('lfi-v33-stable')"
+
+    - action: "deny(403)"
+      priority: 1040
+      description: "Block remote code execution (OS command injection)"
+      match:
+        expr:
+          expression: "evaluatePreconfiguredWaf('rce-v33-stable')"
+
+    - action: "deny(403)"
+      priority: 1050
+      description: "Block automated vulnerability scanners"
+      match:
+        expr:
+          expression: "evaluatePreconfiguredWaf('scannerdetection-v33-stable')"
+
+    # Placed after WAF rules so attacks are blocked before rate counting.
+    # conformAction is always "allow" and terminates evaluation, so this
+    # must be the last rule before the default.
+    - action: "rate_based_ban"
+      priority: 9000
+      description: "Rate limit: ban IPs exceeding {{ .Values.gateway.cloudArmor.rateLimit.requestsPerMinute }} req/min for {{ .Values.gateway.cloudArmor.rateLimit.banDurationSec }}s"
+      match:
+        versionedExpr: "SRC_IPS_V1"
+        config:
+          srcIpRanges:
+            - "*"
+      rateLimitOptions:
+        rateLimitThreshold:
+          count: {{ .Values.gateway.cloudArmor.rateLimit.requestsPerMinute }}
+          intervalSec: 60
+        banThreshold:
+          count: {{ .Values.gateway.cloudArmor.rateLimit.banRequestsPerMinute }}
+          intervalSec: 60
+        banDurationSec: {{ .Values.gateway.cloudArmor.rateLimit.banDurationSec }}
+        conformAction: "allow"
+        exceedAction: "deny(429)"
+        enforceOnKey: "IP"
+
+    - action: "allow"
+      priority: 2147483647
+      description: "Default allow - auth enforced by ESP"
+      match:
+        versionedExpr: "SRC_IPS_V1"
+        config:
+          srcIpRanges:
+            - "*"
+{{- end }}

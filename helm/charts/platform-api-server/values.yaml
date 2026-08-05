@@ -98,6 +98,14 @@ gateway:
     name: platform-api-cert
     certificateMap:
       name: platform-gateway-certmap
+  # Cloud Armor: deploys a ComputeSecurityPolicy (WAF + rate limiting)
+  # and a GCPBackendPolicy that binds it to the gateway service.
+  cloudArmor:
+    enabled: false
+    rateLimit:
+      requestsPerMinute: 100
+      banRequestsPerMinute: 500
+      banDurationSec: 300
 
 # ESPv2 sidecar for Cloud Endpoints integration.
 # Requires the pod's service account to have roles/servicemanagement.serviceController
