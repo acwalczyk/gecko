@@ -1,12 +1,11 @@
 FROM registry.access.redhat.com/ubi9/go-toolset:latest AS builder
-USER root
-WORKDIR /workspace
+WORKDIR /opt/app-root/src
 COPY orlop/go.mod orlop/go.sum orlop/
 COPY platform-api/go.mod platform-api/go.sum platform-api/
 RUN cd platform-api && go mod download
 COPY orlop/ orlop/
 COPY platform-api/ platform-api/
-RUN cd platform-api && CGO_ENABLED=0 GOOS=linux go build -o /workspace/platform-api-server ./cmd/platform-api-server
+RUN cd platform-api && CGO_ENABLED=0 GOOS=linux go build -o /opt/app-root/src/platform-api-server ./cmd/platform-api-server
 
 FROM registry.access.redhat.com/ubi9/ubi-micro:latest
 
@@ -23,7 +22,7 @@ LABEL name="gecko-platform-api-server" \
 
 RUN mkdir /app && chown 65532:65532 /app
 COPY --from=builder /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem /etc/ssl/certs/ca-certificates.crt
-COPY --from=builder /workspace/platform-api-server /app/platform-api-server
+COPY --from=builder /opt/app-root/src/platform-api-server /app/platform-api-server
 USER 65532:65532
 WORKDIR /app
 ENTRYPOINT ["/app/platform-api-server"]
