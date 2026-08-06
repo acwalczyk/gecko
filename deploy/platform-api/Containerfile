@@ -18,7 +18,7 @@ LABEL name="gecko-platform-api-server" \
       summary="Gecko Platform API Server" \
       distribution-scope="private" \
       url="https://github.com/openshift-online/gecko" \
-      vendor="Red Hat"
+      vendor="Red Hat, Inc."
 
 RUN mkdir /app && chown 65532:65532 /app
 COPY --from=builder /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem /etc/ssl/certs/ca-certificates.crt
