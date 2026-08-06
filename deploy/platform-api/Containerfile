@@ -1,14 +1,26 @@
-FROM golang:1.26 AS builder
+FROM registry.access.redhat.com/ubi9/go-toolset:latest AS builder
+USER root
 WORKDIR /workspace
 COPY orlop/go.mod orlop/go.sum orlop/
 COPY platform-api/go.mod platform-api/go.sum platform-api/
 RUN cd platform-api && go mod download
 COPY orlop/ orlop/
 COPY platform-api/ platform-api/
-RUN cd platform-api && CGO_ENABLED=0 go build -o /platform-api-server ./cmd/platform-api-server
+RUN cd platform-api && CGO_ENABLED=0 GOOS=linux go build -o /workspace/platform-api-server ./cmd/platform-api-server
 
-FROM scratch
-COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-COPY --from=builder /platform-api-server /
+FROM registry.access.redhat.com/ubi9/ubi-micro:latest
+
+LABEL name="gecko-platform-api-server" \
+      com.redhat.component="gecko-platform-api-server" \
+      version="0.0.1" \
+      release="1" \
+      description="GCP HCP Platform API server from the gecko project, serving ManagedHostedCluster and HostedCluster resources." \
+      io.k8s.description="GCP HCP Platform API server from the gecko project." \
+      summary="Gecko Platform API Server" \
+      distribution-scope="private" \
+      url="https://github.com/openshift-online/gecko" \
+      vendor="Red Hat"
+
+COPY --from=builder /workspace/platform-api-server /platform-api-server
 USER 65532:65532
 ENTRYPOINT ["/platform-api-server"]
