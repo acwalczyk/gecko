@@ -1,9 +1,9 @@
 replicaCount: 1
 
 image:
-  registry: CHANGE_ME
-  repository: CHANGE_ME
-  tag: ""
+  registry: us-docker.pkg.dev
+  repository: gcp-hcp-commons/gcp-hcp-images/gecko-platform-api-server
+  tag: "365ddef"
   pullPolicy: Always
 
 nameOverride: ""
