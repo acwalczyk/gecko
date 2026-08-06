@@ -21,6 +21,7 @@ LABEL name="gecko-platform-api-server" \
       url="https://github.com/openshift-online/gecko" \
       vendor="Red Hat"
 
+COPY --from=builder /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem /etc/ssl/certs/ca-certificates.crt
 COPY --from=builder /workspace/platform-api-server /platform-api-server
 USER 65532:65532
 ENTRYPOINT ["/platform-api-server"]
