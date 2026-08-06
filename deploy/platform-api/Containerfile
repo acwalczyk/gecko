@@ -21,7 +21,9 @@ LABEL name="gecko-platform-api-server" \
       url="https://github.com/openshift-online/gecko" \
       vendor="Red Hat"
 
+RUN mkdir /app && chown 65532:65532 /app
 COPY --from=builder /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem /etc/ssl/certs/ca-certificates.crt
 COPY --from=builder /workspace/platform-api-server /platform-api-server
 USER 65532:65532
+WORKDIR /app
 ENTRYPOINT ["/platform-api-server"]
