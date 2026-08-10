@@ -31,31 +31,31 @@ spec:
 
     - action: "deny(403)"
       priority: 1020
-      description: "Block remote file inclusion"
+      description: "Block remote file inclusion (sensitivity {{ .Values.gateway.cloudArmor.wafSensitivity.rfi }})"
       match:
         expr:
-          expression: "evaluatePreconfiguredWaf('rfi-v33-stable')"
+          expression: "evaluatePreconfiguredWaf('rfi-v33-stable', {'sensitivity': {{ .Values.gateway.cloudArmor.wafSensitivity.rfi }}})"
 
     - action: "deny(403)"
       priority: 1030
-      description: "Block local file inclusion"
+      description: "Block local file inclusion (sensitivity {{ .Values.gateway.cloudArmor.wafSensitivity.lfi }})"
       match:
         expr:
-          expression: "evaluatePreconfiguredWaf('lfi-v33-stable')"
+          expression: "evaluatePreconfiguredWaf('lfi-v33-stable', {'sensitivity': {{ .Values.gateway.cloudArmor.wafSensitivity.lfi }}})"
 
     - action: "deny(403)"
       priority: 1040
-      description: "Block remote code execution (OS command injection)"
+      description: "Block remote code execution (sensitivity {{ .Values.gateway.cloudArmor.wafSensitivity.rce }})"
       match:
         expr:
-          expression: "evaluatePreconfiguredWaf('rce-v33-stable')"
+          expression: "evaluatePreconfiguredWaf('rce-v33-stable', {'sensitivity': {{ .Values.gateway.cloudArmor.wafSensitivity.rce }}})"
 
     - action: "deny(403)"
       priority: 1050
-      description: "Block automated vulnerability scanners"
+      description: "Block automated vulnerability scanners (sensitivity {{ .Values.gateway.cloudArmor.wafSensitivity.scannerdetection }})"
       match:
         expr:
-          expression: "evaluatePreconfiguredWaf('scannerdetection-v33-stable')"
+          expression: "evaluatePreconfiguredWaf('scannerdetection-v33-stable', {'sensitivity': {{ .Values.gateway.cloudArmor.wafSensitivity.scannerdetection }}})"
 
     # Placed after WAF rules so attacks are blocked before rate counting.
     # conformAction is always "allow" and terminates evaluation, so this
