@@ -9,23 +9,25 @@ metadata:
     cnrm.cloud.google.com/project-id: {{ required "gateway.projectId is required when cloudArmor is enabled" .Values.gateway.projectId | quote }}
 spec:
   description: "Cloud Armor policy for platform-api-server (rate limiting + WAF)"
+  advancedOptionsConfig:
+    jsonParsing: "STANDARD"
   adaptiveProtectionConfig:
     layer7DdosDefenseConfig:
       enable: true
   rule:
     - action: "deny(403)"
       priority: 1000
-      description: "Block SQL injection attempts"
+      description: "Block SQL injection attempts (sensitivity {{ .Values.gateway.cloudArmor.wafSensitivity.sqli }})"
       match:
         expr:
-          expression: "evaluatePreconfiguredWaf('sqli-v33-stable')"
+          expression: "evaluatePreconfiguredWaf('sqli-v33-stable', {'sensitivity': {{ .Values.gateway.cloudArmor.wafSensitivity.sqli }}})"
 
     - action: "deny(403)"
       priority: 1010
-      description: "Block XSS attempts"
+      description: "Block XSS attempts (sensitivity {{ .Values.gateway.cloudArmor.wafSensitivity.xss }})"
       match:
         expr:
-          expression: "evaluatePreconfiguredWaf('xss-v33-stable')"
+          expression: "evaluatePreconfiguredWaf('xss-v33-stable', {'sensitivity': {{ .Values.gateway.cloudArmor.wafSensitivity.xss }}})"
 
     - action: "deny(403)"
       priority: 1020
