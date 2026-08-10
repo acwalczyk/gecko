@@ -102,6 +102,12 @@ gateway:
   # and a GCPBackendPolicy that binds it to the gateway service.
   cloudArmor:
     enabled: false
+    # WAF sensitivity levels (1-4). Level 1 = highest confidence, fewest false
+    # positives. Level 4 = maximum detection, most false positives. Start at 1
+    # for JSON APIs and raise only after monitoring confirms no false negatives.
+    wafSensitivity:
+      sqli: 1
+      xss: 1
     rateLimit:
       requestsPerMinute: 100
       banRequestsPerMinute: 500
