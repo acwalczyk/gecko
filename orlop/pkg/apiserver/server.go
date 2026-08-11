@@ -113,7 +113,7 @@ func New(opts Options) (*Server, error) {
 	// limit.
 	first := opts.Private.Resources[0]
 	healthCheckers := []healthz.HealthChecker{
-		aggregated.NewStorageHealthChecker(sharedFactory, opts.Private.Scheme, first.Plural, first.GVK),
+		aggregated.NewStorageHealthChecker(sharedFactory, opts.Private.Scheme, GroupKindResourceType(first.GVK.GroupKind()), first.GVK),
 	}
 
 	aggCfg := aggregated.Config{
