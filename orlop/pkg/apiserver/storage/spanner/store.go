@@ -125,6 +125,34 @@ func unmarshalData(data []byte, rv int64) (*unstructured.Unstructured, error) {
 	return obj, nil
 }
 
+// unmarshalTyped deserialises data into a typed object using the store's
+// scheme and GVK. If the GVK is not registered in the scheme it falls back
+// to *unstructured.Unstructured so callers always receive a valid client.Object.
+func (s *SpannerStore) unmarshalTyped(data []byte, rv int64) (client.Object, error) {
+	rvStr := strconv.FormatInt(rv, 10)
+
+	if s.scheme == nil || s.gvk.Empty() {
+		return unmarshalData(data, rv)
+	}
+
+	robj, err := s.scheme.New(s.gvk)
+	if err != nil {
+		// GVK not registered — fall back to unstructured.
+		return unmarshalData(data, rv)
+	}
+
+	if err := json.Unmarshal(data, robj); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal into typed object: %w", err)
+	}
+
+	cobj, ok := robj.(client.Object)
+	if !ok {
+		return nil, fmt.Errorf("scheme returned object that does not implement client.Object")
+	}
+	cobj.SetResourceVersion(rvStr)
+	return cobj, nil
+}
+
 func (s *SpannerStore) incrementCounter(txn *spanner.ReadWriteTransaction, ctx context.Context) (int64, error) {
 	row, err := txn.ReadRow(ctx, s.countersTable, spanner.Key{s.counterID}, []string{"value"})
 	if err != nil {
@@ -314,7 +342,7 @@ func (s *SpannerStore) List(ctx context.Context, opts storage.ListOptions) (clie
 	iter := txn.Query(ctx, stmt)
 	defer iter.Stop()
 
-	var items []unstructured.Unstructured
+	var items []client.Object
 	rowCount := int64(0)
 
 	for {
@@ -344,12 +372,17 @@ func (s *SpannerStore) List(ctx context.Context, opts storage.ListOptions) (clie
 			return nil, fmt.Errorf("failed to re-marshal data: %w", err)
 		}
 
-		obj, err := unmarshalData(dataBytes, rv)
+		// unmarshalTyped returns a typed object when the store's scheme has
+		// the GVK registered, falling back to *unstructured.Unstructured.
+		// Typed objects are required so meta.SetList can assign them into a
+		// scheme-typed list's Items slice (e.g. []v1.Cluster) without a
+		// reflect type-mismatch error.
+		obj, err := s.unmarshalTyped(dataBytes, rv)
 		if err != nil {
 			return nil, err
 		}
 
-		items = append(items, *obj)
+		items = append(items, obj)
 	}
 
 	counterRow, err := txn.ReadRow(ctx, s.countersTable, spanner.Key{s.counterID}, []string{"value"})
@@ -377,11 +410,15 @@ func (s *SpannerStore) List(ctx context.Context, opts storage.ListOptions) (clie
 	listAccessor.SetResourceVersion(strconv.FormatInt(globalRV, 10))
 
 	if uList, ok := listObj.(*unstructured.UnstructuredList); ok {
-		uList.Items = items
+		for _, obj := range items {
+			if u, ok := obj.(*unstructured.Unstructured); ok {
+				uList.Items = append(uList.Items, *u)
+			}
+		}
 	} else {
 		runtimeItems := make([]runtime.Object, len(items))
-		for i := range items {
-			runtimeItems[i] = &items[i]
+		for i, obj := range items {
+			runtimeItems[i] = obj
 		}
 		if err := meta.SetList(listObj, runtimeItems); err != nil {
 			return nil, fmt.Errorf("failed to set list items: %w", err)
@@ -390,7 +427,7 @@ func (s *SpannerStore) List(ctx context.Context, opts storage.ListOptions) (clie
 
 	hasMore := opts.Limit > 0 && rowCount > opts.Limit
 	if hasMore && len(items) > 0 {
-		lastItem := &items[len(items)-1]
+		lastItem := items[len(items)-1]
 		token := &storage.ContinueToken{
 			Namespace:       lastItem.GetNamespace(),
 			Name:            lastItem.GetName(),
