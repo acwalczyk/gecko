@@ -91,6 +91,12 @@ type spannerBroadcaster struct {
 	// reports the same child token. The counter tracks how many parents have
 	// yet to finish; the child reader starts only when all parents are done.
 	pendingChildren map[string]int
+
+	// spawnedChildren records every child token for which a reader goroutine
+	// has already been launched. This prevents duplicate goroutines when a
+	// parent partition re-queries the change stream and receives the same
+	// ChildPartitionsRecord again.
+	spawnedChildren map[string]struct{}
 }
 
 type spannerBroadcasterConfig struct {
@@ -132,6 +138,7 @@ func newSpannerBroadcaster(ctx context.Context, config spannerBroadcasterConfig)
 		logger:           broadcasterLogger,
 		subscribers:     make(map[int]chan storage.ResourceEvent),
 		pendingChildren: make(map[string]int),
+		spawnedChildren: make(map[string]struct{}),
 	}
 
 	startTs := time.Now()
@@ -145,9 +152,14 @@ func newSpannerBroadcaster(ctx context.Context, config spannerBroadcasterConfig)
 // readChangeStream reads a single change stream partition. Each partition
 // tracks its own checkpoint (lastTs) so that a reconnect resumes from where
 // this partition left off, not from the most-advanced partition's timestamp.
+//
+// When a partition yields a ChildPartitionsRecord (split/merge), the children
+// are launched by handleChildPartitionsRecord and this goroutine exits — its
+// slice of the change stream has been handed off.
 func (b *spannerBroadcaster) readChangeStream(ctx context.Context, partitionToken *string, startTs time.Time) {
 	backoff := time.Second
 	lastTs := startTs
+	resource := b.gvk.GroupVersion().String() + "/" + b.gvk.Kind
 
 	for {
 		select {
@@ -172,7 +184,7 @@ func (b *spannerBroadcaster) readChangeStream(ctx context.Context, partitionToke
 		}
 
 		iter := b.client.Single().Query(ctx, stmt)
-		err := b.processChangeRecords(ctx, iter, &lastTs)
+		sawChildren, err := b.processChangeRecords(ctx, iter, &lastTs)
 		iter.Stop()
 
 		if ctx.Err() != nil {
@@ -180,7 +192,9 @@ func (b *spannerBroadcaster) readChangeStream(ctx context.Context, partitionToke
 		}
 
 		if err != nil {
-			b.logger.Error(err, "Change stream read error, retrying", "backoff", backoff)
+			b.logger.Error(err, "Change stream read error, retrying",
+				"resource", resource,
+				"backoff", backoff)
 			select {
 			case <-ctx.Done():
 				return
@@ -192,18 +206,29 @@ func (b *spannerBroadcaster) readChangeStream(ctx context.Context, partitionToke
 			continue
 		}
 
+		// Normal end-of-stream after a ChildPartitionsRecord means this
+		// partition has been split or merged. The child readers have been
+		// started by handleChildPartitionsRecord; this goroutine is done.
+		if sawChildren {
+			return
+		}
+
 		backoff = time.Second
 	}
 }
 
-func (b *spannerBroadcaster) processChangeRecords(ctx context.Context, iter *spanner.RowIterator, lastTs *time.Time) error {
+// processChangeRecords drains the iterator and dispatches each record type.
+// It returns true in sawChildren when at least one ChildPartitionsRecord was
+// processed, signalling that this partition has been split/merged and the
+// caller should exit instead of re-querying.
+func (b *spannerBroadcaster) processChangeRecords(ctx context.Context, iter *spanner.RowIterator, lastTs *time.Time) (sawChildren bool, err error) {
 	for {
 		row, err := iter.Next()
 		if err == iterator.Done {
-			return nil
+			return sawChildren, nil
 		}
 		if err != nil {
-			return err
+			return sawChildren, err
 		}
 
 		var records []*csRecord
@@ -230,6 +255,7 @@ func (b *spannerBroadcaster) processChangeRecords(ctx context.Context, iter *spa
 				if cpr.StartTimestamp.After(*lastTs) {
 					*lastTs = cpr.StartTimestamp
 				}
+				sawChildren = true
 			}
 		}
 	}
@@ -351,6 +377,11 @@ func (b *spannerBroadcaster) handleChildPartitionsRecord(ctx context.Context, cp
 		token := cp.Token
 		startTs := cpr.StartTimestamp
 
+		// Skip tokens for which a reader goroutine was already launched.
+		if _, spawned := b.spawnedChildren[token]; spawned {
+			continue
+		}
+
 		if _, exists := b.pendingChildren[token]; !exists {
 			b.pendingChildren[token] = len(cp.ParentPartitionTokens)
 		}
@@ -358,6 +389,7 @@ func (b *spannerBroadcaster) handleChildPartitionsRecord(ctx context.Context, cp
 
 		if b.pendingChildren[token] <= 0 {
 			delete(b.pendingChildren, token)
+			b.spawnedChildren[token] = struct{}{}
 			b.wg.Go(func() {
 				b.readChangeStream(ctx, &token, startTs)
 			})
