@@ -143,3 +143,17 @@ alloydb:
     existingSecret: ""
   database: "orlop"
   sslMode: "require"
+
+# Google Cloud Spanner backend via Config Connector (CNRM).
+# The Spanner instance is shared infrastructure provisioned by the region
+# Terraform module (gcp-hcp-infra), named ${project_id}-spanner. This chart
+# only creates a KCC SpannerDatabase inside that preexisting instance and
+# configures the deployment with the SPANNER_DATABASE env var.
+# Requires the Config Connector (cnrm.cloud.google.com) operator to be
+# installed in the cluster and the pod's service account to be bound to a
+# GCP service account with roles/spanner.databaseUser via Workload Identity.
+spanner:
+  enabled: false
+  projectId: ""
+  instanceId: ""
+  databaseId: "gecko"

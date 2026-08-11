@@ -1,0 +1,15 @@
+{{- if .Values.spanner.enabled }}
+apiVersion: spanner.cnrm.cloud.google.com/v1beta1
+kind: SpannerDatabase
+metadata:
+  name: {{ .Values.spanner.databaseId }}
+  annotations:
+    cnrm.cloud.google.com/project-id: {{ required "spanner.projectId is required when spanner is enabled" .Values.spanner.projectId | quote }}
+  labels:
+    {{- include "platform-api-server.labels" . | nindent 4 }}
+spec:
+  # Reference the preexisting, Terraform-provisioned shared Spanner instance
+  # (${project_id}-spanner) from the region module.
+  instanceRef:
+    external: {{ required "spanner.instanceId is required when spanner is enabled" .Values.spanner.instanceId | quote }}
+{{- end }}
