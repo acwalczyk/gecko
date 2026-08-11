@@ -15,8 +15,10 @@ import (
 // the token after spawning, so a re-delivered ChildPartitionsRecord would
 // create a duplicate goroutine.
 func TestHandleChildPartitionsRecord_SkipsDuplicateTokens(t *testing.T) {
+	// Cancel context immediately so any spawned goroutines exit before
+	// reaching b.client.Single() (client is nil in this unit test).
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	cancel()
 
 	b := &spannerBroadcaster{
 		ctx:             ctx,
@@ -25,12 +27,6 @@ func TestHandleChildPartitionsRecord_SkipsDuplicateTokens(t *testing.T) {
 		pendingChildren: make(map[string]int),
 		spawnedChildren: make(map[string]struct{}),
 	}
-
-	spawned := make(chan string, 10)
-
-	// Patch: count goroutines by wrapping readChangeStream calls.
-	// We can't call real readChangeStream (no Spanner client), so we
-	// just verify the spawnedChildren gate directly.
 
 	rec := &csChildPartitionsRecord{
 		StartTimestamp: time.Now(),
@@ -50,32 +46,21 @@ func TestHandleChildPartitionsRecord_SkipsDuplicateTokens(t *testing.T) {
 		t.Fatal("token-B should be in spawnedChildren after first call")
 	}
 
-	// Wait for the spawned goroutines to start (they'll panic/exit quickly
-	// since there's no Spanner client, but WaitGroup tracks them).
-	// We don't need them to succeed — just to have been spawned.
-	// Cancel context so goroutines exit.
-	cancel()
+	// Goroutines exit immediately (context already cancelled).
 	b.wg.Wait()
 
 	// Second call with same tokens — should NOT spawn new goroutines.
-	ctx2, cancel2 := context.WithCancel(context.Background())
-	defer cancel2()
-
 	goroutinesBefore := runtime.NumGoroutine()
-	b.handleChildPartitionsRecord(ctx2, rec)
+	b.handleChildPartitionsRecord(ctx, rec)
 	goroutinesAfter := runtime.NumGoroutine()
 
-	// pendingChildren should still be empty (tokens already spawned).
 	if len(b.pendingChildren) != 0 {
 		t.Errorf("pendingChildren should be empty, got %d entries", len(b.pendingChildren))
 	}
 
-	// No new goroutines should have been created.
 	if goroutinesAfter > goroutinesBefore+1 {
 		t.Errorf("goroutine leak: before=%d after=%d (expected no growth)", goroutinesBefore, goroutinesAfter)
 	}
-
-	_ = spawned // unused, kept for clarity
 }
 
 // TestHandleChildPartitionsRecord_MergeWaitsForAllParents verifies that

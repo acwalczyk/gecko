@@ -83,9 +83,7 @@ func drainUntil(t *testing.T, ch <-chan storage.ResourceEvent, ns, name string, 
 }
 
 // eventTimeout is the maximum time to wait for a single change-stream event.
-// The Spanner emulator delivers data committed on an already-open streaming
-// query in batches (not real-time), so tests need a generous timeout.
-// Production Spanner pushes events immediately; this is an emulator artefact.
+// Generous to accommodate emulator latency.
 const eventTimeout = 30 * time.Second
 
 func TestBroadcaster_SubscribeReceivesLiveEvents(t *testing.T) {
