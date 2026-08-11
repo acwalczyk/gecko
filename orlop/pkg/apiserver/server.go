@@ -103,11 +103,17 @@ func New(opts Options) (*Server, error) {
 		return st, nil
 	}
 
-	// Health checker uses the original (unmemoized) factory intentionally:
-	// each Check() call creates a fresh store to test backend connectivity.
+	// Health checker uses the memoized sharedFactory so probes reuse the
+	// already-running store/broadcaster instead of creating a new one on
+	// every Check() call. The raw opts.StorageFactory creates backends
+	// (e.g. the Spanner store) that spawn long-lived background goroutines
+	// (change-stream partition readers) with no way to close them, so using
+	// it directly here leaked one broadcaster per liveness/readiness probe
+	// and eventually exhausted Spanner's per-partition concurrent query
+	// limit.
 	first := opts.Private.Resources[0]
 	healthCheckers := []healthz.HealthChecker{
-		aggregated.NewStorageHealthChecker(opts.StorageFactory, opts.Private.Scheme, first.Plural, first.GVK),
+		aggregated.NewStorageHealthChecker(sharedFactory, opts.Private.Scheme, first.Plural, first.GVK),
 	}
 
 	aggCfg := aggregated.Config{
