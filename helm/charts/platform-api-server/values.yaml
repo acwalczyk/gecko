@@ -157,3 +157,11 @@ spanner:
   projectId: ""
   instanceId: ""
   databaseId: "gecko"
+  # IAM grant on the SpannerDatabase created by this chart. When serviceAccount
+  # (the GCP service account email bound to the pod's Kubernetes service
+  # account via Workload Identity) is set, an IAMPolicyMember grants it the
+  # role below on the database. Leave serviceAccount empty to skip the grant
+  # (e.g. when IAM is managed outside this chart).
+  iam:
+    serviceAccount: ""
+    role: "roles/spanner.databaseUser"
