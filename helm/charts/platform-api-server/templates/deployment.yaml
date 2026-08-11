@@ -51,8 +51,12 @@ spec:
             {{- if .Values.corsOrigins }}
             - --cors-origins={{ join "," .Values.corsOrigins }}
             {{- end }}
-          {{- if .Values.alloydb.enabled }}
+          {{- if or .Values.spanner.enabled .Values.alloydb.enabled }}
           env:
+            {{- if .Values.spanner.enabled }}
+            - name: SPANNER_DATABASE
+              value: {{ printf "projects/%s/instances/%s/databases/%s" .Values.spanner.projectId .Values.spanner.instanceId .Values.spanner.databaseId | quote }}
+            {{- else if .Values.alloydb.enabled }}
             - name: DB_HOST
               value: {{ required "alloydb.host is required when alloydb is enabled (set after AlloyDB instance is provisioned)" .Values.alloydb.host | quote }}
             - name: DB_PORT
@@ -68,6 +72,7 @@ spec:
                   key: password
             - name: DB_SSLMODE
               value: {{ .Values.alloydb.sslMode | quote }}
+            {{- end }}
           {{- end }}
           ports:
             - containerPort: {{ .Values.tls.port }}
