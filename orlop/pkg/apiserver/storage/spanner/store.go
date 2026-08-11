@@ -627,4 +627,13 @@ func fieldValueFromMap(m map[string]any, path string) string {
 	return s
 }
 
+// Close shuts down the broadcaster (and its change-stream partition readers)
+// associated with this store. Safe to call multiple times.
+func (s *SpannerStore) Close() error {
+	if b, ok := s.broadcaster.(interface{ Close() error }); ok {
+		return b.Close()
+	}
+	return nil
+}
+
 var _ storage.ResourceStore = (*SpannerStore)(nil)
