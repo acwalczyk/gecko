@@ -15,4 +15,25 @@ spec:
   resourceRef:
     kind: SpannerDatabase
     name: {{ .Values.spanner.databaseId }}
+---
+apiVersion: iam.cnrm.cloud.google.com/v1beta1
+kind: IAMPolicyMember
+metadata:
+  name: {{ printf "%s-spanner-metric-writer" (include "platform-api-server.fullname" .) }}
+  annotations:
+    cnrm.cloud.google.com/project-id: {{ .Values.spanner.projectId | quote }}
+  labels:
+    {{- include "platform-api-server.labels" . | nindent 4 }}
+spec:
+  # The Spanner client library emits client-side metrics directly to Cloud
+  # Monitoring in the Spanner project, bypassing the SpannerDatabase IAM
+  # policy above. The pod's service account needs roles/monitoring.metricWriter
+  # on the project to write these metrics.
+  # https://cloud.google.com/spanner/docs/view-manage-client-side-metrics#access-client-side-metrics
+  member: {{ printf "serviceAccount:%s" .Values.spanner.iam.serviceAccount }}
+  role: roles/monitoring.metricWriter
+  resourceRef:
+    apiVersion: resourcemanager.cnrm.cloud.google.com/v1beta1
+    kind: Project
+    external: {{ printf "projects/%s" .Values.spanner.projectId | quote }}
 {{- end }}
