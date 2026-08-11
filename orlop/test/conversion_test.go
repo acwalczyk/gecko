@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"testing"
@@ -27,6 +28,20 @@ var (
 	conversionPublicBaseURL     string
 	conversionTestServerStarted bool
 )
+
+// freePort asks the OS for an available port, then closes the listener so the
+// port can be used by the test server. This avoids hardcoding ports that
+// collide when tests run in parallel.
+func freePort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to get free port: %v", err)
+	}
+	port := l.Addr().(*net.TCPAddr).Port
+	l.Close()
+	return port
+}
 
 // ensureConversionTestServer starts the test server with both public and private APIs if not already started
 func ensureConversionTestServer(t *testing.T) {
@@ -79,14 +94,14 @@ func ensureConversionTestServer(t *testing.T) {
 		Address:     "127.0.0.1",
 		CORSOrigins: []string{"*"},
 		Private: apiserver.PrivateAPIOptions{
-			Port:        9003, // Different ports from other tests
+			Port:        freePort(t),
 			Resources:   privateResources,
 			Scheme:      privateScheme,
 			DisableAuth: true,
 		},
 		Public: apiserver.PublicAPIOptions{
 			Enable:    true,
-			Port:      9004,
+			Port:      freePort(t),
 			Resources: publicResources,
 			Scheme:    publicScheme,
 		},
