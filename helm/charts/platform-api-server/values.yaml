@@ -103,11 +103,16 @@ gateway:
   cloudArmor:
     enabled: false
     # WAF sensitivity levels (1-4). Level 1 = highest confidence, fewest false
-    # positives. Level 4 = maximum detection, most false positives. Start at 1
-    # for JSON APIs and raise only after monitoring confirms no false negatives.
+    # positives. Level 4 = maximum detection, most false positives. All rules
+    # default to 1 because JSON API payloads contain URLs, email addresses, and
+    # path-like strings that trigger false positives at higher sensitivities.
     wafSensitivity:
       sqli: 1
       xss: 1
+      rfi: 1
+      lfi: 1
+      rce: 1
+      scannerdetection: 1
     rateLimit:
       requestsPerMinute: 100
       banRequestsPerMinute: 500
