@@ -33,12 +33,13 @@ func setupBroadcasterWithStore(t *testing.T) (*spannerBroadcaster, *SpannerStore
 	changeStreamName := "cs_" + resourcesTable
 
 	broadcaster, err := newSpannerBroadcaster(context.Background(), spannerBroadcasterConfig{
-		Client:           sharedClient,
-		ResourceType:     rt,
-		TableName:        resourcesTable,
-		ChangeStreamName: changeStreamName,
-		Scheme:           scheme,
-		GVK:              gvk,
+		Client:                sharedClient,
+		ResourceType:          rt,
+		TableName:             resourcesTable,
+		ChangeStreamName:      changeStreamName,
+		Scheme:                scheme,
+		GVK:                   gvk,
+		HeartbeatMilliseconds: 1000, // 1s heartbeat for faster emulator tests
 	})
 	if err != nil {
 		t.Fatalf("newSpannerBroadcaster() failed: %v", err)
@@ -81,7 +82,11 @@ func drainUntil(t *testing.T, ch <-chan storage.ResourceEvent, ns, name string, 
 	}
 }
 
-const eventTimeout = 10 * time.Second
+// eventTimeout is the maximum time to wait for a single change-stream event.
+// The Spanner emulator delivers data committed on an already-open streaming
+// query in batches (not real-time), so tests need a generous timeout.
+// Production Spanner pushes events immediately; this is an emulator artefact.
+const eventTimeout = 30 * time.Second
 
 func TestBroadcaster_SubscribeReceivesLiveEvents(t *testing.T) {
 	_, store := setupBroadcasterWithStore(t)

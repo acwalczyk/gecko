@@ -69,15 +69,16 @@ type csRecord struct {
 }
 
 type spannerBroadcaster struct {
-	client           *spanner.Client
-	resourceType     string
-	tableName        string
-	changeStreamName string
-	ctx              context.Context
-	cancel           context.CancelFunc
-	scheme           *runtime.Scheme
-	gvk              schema.GroupVersionKind
-	logger           logr.Logger
+	client                *spanner.Client
+	resourceType          string
+	tableName             string
+	changeStreamName      string
+	heartbeatMilliseconds int64
+	ctx                   context.Context
+	cancel                context.CancelFunc
+	scheme                *runtime.Scheme
+	gvk                   schema.GroupVersionKind
+	logger                logr.Logger
 
 	mu          sync.RWMutex
 	subscribers map[int]chan storage.ResourceEvent
@@ -100,13 +101,14 @@ type spannerBroadcaster struct {
 }
 
 type spannerBroadcasterConfig struct {
-	Client           *spanner.Client
-	ResourceType     string
-	TableName        string
-	ChangeStreamName string
-	Scheme           *runtime.Scheme
-	GVK              schema.GroupVersionKind
-	Logger           logr.Logger
+	Client                *spanner.Client
+	ResourceType          string
+	TableName             string
+	ChangeStreamName      string
+	Scheme                *runtime.Scheme
+	GVK                   schema.GroupVersionKind
+	Logger                logr.Logger
+	HeartbeatMilliseconds int64 // change-stream heartbeat interval; 0 defaults to 5000
 }
 
 func newSpannerBroadcaster(ctx context.Context, config spannerBroadcasterConfig) (*spannerBroadcaster, error) {
@@ -126,19 +128,25 @@ func newSpannerBroadcaster(ctx context.Context, config spannerBroadcasterConfig)
 		broadcasterLogger = logr.Discard()
 	}
 
+	heartbeat := config.HeartbeatMilliseconds
+	if heartbeat <= 0 {
+		heartbeat = 5000
+	}
+
 	b := &spannerBroadcaster{
-		client:           config.Client,
-		resourceType:     config.ResourceType,
-		tableName:        tableName,
-		changeStreamName: config.ChangeStreamName,
-		ctx:              bCtx,
-		cancel:           cancel,
-		scheme:           config.Scheme,
-		gvk:              config.GVK,
-		logger:           broadcasterLogger,
-		subscribers:     make(map[int]chan storage.ResourceEvent),
-		pendingChildren: make(map[string]int),
-		spawnedChildren: make(map[string]struct{}),
+		client:                config.Client,
+		resourceType:          config.ResourceType,
+		tableName:             tableName,
+		changeStreamName:      config.ChangeStreamName,
+		ctx:                   bCtx,
+		cancel:                cancel,
+		scheme:                config.Scheme,
+		gvk:                   config.GVK,
+		logger:                broadcasterLogger,
+		heartbeatMilliseconds: heartbeat,
+		subscribers:           make(map[int]chan storage.ResourceEvent),
+		pendingChildren:       make(map[string]int),
+		spawnedChildren:       make(map[string]struct{}),
 	}
 
 	startTs := time.Now()
@@ -153,9 +161,10 @@ func newSpannerBroadcaster(ctx context.Context, config spannerBroadcasterConfig)
 // tracks its own checkpoint (lastTs) so that a reconnect resumes from where
 // this partition left off, not from the most-advanced partition's timestamp.
 //
-// When a partition yields a ChildPartitionsRecord (split/merge), the children
-// are launched by handleChildPartitionsRecord and this goroutine exits — its
-// slice of the change stream has been handed off.
+// When a partition yields a ChildPartitionsRecord (split/merge), child
+// readers are launched by handleChildPartitionsRecord. The spawnedChildren
+// set ensures each child token is started at most once, even if the same
+// ChildPartitionsRecord is seen again on a subsequent query iteration.
 func (b *spannerBroadcaster) readChangeStream(ctx context.Context, partitionToken *string, startTs time.Time) {
 	backoff := time.Second
 	lastTs := startTs
@@ -172,7 +181,7 @@ func (b *spannerBroadcaster) readChangeStream(ctx context.Context, partitionToke
 			"startTimestamp":        lastTs,
 			"endTimestamp":          (*time.Time)(nil),
 			"partitionToken":       partitionToken,
-			"heartbeatMilliseconds": int64(5000),
+			"heartbeatMilliseconds": b.heartbeatMilliseconds,
 		}
 
 		stmt := spanner.Statement{
@@ -206,9 +215,10 @@ func (b *spannerBroadcaster) readChangeStream(ctx context.Context, partitionToke
 			continue
 		}
 
-		// Normal end-of-stream after a ChildPartitionsRecord means this
-		// partition has been split or merged. The child readers have been
-		// started by handleChildPartitionsRecord; this goroutine is done.
+		// A ChildPartitionsRecord signals that this partition has been
+		// split or merged. Child readers were started (or already
+		// exist) via handleChildPartitionsRecord; this goroutine's
+		// slice of the change stream has been handed off.
 		if sawChildren {
 			return
 		}
@@ -218,9 +228,9 @@ func (b *spannerBroadcaster) readChangeStream(ctx context.Context, partitionToke
 }
 
 // processChangeRecords drains the iterator and dispatches each record type.
-// It returns true in sawChildren when at least one ChildPartitionsRecord was
-// processed, signalling that this partition has been split/merged and the
-// caller should exit instead of re-querying.
+// It returns sawChildren=true when at least one ChildPartitionsRecord was
+// present, signalling that this partition has been split/merged and the
+// caller should exit.
 func (b *spannerBroadcaster) processChangeRecords(ctx context.Context, iter *spanner.RowIterator, lastTs *time.Time) (sawChildren bool, err error) {
 	for {
 		row, err := iter.Next()
@@ -378,7 +388,7 @@ func (b *spannerBroadcaster) handleChildPartitionsRecord(ctx context.Context, cp
 		startTs := cpr.StartTimestamp
 
 		// Skip tokens for which a reader goroutine was already launched.
-		if _, spawned := b.spawnedChildren[token]; spawned {
+		if _, exists := b.spawnedChildren[token]; exists {
 			continue
 		}
 
