@@ -21,6 +21,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -781,5 +782,114 @@ func TestSpannerStore_ResourceVersionIncrement(t *testing.T) {
 	rv3 := parseRV(retrievedUpdated)
 	if rv3 <= rv2 {
 		t.Errorf("After update, rv = %d, want > %d", rv3, rv2)
+	}
+}
+
+// --- Regression test: List with a typed scheme ----------------------------
+//
+// Typed scheme registration (scheme.New returns a concrete struct, not
+// *unstructured.Unstructured) caused List to return
+//
+//	"can't assign or convert unstructured.Unstructured into TypedCluster"
+//
+// because items were collected as []unstructured.Unstructured and then
+// passed to meta.SetList, which uses reflection to assign each item into
+// the typed list's Items slice. The fix introduces unmarshalTyped, which
+// uses the store's scheme to produce correctly-typed objects.
+
+// typedCluster is a minimal concrete struct that implements client.Object
+// via embedded ObjectMeta. It represents a real typed API object (like
+// v1.Cluster) as opposed to *unstructured.Unstructured.
+type typedCluster struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Spec              map[string]any `json:"spec,omitempty"`
+}
+
+func (c *typedCluster) DeepCopyObject() runtime.Object {
+	cp := *c
+	return &cp
+}
+
+// typedClusterList is the typed list for typedCluster.
+type typedClusterList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []typedCluster `json:"items"`
+}
+
+func (l *typedClusterList) DeepCopyObject() runtime.Object {
+	cp := *l
+	cp.Items = append([]typedCluster(nil), l.Items...)
+	return &cp
+}
+
+// setupTypedStore creates a store where the scheme has a concrete typed
+// struct registered for its GVK, reproducing the scenario that triggered
+// the "can't assign or convert unstructured.Unstructured" error.
+func setupTypedStore(t *testing.T) *SpannerStore {
+	t.Helper()
+
+	counterID := fmt.Sprintf("typed_%d", testCounterSeq.Add(1))
+
+	gv := schema.GroupVersion{Group: "typed.example.com", Version: "v1"}
+	gvk := gv.WithKind("TypedCluster")
+
+	scheme := runtime.NewScheme()
+	scheme.AddKnownTypeWithName(gvk, &typedCluster{})
+	scheme.AddKnownTypeWithName(gv.WithKind("TypedClusterList"), &typedClusterList{})
+
+	return &SpannerStore{
+		client:        sharedClient,
+		resourceType:  gvkString(gvk),
+		scheme:        scheme,
+		gvk:           gvk,
+		tableName:     resourcesTable,
+		countersTable: countersTable,
+		counterID:     counterID,
+	}
+}
+
+func TestSpannerStore_List_TypedScheme(t *testing.T) {
+	// Regression test for: "can't assign or convert unstructured.Unstructured
+	// into v1.Cluster". List must return typed objects when the store's scheme
+	// has a concrete struct registered, not *unstructured.Unstructured.
+	store := setupTypedStore(t)
+	ns := "typed-list-ns"
+
+	// Write two objects through the unstructured path (Create uses marshalData
+	// which works regardless of scheme) so we have rows to list back.
+	obj1 := newTestObject(withName("cluster-a"), withNamespace(ns))
+	obj1.SetGroupVersionKind(store.gvk)
+	if err := store.Create(context.Background(), obj1); err != nil {
+		t.Fatalf("Create cluster-a: %v", err)
+	}
+
+	obj2 := newTestObject(withName("cluster-b"), withNamespace(ns))
+	obj2.SetGroupVersionKind(store.gvk)
+	if err := store.Create(context.Background(), obj2); err != nil {
+		t.Fatalf("Create cluster-b: %v", err)
+	}
+
+	// List must not return the "can't assign or convert" error.
+	listObj, err := store.List(context.Background(), storage.ListOptions{Namespace: ns})
+	if err != nil {
+		t.Fatalf("List() failed: %v", err)
+	}
+
+	// The returned list must be the typed list, not *unstructured.UnstructuredList.
+	typed, ok := listObj.(*typedClusterList)
+	if !ok {
+		t.Fatalf("List() returned %T, want *typedClusterList", listObj)
+	}
+	if len(typed.Items) != 2 {
+		t.Errorf("List() returned %d items, want 2", len(typed.Items))
+	}
+
+	// Each item must have its resource version set.
+	for _, item := range typed.Items {
+		if item.GetResourceVersion() == "" {
+			t.Errorf("item %q missing resourceVersion", item.GetName())
+		}
 	}
 }
