@@ -103,11 +103,16 @@ gateway:
   cloudArmor:
     enabled: false
     # WAF sensitivity levels (1-4). Level 1 = highest confidence, fewest false
-    # positives. Level 4 = maximum detection, most false positives. Start at 1
-    # for JSON APIs and raise only after monitoring confirms no false negatives.
+    # positives. Level 4 = maximum detection, most false positives. All rules
+    # default to 1 because JSON API payloads contain URLs, email addresses, and
+    # path-like strings that trigger false positives at higher sensitivities.
     wafSensitivity:
       sqli: 1
       xss: 1
+      rfi: 1
+      lfi: 1
+      rce: 1
+      scannerdetection: 1
     rateLimit:
       requestsPerMinute: 100
       banRequestsPerMinute: 500
@@ -138,3 +143,25 @@ alloydb:
     existingSecret: ""
   database: "orlop"
   sslMode: "require"
+
+# Google Cloud Spanner backend via Config Connector (CNRM).
+# The Spanner instance is shared infrastructure provisioned by the region
+# Terraform module (gcp-hcp-infra), named ${project_id}-spanner. This chart
+# only creates a KCC SpannerDatabase inside that preexisting instance and
+# configures the deployment with the SPANNER_DATABASE env var.
+# Requires the Config Connector (cnrm.cloud.google.com) operator to be
+# installed in the cluster and the pod's service account to be bound to a
+# GCP service account with roles/spanner.databaseUser via Workload Identity.
+spanner:
+  enabled: false
+  projectId: ""
+  instanceId: ""
+  databaseId: "gecko"
+  # IAM grant on the SpannerDatabase created by this chart. When serviceAccount
+  # (the GCP service account email bound to the pod's Kubernetes service
+  # account via Workload Identity) is set, an IAMPolicyMember grants it the
+  # role below on the database. Leave serviceAccount empty to skip the grant
+  # (e.g. when IAM is managed outside this chart).
+  iam:
+    serviceAccount: ""
+    role: "roles/spanner.databaseUser"

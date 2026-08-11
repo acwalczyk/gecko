@@ -79,4 +79,18 @@ Validate required values that must not remain as placeholders.
 {{- fail "alloydb: either auth.password or auth.existingSecret must be set when alloydb is enabled" -}}
 {{- end -}}
 {{- end -}}
+{{- if .Values.spanner.enabled -}}
+{{- if not .Values.spanner.projectId -}}
+{{- fail "spanner.projectId must be set when spanner is enabled" -}}
+{{- end -}}
+{{- if not .Values.spanner.instanceId -}}
+{{- fail "spanner.instanceId must be set when spanner is enabled (the shared instance provisioned by the region Terraform module)" -}}
+{{- end -}}
+{{- if not .Values.spanner.databaseId -}}
+{{- fail "spanner.databaseId must be set when spanner is enabled" -}}
+{{- end -}}
+{{- if .Values.alloydb.enabled -}}
+{{- fail "spanner and alloydb cannot both be enabled; choose one storage backend" -}}
+{{- end -}}
+{{- end -}}
 {{- end }}

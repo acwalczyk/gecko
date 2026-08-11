@@ -18,6 +18,7 @@ import (
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/memory"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/postgres"
+	spannerbackend "github.com/openshift-online/gecko/orlop/pkg/apiserver/storage/spanner"
 	"k8s.io/apimachinery/pkg/runtime"
 	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -60,8 +61,30 @@ func main() {
 	}
 
 	// Configure storage backend
+	// Priority: Spanner (SPANNER_DATABASE set) > PostgreSQL (DB_HOST set) > in-memory (default)
 	var storageFactory apiserver.StorageFactory
-	if dbHost := os.Getenv("DB_HOST"); dbHost != "" {
+	if spannerDB := os.Getenv("SPANNER_DATABASE"); spannerDB != "" {
+		// SPANNER_DATABASE must be a full Spanner database resource path:
+		//   projects/<project>/instances/<instance>/databases/<database>
+		// Set SPANNER_EMULATOR_HOST to redirect to a local emulator, e.g.:
+		//   SPANNER_EMULATOR_HOST=localhost:9010
+		tablePrefix := os.Getenv("SPANNER_TABLE_PREFIX")
+
+		log.Printf("Connecting to Spanner database: %s", spannerDB)
+
+		factory, err := spannerbackend.NewStorageFactory(spannerbackend.StorageFactoryConfig{
+			Database:    spannerDB,
+			TablePrefix: tablePrefix,
+			Context:     context.Background(),
+			Logger:      logger,
+		})
+		if err != nil {
+			log.Fatalf("Failed to create Spanner storage factory: %v", err)
+		}
+
+		log.Printf("Connected to Spanner: %s", spannerDB)
+		storageFactory = factory
+	} else if dbHost := os.Getenv("DB_HOST"); dbHost != "" {
 		dbPort := os.Getenv("DB_PORT")
 		if dbPort == "" {
 			dbPort = "5432"
@@ -104,7 +127,7 @@ func main() {
 		storageFactory = func(resourceType string, scheme *runtime.Scheme, gvk runtimeschema.GroupVersionKind) (storage.ResourceStore, error) {
 			return memory.NewMemoryStore(resourceType, scheme, gvk), nil
 		}
-		log.Println("No DB_HOST set, using in-memory storage")
+		log.Println("No SPANNER_DATABASE or DB_HOST set, using in-memory storage")
 	}
 
 	// Create server with resource configuration
