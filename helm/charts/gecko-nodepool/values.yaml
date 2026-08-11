@@ -1,8 +1,8 @@
 replicaCount: 1
 
 image:
-  registry: CHANGE_ME
-  repository: CHANGE_ME
+  registry: us-docker.pkg.dev
+  repository: gcp-hcp-commons/gcp-hcp-images/gecko-controllers
   tag: ""
   pullPolicy: Always
 

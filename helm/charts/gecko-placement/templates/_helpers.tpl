@@ -63,11 +63,11 @@ Validate required values.
 {{- define "gecko-placement.validateValues" -}}
 {{- $registry := trim (toString .Values.image.registry) -}}
 {{- if or (not $registry) (eq $registry "CHANGE_ME") -}}
-{{- fail "image.registry must be set (e.g. --set image.registry=quay.io)" -}}
+{{- fail "image.registry must be set (e.g. --set image.registry=us-docker.pkg.dev)" -}}
 {{- end -}}
 {{- $repository := trim (toString .Values.image.repository) -}}
 {{- if or (not $repository) (eq $repository "CHANGE_ME") -}}
-{{- fail "image.repository must be set (e.g. --set image.repository=gcphcp/gecko-controllers)" -}}
+{{- fail "image.repository must be set (e.g. --set image.repository=gcp-hcp-commons/gcp-hcp-images/gecko-controllers)" -}}
 {{- end -}}
 {{- if not (trim (toString .Values.image.tag)) -}}
 {{- fail "image.tag must be set (e.g. --set image.tag=abc1234)" -}}
