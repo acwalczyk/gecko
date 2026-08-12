@@ -23,19 +23,17 @@ const (
 
 // Reconciler implements the placement controller reconcile loop.
 type Reconciler struct {
-	client     client.Client
-	selector   Selector
-	candidates []Candidate
-	log        logger.Logger
+	client   client.Client
+	selector Selector
+	log      logger.Logger
 }
 
 // NewReconciler creates a new placement Reconciler.
-func NewReconciler(selector Selector, candidates []Candidate, log logger.Logger, c client.Client) *Reconciler {
+func NewReconciler(selector Selector, log logger.Logger, c client.Client) *Reconciler {
 	return &Reconciler{
-		selector:   selector,
-		candidates: candidates,
-		log:        log,
-		client:     c,
+		selector: selector,
+		log:      log,
+		client:   c,
 	}
 }
 
@@ -62,7 +60,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 
 	// Step 3: Select MC and DNS zone.
-	mc, domain, err := r.selector.Select(ctx, r.candidates)
+	mc, domain, err := r.selector.Select(ctx)
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("placement: select MC for cluster %s: %w", clusterID, err)
 	}

@@ -19,17 +19,6 @@ import (
 	"github.com/openshift-online/gecko/controllers/util/logger"
 )
 
-// mockSelector is a simple Selector implementation for tests.
-type mockSelector struct {
-	mcName     string
-	baseDomain string
-	err        error
-}
-
-func (m *mockSelector) Select(_ context.Context, _ []Candidate) (string, string, error) {
-	return m.mcName, m.baseDomain, m.err
-}
-
 // testLogger creates a logger for tests.
 func testLogger(t *testing.T) logger.Logger {
 	t.Helper()
@@ -44,19 +33,14 @@ func testLogger(t *testing.T) logger.Logger {
 	return log
 }
 
-// testCandidates returns a default candidate list for tests.
-func testCandidates() []Candidate {
-	return []Candidate{
-		{Name: "mc-us-c1", BaseDomains: []string{"hc-us-central1-abc.example.com"}},
-	}
-}
-
 // mockStatusWriter is a minimal SubResourceWriter for status updates.
 type mockStatusWriter struct {
-	updateErr error
+	updateErr    error
+	updateCalled bool
 }
 
 func (m *mockStatusWriter) Update(_ context.Context, _ client.Object, _ ...client.SubResourceUpdateOption) error {
+	m.updateCalled = true
 	return m.updateErr
 }
 func (m *mockStatusWriter) Create(_ context.Context, _ client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
@@ -145,60 +129,85 @@ func buildCluster(id string, placed bool) *privatev1.Cluster {
 	return c
 }
 
+// mockSelector is a minimal Selector for reconciler tests.
+type mockSelector struct {
+	mc     string
+	domain string
+	err    error
+}
+
+func (m *mockSelector) Select(_ context.Context) (string, string, error) {
+	return m.mc, m.domain, m.err
+}
+
+// workingSelector returns a Selector that always succeeds.
+func workingSelector() Selector {
+	return &mockSelector{mc: "mc-us-c1", domain: "hc-us-central1-abc.example.com"}
+}
+
+// failingSelector returns a Selector whose Select() always errors.
+func failingSelector(errMsg string) Selector {
+	return &mockSelector{err: fmt.Errorf("%s", errMsg)}
+}
+
 func TestReconciler(t *testing.T) {
 	tests := []struct {
-		name           string
-		clusterID      string
-		cluster        *privatev1.Cluster // nil → NotFound
-		selector       *mockSelector
-		expectUpdate   bool
-		expectedResult reconcile.Result
-		expectError    bool
+		name               string
+		clusterID          string
+		cluster            *privatev1.Cluster // nil → NotFound
+		selector           Selector
+		expectUpdate       bool
+		expectStatusUpdate bool
+		expectedResult     reconcile.Result
+		expectError        bool
 	}{
 		{
-			name:           "happy path: selects MC and domain, updates status",
-			clusterID:      "cluster-1",
-			cluster:        buildCluster("cluster-1", false),
-			selector:       &mockSelector{mcName: "mc-us-c1", baseDomain: "hc-us-central1-abc.example.com"},
-			expectUpdate:   false,
-			expectedResult: reconcile.Result{RequeueAfter: requeueStable},
+			name:               "happy path: selects MC and domain, updates status",
+			clusterID:          "cluster-1",
+			cluster:            buildCluster("cluster-1", false),
+			selector:           workingSelector(),
+			expectUpdate:       false,
+			expectStatusUpdate: true,
+			expectedResult:     reconcile.Result{RequeueAfter: requeueStable},
 		},
 		{
-			name:           "already placed: no update, empty result",
-			clusterID:      "cluster-2",
-			cluster:        buildCluster("cluster-2", true),
-			selector:       &mockSelector{mcName: "mc-us-c1", baseDomain: "hc-us-central1-abc.example.com"},
-			expectUpdate:   false,
-			expectedResult: reconcile.Result{},
+			name:               "already placed: no update, empty result",
+			clusterID:          "cluster-2",
+			cluster:            buildCluster("cluster-2", true),
+			selector:           workingSelector(),
+			expectUpdate:       false,
+			expectStatusUpdate: false,
+			expectedResult:     reconcile.Result{},
 		},
 		{
-			name:           "cluster not found: return empty result, no error",
-			clusterID:      "cluster-missing",
-			cluster:        nil, // → NotFoundError
-			selector:       &mockSelector{mcName: "mc-us-c1", baseDomain: "hc-us-central1-abc.example.com"},
-			expectUpdate:   false,
-			expectedResult: reconcile.Result{},
-			expectError:    false,
+			name:               "cluster not found: return empty result, no error",
+			clusterID:          "cluster-missing",
+			cluster:            nil, // → NotFoundError
+			selector:           workingSelector(),
+			expectUpdate:       false,
+			expectStatusUpdate: false,
+			expectedResult:     reconcile.Result{},
+			expectError:        false,
 		},
 		{
-			name:         "selector error: return error",
-			clusterID:    "cluster-4",
-			cluster:      buildCluster("cluster-4", false),
-			selector:     &mockSelector{err: fmt.Errorf("no candidates available")},
-			expectUpdate: false,
-			expectError:  true,
+			name:               "selector error: return error",
+			clusterID:          "cluster-4",
+			cluster:            buildCluster("cluster-4", false),
+			selector:           failingSelector("no candidates available"),
+			expectUpdate:       false,
+			expectStatusUpdate: false,
+			expectError:        true,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			storeClient := &mockStoreClient{cluster: tc.cluster}
+			storeClient := &mockStoreClient{cluster: tc.cluster, statusWriter: &mockStatusWriter{}}
 
 			reconciler := &Reconciler{
-				client:     storeClient,
-				selector:   tc.selector,
-				candidates: testCandidates(),
-				log:        testLogger(t),
+				client:   storeClient,
+				selector: tc.selector,
+				log:      testLogger(t),
 			}
 
 			req := reconcile.Request{
@@ -217,6 +226,7 @@ func TestReconciler(t *testing.T) {
 
 			require.Equal(t, tc.expectedResult, result)
 			require.Equal(t, tc.expectUpdate, storeClient.updateCalled, "Update called mismatch")
+			require.Equal(t, tc.expectStatusUpdate, storeClient.statusWriter.updateCalled, "Status().Update() called mismatch")
 		})
 	}
 }
@@ -249,47 +259,5 @@ func TestSetCondition(t *testing.T) {
 		meta.SetStatusCondition(&conds, metav1.Condition{Type: "Applied", Status: metav1.ConditionTrue, Reason: "Test"})
 		require.Len(t, conds, 1)
 		require.False(t, conds[0].LastTransitionTime.IsZero())
-	})
-}
-
-func TestRoundRobinSelector(t *testing.T) {
-	t.Run("selects candidates in round-robin order", func(t *testing.T) {
-		candidates := []Candidate{
-			{Name: "mc-a", BaseDomains: []string{"a.example.com"}},
-			{Name: "mc-b", BaseDomains: []string{"b.example.com"}},
-		}
-
-		sel := NewRoundRobinSelector()
-		ctx := context.Background()
-
-		mc1, domain1, err := sel.Select(ctx, candidates)
-		require.NoError(t, err)
-		require.Equal(t, "mc-a", mc1)
-		require.Equal(t, "a.example.com", domain1)
-
-		mc2, domain2, err := sel.Select(ctx, candidates)
-		require.NoError(t, err)
-		require.Equal(t, "mc-b", mc2)
-		require.Equal(t, "b.example.com", domain2)
-
-		// Wraps around.
-		mc3, _, err := sel.Select(ctx, candidates)
-		require.NoError(t, err)
-		require.Equal(t, "mc-a", mc3)
-	})
-
-	t.Run("returns error when no candidates", func(t *testing.T) {
-		sel := NewRoundRobinSelector()
-		_, _, err := sel.Select(context.Background(), nil)
-		require.Error(t, err)
-	})
-
-	t.Run("returns error when candidate has no base domains", func(t *testing.T) {
-		sel := NewRoundRobinSelector()
-		candidates := []Candidate{
-			{Name: "mc-empty", BaseDomains: []string{}},
-		}
-		_, _, err := sel.Select(context.Background(), candidates)
-		require.Error(t, err)
 	})
 }

@@ -4,9 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"strings"
+	"log/slog"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -14,6 +13,17 @@ import (
 	"cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
 	"google.golang.org/api/iterator"
 )
+
+// mcRegistrationLabelFilter is the Secret Manager list filter used to discover
+// mc-registration-* secrets created by gcp-hcp-infra
+// (terraform/modules/management-cluster/region-registration.tf).
+const mcRegistrationLabelFilter = "labels.mc-registration=true"
+
+// Selector abstracts MC + DNS domain selection so the Reconciler can be tested
+// without Secret Manager wiring.
+type Selector interface {
+	Select(ctx context.Context) (mcName, baseDomain string, err error)
+}
 
 // secretLookup abstracts Secret Manager operations so they can be replaced in
 // tests without a live GCP connection.
@@ -56,193 +66,137 @@ func (r *realSMClient) accessSecretVersion(ctx context.Context, name string) ([]
 	return result.Payload.Data, nil
 }
 
-// DynamicSelector discovers eligible management clusters and DNS zones at
-// selection time by cross-checking Secret Manager secrets against Maestro
-// consumers, mirroring the logic of the YAML placement controller's Job script.
+// mcRegistrationPayload is the JSON content of an mc-registration-* secret
+// version, written by terraform/modules/management-cluster/region-registration.tf.
+type mcRegistrationPayload struct {
+	ProjectID string `json:"projectId"`
+	Mode      string `json:"mode"` // "active" or "maintenance"
+}
+
+// defaultCacheTTL is the default duration eligible MC results are cached before
+// re-querying Secret Manager. MC registration changes are infrequent, so 30s
+// staleness is acceptable and avoids quota pressure under burst reconciliations.
+const defaultCacheTTL = 30 * time.Second
+
+// DynamicSelector discovers eligible management clusters at selection time by
+// reading mc-registration-* Secret Manager secrets, and round-robins across a
+// statically configured list of HC DNS zone domains.
 //
 // MC discovery:
-//  1. List SM secrets with label maestro-consumer-name:* → candidate MC names
-//  2. List Maestro consumers → registered MC names
-//  3. Eligible = intersection of the two sets
+//  1. List SM secrets labeled mc-registration=true
+//  2. Access each secret's latest version and parse the JSON payload
+//     ({"projectId": "...", "mode": "active|maintenance"})
+//  3. Eligible = secrets where mode == "active"
 //
-// DNS zone discovery:
-//  1. Find SM secret matching name:argocd-cluster with label infra-type:region
-//  2. Access latest version → parse meta_hc_dns_domains (comma-separated)
+// DNS domains are injected at construction time (Helm value → CLI flag),
+// since they are a region-level resource shared across all MCs, not
+// discoverable per-MC.
 //
-// Selection is round-robin across eligible MCs and domains.
+// Selection is round-robin across eligible MCs and configured domains.
+// Eligible MC results are cached for cacheTTL to reduce Secret Manager RPCs.
 type DynamicSelector struct {
-	smLookup   secretLookup
-	project    string
-	maestroURL string
-	httpClient *http.Client
+	smLookup secretLookup
+	project  string
+	domains  []string
 
 	mcCounter  atomic.Uint64
 	domCounter atomic.Uint64
+
+	cacheMu   sync.Mutex
+	cachedMCs []string
+	cachedAt  time.Time
+	cacheTTL  time.Duration
 }
+
+// Compile-time check: DynamicSelector implements Selector.
+var _ Selector = (*DynamicSelector)(nil)
 
 // NewDynamicSelector creates a DynamicSelector.
 // project is the GCP project ID for Secret Manager lookups.
-// maestroURL is the Maestro HTTP base URL (e.g. "http://maestro.hyperfleet.svc.cluster.local:8000").
-func NewDynamicSelector(smClient *secretmanager.Client, project, maestroURL string) *DynamicSelector {
-	return &DynamicSelector{
-		smLookup:   &realSMClient{c: smClient},
-		project:    project,
-		maestroURL: maestroURL,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+// domains is the list of HC DNS zone domains to round-robin across; it must
+// be non-empty.
+func NewDynamicSelector(smClient *secretmanager.Client, project string, domains []string) (*DynamicSelector, error) {
+	if len(domains) == 0 {
+		return nil, fmt.Errorf("hc dns domains: at least one domain is required")
 	}
+	return &DynamicSelector{
+		smLookup: &realSMClient{c: smClient},
+		project:  project,
+		domains:  domains,
+		cacheTTL: defaultCacheTTL,
+	}, nil
 }
 
-// Select discovers eligible MCs and DNS zones dynamically, then picks one of
-// each using a round-robin counter. The candidates parameter is ignored.
-func (s *DynamicSelector) Select(ctx context.Context, _ []Candidate) (mcName, baseDomain string, err error) {
+// Select discovers eligible MCs dynamically, then picks one MC and one
+// configured DNS domain using round-robin counters.
+func (s *DynamicSelector) Select(ctx context.Context) (mcName, baseDomain string, err error) {
 	eligible, err := s.eligibleMCs(ctx)
 	if err != nil {
 		return "", "", fmt.Errorf("discover eligible MCs: %w", err)
 	}
 	if len(eligible) == 0 {
-		return "", "", fmt.Errorf("no eligible management clusters found (check Secret Manager labels and Maestro consumers)")
+		return "", "", fmt.Errorf("no eligible management clusters found (check mc-registration secrets and mode=active)")
 	}
 
 	mc := eligible[s.mcCounter.Add(1)%uint64(len(eligible))]
-
-	domains, err := s.hcDNSDomains(ctx)
-	if err != nil {
-		return "", "", fmt.Errorf("discover DNS domains: %w", err)
-	}
-	if len(domains) == 0 {
-		return "", "", fmt.Errorf("no HC DNS domains found in Secret Manager for project %s", s.project)
-	}
-
-	domain := domains[s.domCounter.Add(1)%uint64(len(domains))]
+	domain := s.domains[s.domCounter.Add(1)%uint64(len(s.domains))]
 
 	return mc, domain, nil
 }
 
-// eligibleMCs returns MC names present in both Secret Manager and Maestro.
+// eligibleMCs returns the cached eligible MC list if still valid, otherwise
+// re-queries Secret Manager. Individual secret access/unmarshal errors are
+// logged and skipped — only a listSecrets failure or zero healthy secrets
+// after filtering produces an error.
 func (s *DynamicSelector) eligibleMCs(ctx context.Context) ([]string, error) {
-	smMCs, err := s.smMCNames(ctx)
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+
+	if len(s.cachedMCs) > 0 && time.Since(s.cachedAt) < s.cacheTTL {
+		return s.cachedMCs, nil
+	}
+
+	eligible, err := s.fetchEligibleMCs(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("secret manager MC lookup: %w", err)
+		return nil, err
 	}
 
-	maestroMCs, err := s.maestroConsumerNames(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("maestro consumer lookup: %w", err)
-	}
-
-	maestroSet := make(map[string]bool, len(maestroMCs))
-	for _, m := range maestroMCs {
-		maestroSet[m] = true
-	}
-
-	var eligible []string
-	for _, mc := range smMCs {
-		if maestroSet[mc] {
-			eligible = append(eligible, mc)
-		}
-	}
+	s.cachedMCs = eligible
+	s.cachedAt = time.Now()
 	return eligible, nil
 }
 
-// smMCNames lists secrets in the project with label maestro-consumer-name:* and
-// returns the label values (MC names).
-func (s *DynamicSelector) smMCNames(ctx context.Context) ([]string, error) {
+// fetchEligibleMCs lists mc-registration-* secrets, reads each secret's latest
+// version, and returns the projectId of every secret whose mode is "active".
+// Errors reading or parsing individual secrets are logged and skipped.
+func (s *DynamicSelector) fetchEligibleMCs(ctx context.Context) ([]string, error) {
 	secrets, err := s.smLookup.listSecrets(ctx,
 		fmt.Sprintf("projects/%s", s.project),
-		"labels.maestro-consumer-name:*",
+		mcRegistrationLabelFilter,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("list secrets: %w", err)
+		return nil, fmt.Errorf("list mc-registration secrets: %w", err)
 	}
 
-	var names []string
+	var eligible []string
 	for _, secret := range secrets {
-		if mc := secret.Labels["maestro-consumer-name"]; mc != "" {
-			names = append(names, mc)
+		data, err := s.smLookup.accessSecretVersion(ctx, secret.Name+"/versions/latest")
+		if err != nil {
+			slog.WarnContext(ctx, "skipping mc-registration secret: access failed",
+				"secret", secret.Name, "error", err)
+			continue
+		}
+
+		var payload mcRegistrationPayload
+		if err := json.Unmarshal(data, &payload); err != nil {
+			slog.WarnContext(ctx, "skipping mc-registration secret: invalid JSON",
+				"secret", secret.Name, "error", err)
+			continue
+		}
+
+		if payload.Mode == "active" && payload.ProjectID != "" {
+			eligible = append(eligible, payload.ProjectID)
 		}
 	}
-	return names, nil
-}
-
-// maestroConsumerNames queries the Maestro HTTP API for registered consumers.
-func (s *DynamicSelector) maestroConsumerNames(ctx context.Context) ([]string, error) {
-	url := strings.TrimRight(s.maestroURL, "/") + "/api/maestro/v1/consumers?size=100"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("build request: %w", err)
-	}
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := s.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("GET consumers: %w", err)
-	}
-	defer resp.Body.Close() //nolint:errcheck
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read consumers response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GET consumers returned %d: %s", resp.StatusCode, body)
-	}
-
-	var page struct {
-		Items []struct {
-			Name string `json:"name"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(body, &page); err != nil {
-		return nil, fmt.Errorf("unmarshal consumers: %w", err)
-	}
-
-	names := make([]string, 0, len(page.Items))
-	for _, c := range page.Items {
-		if c.Name != "" {
-			names = append(names, c.Name)
-		}
-	}
-	return names, nil
-}
-
-// hcDNSDomains reads the argocd-cluster region secret from Secret Manager and
-// returns the comma-separated domains from its meta_hc_dns_domains field.
-func (s *DynamicSelector) hcDNSDomains(ctx context.Context) ([]string, error) {
-	secrets, err := s.smLookup.listSecrets(ctx,
-		fmt.Sprintf("projects/%s", s.project),
-		`labels.infra-type:region name:argocd-cluster`,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("list argocd-cluster secrets: %w", err)
-	}
-
-	var secretName string
-	for _, secret := range secrets {
-		secretName = secret.Name
-		break
-	}
-
-	if secretName == "" {
-		return nil, fmt.Errorf("no secret matching name:argocd-cluster with labels.infra-type=region found in project %s", s.project)
-	}
-
-	data, err := s.smLookup.accessSecretVersion(ctx, secretName+"/versions/latest")
-	if err != nil {
-		return nil, fmt.Errorf("access secret %s: %w", secretName, err)
-	}
-
-	var payload struct {
-		MetaHCDNSDomains string `json:"meta_hc_dns_domains"`
-	}
-	if err := json.Unmarshal(data, &payload); err != nil {
-		return nil, fmt.Errorf("unmarshal secret payload: %w", err)
-	}
-
-	var domains []string
-	for _, d := range strings.Split(payload.MetaHCDNSDomains, ",") {
-		if d = strings.TrimSpace(d); d != "" {
-			domains = append(domains, d)
-		}
-	}
-	return domains, nil
+	return eligible, nil
 }

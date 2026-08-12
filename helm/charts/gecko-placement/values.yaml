@@ -14,17 +14,13 @@ logLevel: info
 logFormat: json
 workers: 10
 
-maestro:
-  httpAddr: "http://maestro.hyperfleet.svc.cluster.local:8000"
-
-# Static list of management cluster names. Ignored when secretManagerProject is set.
-candidates: []
-# Base domains paired with candidates (one per MC).
-baseDomains: []
-# GCP project for Secret Manager MC/DNS discovery. Enables dynamic selector.
+# GCP project for Secret Manager mc-registration discovery (required).
 # Can also be set at runtime via the SECRETMANAGER_PROJECT env var, but must
-# be non-empty here (or candidates must be set) to pass Helm validation.
+# be non-empty here to pass Helm validation.
 secretManagerProject: ""
+# Comma-separated list of HC DNS zone domains to round-robin across
+# (required). Injected by ArgoCD from Terraform via {{ .Values.hc_dns_domains }}.
+hcDnsDomains: ""
 
 serviceAccount:
   create: true

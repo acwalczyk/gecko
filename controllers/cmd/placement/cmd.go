@@ -3,6 +3,7 @@ package placement
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	secretmanager "cloud.google.com/go/secretmanager/apiv1"
 	"github.com/spf13/cobra"
@@ -21,10 +22,21 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
+// parseDomains splits a comma-separated domain list, trimming whitespace and
+// dropping empty entries.
+func parseDomains(csv string) []string {
+	var domains []string
+	for _, d := range strings.Split(csv, ",") {
+		if d = strings.TrimSpace(d); d != "" {
+			domains = append(domains, d)
+		}
+	}
+	return domains
+}
+
 // NewCommand returns the placement subcommand.
 func NewCommand(rf *setup.RootFlags) *cobra.Command {
-	var candidateNames, baseDomains []string
-	var smProject, maestroHTTPAddr string
+	var smProject, hcDNSDomains string
 
 	cmd := &cobra.Command{
 		Use:   "placement",
@@ -33,8 +45,8 @@ func NewCommand(rf *setup.RootFlags) *cobra.Command {
 			if v := envOr("SECRETMANAGER_PROJECT", ""); v != "" && !cmd.Flags().Changed("secretmanager-project") {
 				smProject = v
 			}
-			if v := envOr("MAESTRO_HTTP_ADDR", ""); v != "" && !cmd.Flags().Changed("maestro-http-addr") {
-				maestroHTTPAddr = v
+			if smProject == "" {
+				return fmt.Errorf("--secretmanager-project is required (or $SECRETMANAGER_PROJECT)")
 			}
 
 			ctx := cmd.Context()
@@ -44,26 +56,15 @@ func NewCommand(rf *setup.RootFlags) *cobra.Command {
 				return fmt.Errorf("create logger: %w", err)
 			}
 
-			var selector placement.Selector
-			var candidates []placement.Candidate
+			smClient, err := secretmanager.NewClient(ctx)
+			if err != nil {
+				return fmt.Errorf("create secret manager client: %w", err)
+			}
+			defer smClient.Close() //nolint:errcheck
 
-			if smProject != "" {
-				smClient, err := secretmanager.NewClient(ctx)
-				if err != nil {
-					return fmt.Errorf("create secret manager client: %w", err)
-				}
-				defer smClient.Close() //nolint:errcheck
-				selector = placement.NewDynamicSelector(smClient, smProject, maestroHTTPAddr)
-			} else {
-				candidates = make([]placement.Candidate, 0, len(candidateNames))
-				for i, name := range candidateNames {
-					c := placement.Candidate{Name: name}
-					if i < len(baseDomains) {
-						c.BaseDomains = []string{baseDomains[i]}
-					}
-					candidates = append(candidates, c)
-				}
-				selector = placement.NewRoundRobinSelector()
+			selector, err := placement.NewDynamicSelector(smClient, smProject, parseDomains(hcDNSDomains))
+			if err != nil {
+				return fmt.Errorf("create selector: %w", err)
 			}
 
 			scheme := setup.NewScheme()
@@ -72,7 +73,7 @@ func NewCommand(rf *setup.RootFlags) *cobra.Command {
 				return fmt.Errorf("create manager: %w", err)
 			}
 
-			rec := placement.NewReconciler(selector, candidates, log, mgr.GetClient())
+			rec := placement.NewReconciler(selector, log, mgr.GetClient())
 
 			if err := ctrl.NewControllerManagedBy(mgr).
 				For(&privatev1.Cluster{}).
@@ -85,10 +86,8 @@ func NewCommand(rf *setup.RootFlags) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringSliceVar(&candidateNames, "candidates", nil, "MC names (comma-separated); ignored when --secretmanager-project is set")
-	cmd.Flags().StringSliceVar(&baseDomains, "base-domains", nil, "Base domains per MC, paired with --candidates")
-	cmd.Flags().StringVar(&smProject, "secretmanager-project", "", "GCP project for Secret Manager MC/DNS discovery [$SECRETMANAGER_PROJECT]; enables dynamic selector")
-	cmd.Flags().StringVar(&maestroHTTPAddr, "maestro-http-addr", "http://maestro.hyperfleet.svc.cluster.local:8000", "Maestro HTTP API URL for consumer discovery [$MAESTRO_HTTP_ADDR]")
+	cmd.Flags().StringVar(&smProject, "secretmanager-project", "", "GCP project for Secret Manager mc-registration discovery [$SECRETMANAGER_PROJECT] (required)")
+	cmd.Flags().StringVar(&hcDNSDomains, "hc-dns-domains", "", "Comma-separated list of HC DNS zone domains to round-robin across")
 
 	return cmd
 }

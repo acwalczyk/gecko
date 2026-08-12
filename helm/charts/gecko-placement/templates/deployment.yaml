@@ -45,17 +45,8 @@ spec:
             - --log-level={{ .Values.logLevel }}
             - --log-format={{ .Values.logFormat }}
             - --workers={{ .Values.workers }}
-            - --maestro-http-addr={{ .Values.maestro.httpAddr }}
-            {{- if .Values.secretManagerProject }}
             - --secretmanager-project={{ .Values.secretManagerProject }}
-            {{- else }}
-            {{- if .Values.candidates }}
-            - --candidates={{ join "," .Values.candidates }}
-            {{- if .Values.baseDomains }}
-            - --base-domains={{ join "," .Values.baseDomains }}
-            {{- end }}
-            {{- end }}
-            {{- end }}
+            - --hc-dns-domains={{ .Values.hcDnsDomains }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       {{- with .Values.nodeSelector }}
