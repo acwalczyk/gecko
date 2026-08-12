@@ -17,6 +17,7 @@ import (
 
 	"github.com/openshift-online/gecko/controllers/client/transport"
 	"github.com/openshift-online/gecko/controllers/nodepool/manifest"
+	"github.com/openshift-online/gecko/controllers/util/constants"
 	"github.com/openshift-online/gecko/controllers/util/logger"
 )
 
@@ -153,7 +154,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		replicas = *np.Spec.NodeCount
 	}
 
-	mw, err := manifest.Build(manifest.Input{
+	manifests, err := manifest.Build(manifest.Input{
 		NodePoolID:         nodepoolID,
 		NodePoolName:       np.Name,
 		NodePoolGeneration: np.Generation,
@@ -169,14 +170,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		ReleaseImage:       np.Status.VersionResolution.ReleaseImage,
 	})
 	if err != nil {
-		return reconcile.Result{}, fmt.Errorf("nodepool reconciler: build manifest work: %w", err)
+		return reconcile.Result{}, fmt.Errorf("nodepool reconciler: build manifests: %w", err)
 	}
 
 	managementCluster := cluster.Status.PlacementResult.ManagementClusterName
 
-	mwStatus, err := r.transport.Apply(ctx, managementCluster, mw)
+	mwStatus, err := r.transport.Apply(ctx, managementCluster, clusterID, manifests)
 	if err != nil {
-		return reconcile.Result{}, fmt.Errorf("nodepool reconciler: apply manifest work: %w", err)
+		return reconcile.Result{}, fmt.Errorf("nodepool reconciler: apply resources: %w", err)
 	}
 
 	// Write nodepool status conditions — only update if something changed.
@@ -218,9 +219,9 @@ func setWaitingNPConditions(np *privatev1.NodePool, reason, message string) bool
 	return a || b
 }
 
-// applyStatusConditions derives conditions from the ManifestWork status and writes them to the nodepool.
+// applyStatusConditions derives conditions from the resource status and writes them to the nodepool.
 // Returns true if any condition changed.
-func (r *Reconciler) applyStatusConditions(np *privatev1.NodePool, mwStatus *transport.ManifestWorkStatus) bool {
+func (r *Reconciler) applyStatusConditions(np *privatev1.NodePool, mwStatus *transport.Status) bool {
 	gen := np.Generation
 
 	if mwStatus == nil {
@@ -250,11 +251,12 @@ func (r *Reconciler) applyStatusConditions(np *privatev1.NodePool, mwStatus *tra
 		}
 	}
 
-	// Extract resource status from manifest index 0 (the NodePool).
+	// Extract resource status by NodePool resource identity key.
+	npKey := transport.ResourceKey(constants.HyperShiftGroup, constants.HyperShiftVersion, "nodepools",
+		fmt.Sprintf("clusters-%s", np.Spec.ClusterID), np.Name)
 	availableStatus := "False"
 	allNodesHealthy := "False"
-	if len(mwStatus.ResourceStatuses) > 0 {
-		rs := mwStatus.ResourceStatuses[0]
+	if rs, ok := mwStatus.ResourceStatuses[npKey]; ok {
 		if v, ok := rs["readyCondition"]; ok {
 			availableStatus = v
 		}

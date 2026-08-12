@@ -5,10 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	workv1 "open-cluster-management.io/api/work/v1"
 )
 
 // Input holds all parameters needed to build the HC ManifestWork.
@@ -45,9 +41,9 @@ type Input struct {
 	Slug                         string // default: "user" (username slug for DNS names)
 }
 
-// Build constructs a *workv1.ManifestWork from the given input.
+// Build constructs raw JSON bytes for each manifest resource from the given input.
 // Returns an error if required fields are missing.
-func Build(input Input) (*workv1.ManifestWork, error) {
+func Build(input Input) ([][]byte, error) {
 	if err := validate(input); err != nil {
 		return nil, err
 	}
@@ -69,7 +65,6 @@ func Build(input Input) (*workv1.ManifestWork, error) {
 		input.Slug = "user"
 	}
 
-	genStr := strconv.FormatInt(input.Generation, 10)
 	clusterNS := fmt.Sprintf("clusters-%s", input.ClusterID)
 	hcNS := fmt.Sprintf("clusters-%s-%s", input.ClusterID, input.ClusterName)
 
@@ -78,34 +73,7 @@ func Build(input Input) (*workv1.ManifestWork, error) {
 		return nil, fmt.Errorf("hc manifest: build manifests: %w", err)
 	}
 
-	mw := &workv1.ManifestWork{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "work.open-cluster-management.io/v1",
-			Kind:       "ManifestWork",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name: fmt.Sprintf("%s-hc-controller", input.ClusterID),
-			Labels: map[string]string{
-				"hyperfleet.io/cluster-id": input.ClusterID,
-				"hyperfleet.io/controller": "hc-controller",
-				"hyperfleet.io/component":  "hosted-cluster",
-			},
-			Annotations: map[string]string{
-				"hyperfleet.io/generation": genStr,
-			},
-		},
-		Spec: workv1.ManifestWorkSpec{
-			Workload: workv1.ManifestsTemplate{
-				Manifests: manifests,
-			},
-			DeleteOption: &workv1.DeleteOption{
-				PropagationPolicy: workv1.DeletePropagationPolicyTypeForeground,
-			},
-			ManifestConfigs: buildManifestConfigs(input.ClusterID, input.ClusterName, clusterNS, hcNS, input.Generation),
-		},
-	}
-
-	return mw, nil
+	return manifests, nil
 }
 
 func validate(input Input) error {
@@ -128,7 +96,7 @@ func validate(input Input) error {
 	return nil
 }
 
-func buildManifests(input Input, clusterNS, hcNS string) ([]workv1.Manifest, error) {
+func buildManifests(input Input, clusterNS, hcNS string) ([][]byte, error) {
 	ns, err := buildNamespace(input, clusterNS)
 	if err != nil {
 		return nil, err
@@ -150,18 +118,10 @@ func buildManifests(input Input, clusterNS, hcNS string) ([]workv1.Manifest, err
 		return nil, err
 	}
 
-	return []workv1.Manifest{ns, es, cert, hc, job}, nil
+	return [][]byte{ns, es, cert, hc, job}, nil
 }
 
-func toManifest(obj map[string]any) (workv1.Manifest, error) {
-	raw, err := json.Marshal(obj)
-	if err != nil {
-		return workv1.Manifest{}, fmt.Errorf("hc manifest: marshal resource: %w", err)
-	}
-	return workv1.Manifest{RawExtension: runtime.RawExtension{Raw: raw}}, nil
-}
-
-func buildNamespace(input Input, clusterNS string) (workv1.Manifest, error) {
+func buildNamespace(input Input, clusterNS string) ([]byte, error) {
 	genStr := strconv.FormatInt(input.Generation, 10)
 	obj := map[string]any{
 		"apiVersion": "v1",
@@ -179,10 +139,14 @@ func buildNamespace(input Input, clusterNS string) (workv1.Manifest, error) {
 			},
 		},
 	}
-	return toManifest(obj)
+	raw, err := json.Marshal(obj)
+	if err != nil {
+		return nil, fmt.Errorf("hc manifest: marshal namespace: %w", err)
+	}
+	return raw, nil
 }
 
-func buildExternalSecret(input Input, clusterNS string) (workv1.Manifest, error) {
+func buildExternalSecret(input Input, clusterNS string) ([]byte, error) {
 	genStr := strconv.FormatInt(input.Generation, 10)
 	obj := map[string]any{
 		"apiVersion": "external-secrets.io/v1",
@@ -217,10 +181,14 @@ func buildExternalSecret(input Input, clusterNS string) (workv1.Manifest, error)
 			},
 		},
 	}
-	return toManifest(obj)
+	raw, err := json.Marshal(obj)
+	if err != nil {
+		return nil, fmt.Errorf("hc manifest: marshal external secret: %w", err)
+	}
+	return raw, nil
 }
 
-func buildCertificate(input Input, clusterNS string) (workv1.Manifest, error) {
+func buildCertificate(input Input, clusterNS string) ([]byte, error) {
 	genStr := strconv.FormatInt(input.Generation, 10)
 	dnsName := fmt.Sprintf("*.%s-%s.%s", input.ClusterName, input.Slug, input.BaseDomain)
 	obj := map[string]any{
@@ -260,10 +228,14 @@ func buildCertificate(input Input, clusterNS string) (workv1.Manifest, error) {
 			},
 		},
 	}
-	return toManifest(obj)
+	raw, err := json.Marshal(obj)
+	if err != nil {
+		return nil, fmt.Errorf("hc manifest: marshal certificate: %w", err)
+	}
+	return raw, nil
 }
 
-func buildHostedCluster(input Input, clusterNS string) (workv1.Manifest, error) {
+func buildHostedCluster(input Input, clusterNS string) ([]byte, error) {
 	genStr := strconv.FormatInt(input.Generation, 10)
 	apiHostname := fmt.Sprintf("api.%s-%s.%s", input.ClusterName, input.Slug, input.BaseDomain)
 	oauthHostname := fmt.Sprintf("oauth.%s-%s.%s", input.ClusterName, input.Slug, input.BaseDomain)
@@ -425,10 +397,14 @@ func buildHostedCluster(input Input, clusterNS string) (workv1.Manifest, error) 
 			},
 		},
 	}
-	return toManifest(obj)
+	raw, err := json.Marshal(obj)
+	if err != nil {
+		return nil, fmt.Errorf("hc manifest: marshal hosted cluster: %w", err)
+	}
+	return raw, nil
 }
 
-func buildRBACJob(input Input, hcNS string) (workv1.Manifest, error) {
+func buildRBACJob(input Input, hcNS string) ([]byte, error) {
 	genStr := strconv.FormatInt(input.Generation, 10)
 	jobName := fmt.Sprintf("rbac-setup-gen-%d", input.Generation)
 	ttl := int64(300)
@@ -537,67 +513,9 @@ kubectl --kubeconfig=/kubeconfig/kubeconfig get clusterrolebinding redhat-domain
 			},
 		},
 	}
-	return toManifest(obj)
-}
-
-func buildManifestConfigs(clusterID, clusterName, clusterNS, hcNS string, generation int64) []workv1.ManifestConfigOption {
-	ssaStrategy := &workv1.UpdateStrategy{
-		Type: workv1.UpdateStrategyTypeServerSideApply,
+	raw, err := json.Marshal(obj)
+	if err != nil {
+		return nil, fmt.Errorf("hc manifest: marshal rbac job: %w", err)
 	}
-
-	createOnlyStrategy := &workv1.UpdateStrategy{
-		Type: workv1.UpdateStrategyTypeCreateOnly,
-	}
-
-	return []workv1.ManifestConfigOption{
-		// Namespace: ServerSideApply + phase feedback
-		{
-			ResourceIdentifier: workv1.ResourceIdentifier{
-				Group:     "",
-				Resource:  "namespaces",
-				Name:      clusterNS,
-				Namespace: "",
-			},
-			UpdateStrategy: ssaStrategy,
-			FeedbackRules: []workv1.FeedbackRule{
-				{
-					Type: workv1.JSONPathsType,
-					JsonPaths: []workv1.JsonPath{
-						{Name: "phase", Path: ".status.phase"},
-					},
-				},
-			},
-		},
-		// Job: CreateOnly (immutable fields)
-		{
-			ResourceIdentifier: workv1.ResourceIdentifier{
-				Group:     "batch",
-				Resource:  "jobs",
-				Name:      fmt.Sprintf("rbac-setup-gen-%d", generation),
-				Namespace: hcNS,
-			},
-			UpdateStrategy: createOnlyStrategy,
-		},
-		// HostedCluster: ServerSideApply + status feedback
-		{
-			ResourceIdentifier: workv1.ResourceIdentifier{
-				Group:     "hypershift.openshift.io",
-				Resource:  "hostedclusters",
-				Name:      clusterName,
-				Namespace: clusterNS,
-			},
-			UpdateStrategy: ssaStrategy,
-			FeedbackRules: []workv1.FeedbackRule{
-				{
-					Type: workv1.JSONPathsType,
-					JsonPaths: []workv1.JsonPath{
-						{Name: "availableCondition", Path: ".status.conditions[?(@.type==\"Available\")].status"},
-						{Name: "degradedCondition", Path: ".status.conditions[?(@.type==\"Degraded\")].status"},
-						{Name: "controlPlaneEndpoint", Path: ".status.controlPlaneEndpoint.host"},
-						{Name: "version", Path: ".status.version.desired.image"},
-					},
-				},
-			},
-		},
-	}
+	return raw, nil
 }

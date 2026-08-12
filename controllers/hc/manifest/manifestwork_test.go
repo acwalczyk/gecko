@@ -44,29 +44,29 @@ func testInput() manifest.Input {
 	}
 }
 
-func TestBuild_CorrectName(t *testing.T) {
+func TestBuild_ReturnsManifests(t *testing.T) {
 	input := testInput()
-	mw, err := manifest.Build(input)
+	manifests, err := manifest.Build(input)
 	require.NoError(t, err)
-	require.Equal(t, "cluster-abc-hc-controller", mw.Name)
+	require.NotNil(t, manifests)
 }
 
 func TestBuild_FiveManifests(t *testing.T) {
 	input := testInput()
-	mw, err := manifest.Build(input)
+	manifests, err := manifest.Build(input)
 	require.NoError(t, err)
-	require.Len(t, mw.Spec.Workload.Manifests, 5, "expected 5 manifests: Namespace, ExternalSecret, Certificate, HostedCluster, Job")
+	require.Len(t, manifests, 5, "expected 5 manifests: Namespace, ExternalSecret, Certificate, HostedCluster, Job")
 }
 
 func TestBuild_ManifestKinds(t *testing.T) {
 	input := testInput()
-	mw, err := manifest.Build(input)
+	manifests, err := manifest.Build(input)
 	require.NoError(t, err)
 
 	expectedKinds := []string{"Namespace", "ExternalSecret", "Certificate", "HostedCluster", "Job"}
-	for i, m := range mw.Spec.Workload.Manifests {
+	for i, m := range manifests {
 		var obj map[string]any
-		require.NoError(t, json.Unmarshal(m.Raw, &obj))
+		require.NoError(t, json.Unmarshal(m, &obj))
 		kind, ok := obj["kind"].(string)
 		require.True(t, ok, "manifest[%d] missing kind", i)
 		require.Equal(t, expectedKinds[i], kind, "manifest[%d] wrong kind", i)
@@ -75,12 +75,12 @@ func TestBuild_ManifestKinds(t *testing.T) {
 
 func TestBuild_HostedClusterReleaseImage(t *testing.T) {
 	input := testInput()
-	mw, err := manifest.Build(input)
+	manifests, err := manifest.Build(input)
 	require.NoError(t, err)
 
 	// HostedCluster is at index 3.
 	var obj map[string]any
-	require.NoError(t, json.Unmarshal(mw.Spec.Workload.Manifests[3].Raw, &obj))
+	require.NoError(t, json.Unmarshal(manifests[3], &obj))
 
 	spec, ok := obj["spec"].(map[string]any)
 	require.True(t, ok, "HostedCluster missing spec")
@@ -91,11 +91,11 @@ func TestBuild_HostedClusterReleaseImage(t *testing.T) {
 
 func TestBuild_JobName(t *testing.T) {
 	input := testInput()
-	mw, err := manifest.Build(input)
+	manifests, err := manifest.Build(input)
 	require.NoError(t, err)
 
 	var obj map[string]any
-	require.NoError(t, json.Unmarshal(mw.Spec.Workload.Manifests[4].Raw, &obj))
+	require.NoError(t, json.Unmarshal(manifests[4], &obj))
 
 	meta, ok := obj["metadata"].(map[string]any)
 	require.True(t, ok, "Job missing metadata")
@@ -103,56 +103,15 @@ func TestBuild_JobName(t *testing.T) {
 	require.Equal(t, expectedJobName, meta["name"])
 }
 
-func TestBuild_ManifestConfigs(t *testing.T) {
-	input := testInput()
-	mw, err := manifest.Build(input)
-	require.NoError(t, err)
-
-	configs := mw.Spec.ManifestConfigs
-	require.NotEmpty(t, configs)
-
-	nsFound, hcFound, jobFound := false, false, false
-	for _, cfg := range configs {
-		switch cfg.ResourceIdentifier.Resource {
-		case "namespaces":
-			nsFound = true
-			require.NotNil(t, cfg.UpdateStrategy)
-			require.Equal(t, "ServerSideApply", string(cfg.UpdateStrategy.Type))
-			require.NotEmpty(t, cfg.FeedbackRules)
-		case "hostedclusters":
-			hcFound = true
-			require.NotNil(t, cfg.UpdateStrategy)
-			require.Equal(t, "ServerSideApply", string(cfg.UpdateStrategy.Type))
-			require.NotEmpty(t, cfg.FeedbackRules)
-		case "jobs":
-			jobFound = true
-			require.NotNil(t, cfg.UpdateStrategy)
-			require.Equal(t, "CreateOnly", string(cfg.UpdateStrategy.Type))
-		}
-	}
-	require.True(t, nsFound, "Namespace manifestConfig not found")
-	require.True(t, hcFound, "HostedCluster manifestConfig not found")
-	require.True(t, jobFound, "Job manifestConfig not found")
-}
-
-func TestBuild_DeleteOption(t *testing.T) {
-	input := testInput()
-	mw, err := manifest.Build(input)
-	require.NoError(t, err)
-
-	require.NotNil(t, mw.Spec.DeleteOption)
-	require.Equal(t, "Foreground", string(mw.Spec.DeleteOption.PropagationPolicy))
-}
-
 func TestBuild_CPOAnnotation(t *testing.T) {
 	input := testInput()
 	input.CPOImage = "quay.io/openshift/hypershift:latest"
 
-	mw, err := manifest.Build(input)
+	manifests, err := manifest.Build(input)
 	require.NoError(t, err)
 
 	var obj map[string]any
-	require.NoError(t, json.Unmarshal(mw.Spec.Workload.Manifests[3].Raw, &obj))
+	require.NoError(t, json.Unmarshal(manifests[3], &obj))
 
 	meta := obj["metadata"].(map[string]any)
 	annotations := meta["annotations"].(map[string]any)
@@ -163,11 +122,11 @@ func TestBuild_NoCPOAnnotationWhenEmpty(t *testing.T) {
 	input := testInput()
 	input.CPOImage = "" // empty — should not be set
 
-	mw, err := manifest.Build(input)
+	manifests, err := manifest.Build(input)
 	require.NoError(t, err)
 
 	var obj map[string]any
-	require.NoError(t, json.Unmarshal(mw.Spec.Workload.Manifests[3].Raw, &obj))
+	require.NoError(t, json.Unmarshal(manifests[3], &obj))
 
 	meta := obj["metadata"].(map[string]any)
 	annotations := meta["annotations"].(map[string]any)
@@ -179,11 +138,11 @@ func TestBuild_DefaultEndpointAccess(t *testing.T) {
 	input := testInput()
 	input.GCPEndpointAccess = "" // should default to "Private"
 
-	mw, err := manifest.Build(input)
+	manifests, err := manifest.Build(input)
 	require.NoError(t, err)
 
 	var obj map[string]any
-	require.NoError(t, json.Unmarshal(mw.Spec.Workload.Manifests[3].Raw, &obj))
+	require.NoError(t, json.Unmarshal(manifests[3], &obj))
 
 	spec := obj["spec"].(map[string]any)
 	platform := spec["platform"].(map[string]any)
@@ -203,22 +162,4 @@ func TestBuild_GenerationValidation(t *testing.T) {
 	input.Generation = 0
 	_, err := manifest.Build(input)
 	require.Error(t, err)
-}
-
-func TestBuild_Labels(t *testing.T) {
-	input := testInput()
-	mw, err := manifest.Build(input)
-	require.NoError(t, err)
-
-	require.Equal(t, input.ClusterID, mw.Labels["hyperfleet.io/cluster-id"])
-	require.Equal(t, "hc-controller", mw.Labels["hyperfleet.io/controller"])
-	require.Equal(t, "hosted-cluster", mw.Labels["hyperfleet.io/component"])
-}
-
-func TestBuild_GenerationAnnotation(t *testing.T) {
-	input := testInput()
-	mw, err := manifest.Build(input)
-	require.NoError(t, err)
-
-	require.Equal(t, "3", mw.Annotations["hyperfleet.io/generation"])
 }

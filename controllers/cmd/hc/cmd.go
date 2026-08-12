@@ -8,24 +8,13 @@ import (
 
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 
-	maestroclient "github.com/openshift-online/gecko/controllers/client/maestro"
-	maestrotransport "github.com/openshift-online/gecko/controllers/client/transport/maestro"
+	fstransport "github.com/openshift-online/gecko/controllers/client/transport/firestore"
 	hc "github.com/openshift-online/gecko/controllers/hc"
 	"github.com/openshift-online/gecko/controllers/util/setup"
 )
 
-// maestroFlags holds Maestro-related flags.
-type maestroFlags struct {
-	grpcAddr string
-	httpAddr string
-	sourceID string
-	insecure bool
-}
-
 // NewCommand returns the hc subcommand.
 func NewCommand(rf *setup.RootFlags) *cobra.Command {
-	mf := &maestroFlags{}
-
 	cmd := &cobra.Command{
 		Use:   "hc",
 		Short: "Run the hosted-cluster (hc) controller",
@@ -37,18 +26,7 @@ func NewCommand(rf *setup.RootFlags) *cobra.Command {
 				return fmt.Errorf("create logger: %w", err)
 			}
 
-			mwc, err := maestroclient.NewMaestroClient(ctx, &maestroclient.Config{
-				MaestroServerAddr: mf.httpAddr,
-				GRPCServerAddr:    mf.grpcAddr,
-				SourceID:          mf.sourceID,
-				Insecure:          mf.insecure,
-			}, log)
-			if err != nil {
-				return fmt.Errorf("create maestro client: %w", err)
-			}
-			defer mwc.Close() //nolint:errcheck
-
-			transport := maestrotransport.New(mwc, mf.sourceID, log)
+			t := fstransport.New(log)
 
 			scheme := setup.NewScheme()
 			mgr, err := rf.NewManager(scheme, log)
@@ -56,7 +34,7 @@ func NewCommand(rf *setup.RootFlags) *cobra.Command {
 				return fmt.Errorf("create manager: %w", err)
 			}
 
-			rec := hc.New(transport, log, mgr.GetClient())
+			rec := hc.New(t, log, mgr.GetClient())
 
 			if err := ctrl.NewControllerManagedBy(mgr).
 				For(&privatev1.Cluster{}).
@@ -68,11 +46,6 @@ func NewCommand(rf *setup.RootFlags) *cobra.Command {
 			return mgr.Start(ctx)
 		},
 	}
-
-	cmd.Flags().StringVar(&mf.grpcAddr, "maestro-grpc-addr", "maestro-grpc.hyperfleet.svc.cluster.local:8090", "Maestro gRPC server address")
-	cmd.Flags().StringVar(&mf.httpAddr, "maestro-http-addr", "http://maestro.hyperfleet.svc.cluster.local:8000", "Maestro HTTP API server address")
-	cmd.Flags().StringVar(&mf.sourceID, "maestro-source-id", "hc-controller", "Maestro source ID")
-	cmd.Flags().BoolVar(&mf.insecure, "maestro-insecure", true, "Disable TLS verification for Maestro connections")
 
 	return cmd
 }

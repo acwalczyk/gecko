@@ -12,7 +12,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	workv1 "open-cluster-management.io/api/work/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -118,13 +117,13 @@ func (m *mockStoreClient) IsObjectNamespaced(_ runtime.Object) (bool, error) { r
 // errTransport is a transport.Client that returns configurable errors.
 type errTransport struct {
 	applyErr    error
-	applyResult *transport.ManifestWorkStatus
+	applyResult *transport.Status
 }
 
-func (e *errTransport) Apply(_ context.Context, _ string, _ *workv1.ManifestWork) (*transport.ManifestWorkStatus, error) {
+func (e *errTransport) Apply(_ context.Context, _, _ string, _ [][]byte) (*transport.Status, error) {
 	return e.applyResult, e.applyErr
 }
-func (e *errTransport) GetStatus(_ context.Context, _, _ string) (*transport.ManifestWorkStatus, error) {
+func (e *errTransport) GetStatus(_ context.Context, _, _ string) (*transport.Status, error) {
 	return nil, nil
 }
 func (e *errTransport) Delete(_ context.Context, _, _ string) error { return nil }
@@ -396,7 +395,7 @@ func TestReconcile_ManifestBuildError(t *testing.T) {
 
 	_, err := r.Reconcile(context.Background(), clusterReq(clusterID))
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "build manifest work")
+	require.Contains(t, err.Error(), "build manifests")
 	require.Empty(t, tr.ApplyCalls)
 }
 
@@ -410,7 +409,7 @@ func TestReconcile_TransportApplyError(t *testing.T) {
 
 	_, err := r.Reconcile(context.Background(), clusterReq(clusterID))
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "apply manifest work")
+	require.Contains(t, err.Error(), "apply resources")
 }
 
 // TestReconcile_MWStatusNil_RequeuesPending verifies that when Apply returns nil status
@@ -438,19 +437,18 @@ func TestReconcile_MWStatusNil_RequeuesPending(t *testing.T) {
 // and the ManifestWork has been applied successfully.
 func TestReconcile_HappyPath(t *testing.T) {
 	clusterID := "cluster-abc"
-	mwName := clusterID + "-hc-controller"
 	mcName := "mc-cluster-1"
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 
 	tr := mock.New()
-	tr.StatusOverrides[mcName+"/"+mwName] = &transport.ManifestWorkStatus{
+	hcKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/hostedclusters/clusters-%s/%s", clusterID, clusterID)
+	tr.StatusOverrides[mcName+"/"+clusterID] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully", LastTransitionTime: metav1.Now()},
 		},
-		ResourceStatuses: []map[string]string{
-			{}, {}, {}, // indices 0-2
-			{"availableCondition": "True", "degradedCondition": "False"}, // index 3 = HC
+		ResourceStatuses: map[string]map[string]string{
+			hcKey: {"availableCondition": "True", "degradedCondition": "False"},
 		},
 	}
 
@@ -461,7 +459,7 @@ func TestReconcile_HappyPath(t *testing.T) {
 	require.Equal(t, 5*time.Minute, result.RequeueAfter)
 	require.Len(t, tr.ApplyCalls, 1)
 	require.Equal(t, mcName, tr.ApplyCalls[0].TargetCluster)
-	require.Equal(t, mwName, tr.ApplyCalls[0].Work.Name)
+	require.Equal(t, clusterID, tr.ApplyCalls[0].ClusterID)
 	require.True(t, storeClient.statusWriter.called, "expected Status().Update to be called")
 }
 
@@ -469,19 +467,18 @@ func TestReconcile_HappyPath(t *testing.T) {
 // version fields from HC status feedback are written to cluster.Status.HostedClusterResult.
 func TestReconcile_HCFeedback_SetsHostedClusterResult(t *testing.T) {
 	clusterID := "cluster-abc"
-	mwName := clusterID + "-hc-controller"
 	mcName := "mc-cluster-1"
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 
 	tr := mock.New()
-	tr.StatusOverrides[mcName+"/"+mwName] = &transport.ManifestWorkStatus{
+	hcKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/hostedclusters/clusters-%s/%s", clusterID, clusterID)
+	tr.StatusOverrides[mcName+"/"+clusterID] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully", LastTransitionTime: metav1.Now()},
 		},
-		ResourceStatuses: []map[string]string{
-			{}, {}, {},
-			{
+		ResourceStatuses: map[string]map[string]string{
+			hcKey: {
 				"availableCondition":   "True",
 				"controlPlaneEndpoint": "api.my-cluster-user.example.com",
 				"version":              "4.15.0",
@@ -507,13 +504,12 @@ func TestReconcile_HCFeedback_SetsHostedClusterResult(t *testing.T) {
 // This also exercises the mwCondition default return path.
 func TestReconcile_MWNoAppliedCondition_RequeuesPending(t *testing.T) {
 	clusterID := "cluster-abc"
-	mwName := clusterID + "-hc-controller"
 	mcName := "mc-cluster-1"
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 
 	tr := mock.New()
-	tr.StatusOverrides[mcName+"/"+mwName] = &transport.ManifestWorkStatus{} // no conditions at all
+	tr.StatusOverrides[mcName+"/"+clusterID] = &transport.Status{} // no conditions at all
 
 	r, _ := buildReconciler(t, cluster, nil, tr, nil)
 
@@ -526,13 +522,12 @@ func TestReconcile_MWNoAppliedCondition_RequeuesPending(t *testing.T) {
 // explicitly False, the reconciler requeues with the pending interval.
 func TestReconcile_MWNotApplied_RequeuesPending(t *testing.T) {
 	clusterID := "cluster-abc"
-	mwName := clusterID + "-hc-controller"
 	mcName := "mc-cluster-1"
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 
 	tr := mock.New()
-	tr.StatusOverrides[mcName+"/"+mwName] = &transport.ManifestWorkStatus{
+	tr.StatusOverrides[mcName+"/"+clusterID] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionFalse, Reason: "ApplyFailed", LastTransitionTime: metav1.Now()},
 		},
@@ -550,7 +545,6 @@ func TestReconcile_MWNotApplied_RequeuesPending(t *testing.T) {
 // Status.Update is not called.
 func TestReconcile_ApplyConditions_Idempotent(t *testing.T) {
 	clusterID := "cluster-abc"
-	mwName := clusterID + "-hc-controller"
 	mcName := "mc-cluster-1"
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
@@ -562,7 +556,7 @@ func TestReconcile_ApplyConditions_Idempotent(t *testing.T) {
 	}
 
 	tr := mock.New()
-	tr.StatusOverrides[mcName+"/"+mwName] = &transport.ManifestWorkStatus{
+	tr.StatusOverrides[mcName+"/"+clusterID] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
@@ -581,14 +575,13 @@ func TestReconcile_ApplyConditions_Idempotent(t *testing.T) {
 // Status.Update after applyStatusConditions is silently swallowed.
 func TestReconcile_StatusUpdateConflict_ReturnsNoError(t *testing.T) {
 	clusterID := "cluster-abc"
-	mwName := clusterID + "-hc-controller"
 	mcName := "mc-cluster-1"
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 	// No prior conditions → applyStatusConditions will add them → returns true → Update called.
 
 	tr := mock.New()
-	tr.StatusOverrides[mcName+"/"+mwName] = &transport.ManifestWorkStatus{
+	tr.StatusOverrides[mcName+"/"+clusterID] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
@@ -606,7 +599,6 @@ func TestReconcile_StatusUpdateConflict_ReturnsNoError(t *testing.T) {
 // extracted from ServiceAccountsRef and passed through to the manifest build.
 func TestReconcile_WithServiceAccountsRef(t *testing.T) {
 	clusterID := "cluster-wif"
-	mwName := clusterID + "-hc-controller"
 	mcName := "mc-cluster-1"
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
@@ -625,7 +617,7 @@ func TestReconcile_WithServiceAccountsRef(t *testing.T) {
 	}
 
 	tr := mock.New()
-	tr.StatusOverrides[mcName+"/"+mwName] = &transport.ManifestWorkStatus{
+	tr.StatusOverrides[mcName+"/"+clusterID] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
@@ -644,13 +636,12 @@ func TestReconcile_WithServiceAccountsRef(t *testing.T) {
 // Status.Update after applyStatusConditions is propagated.
 func TestReconcile_StatusUpdateError_ReturnsError(t *testing.T) {
 	clusterID := "cluster-abc"
-	mwName := clusterID + "-hc-controller"
 	mcName := "mc-cluster-1"
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 
 	tr := mock.New()
-	tr.StatusOverrides[mcName+"/"+mwName] = &transport.ManifestWorkStatus{
+	tr.StatusOverrides[mcName+"/"+clusterID] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},

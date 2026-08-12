@@ -13,7 +13,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	workv1 "open-cluster-management.io/api/work/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -131,13 +130,13 @@ func (m *mockStoreClient) IsObjectNamespaced(_ runtime.Object) (bool, error) { r
 // errTransport is a transport.Client that returns configurable errors.
 type errTransport struct {
 	applyErr    error
-	applyResult *transport.ManifestWorkStatus
+	applyResult *transport.Status
 }
 
-func (e *errTransport) Apply(_ context.Context, _ string, _ *workv1.ManifestWork) (*transport.ManifestWorkStatus, error) {
+func (e *errTransport) Apply(_ context.Context, _, _ string, _ [][]byte) (*transport.Status, error) {
 	return e.applyResult, e.applyErr
 }
-func (e *errTransport) GetStatus(_ context.Context, _, _ string) (*transport.ManifestWorkStatus, error) {
+func (e *errTransport) GetStatus(_ context.Context, _, _ string) (*transport.Status, error) {
 	return nil, nil
 }
 func (e *errTransport) Delete(_ context.Context, _, _ string) error { return nil }
@@ -449,16 +448,16 @@ func TestReconcile_VRVersionMismatch_StatusUpdateError(t *testing.T) {
 // Test cases – platform field defaults
 // ---------------------------------------------------------------------------
 
-// replicasFromManifestWork parses the replica count from the raw JSON in the first manifest.
-func replicasFromManifestWork(t *testing.T, mw *workv1.ManifestWork) int32 {
+// replicasFromManifests parses the replica count from the raw JSON in the first manifest.
+func replicasFromManifests(t *testing.T, manifests [][]byte) int32 {
 	t.Helper()
-	require.NotEmpty(t, mw.Spec.Workload.Manifests)
+	require.NotEmpty(t, manifests)
 	var obj struct {
 		Spec struct {
 			Replicas int32 `json:"replicas"`
 		} `json:"spec"`
 	}
-	require.NoError(t, json.Unmarshal(mw.Spec.Workload.Manifests[0].Raw, &obj))
+	require.NoError(t, json.Unmarshal(manifests[0], &obj))
 	return obj.Spec.Replicas
 }
 
@@ -470,14 +469,15 @@ func TestReconcile_NodeCountHonored(t *testing.T) {
 	np.Spec.NodeCount = &count
 	cluster := testCluster(true, true)
 
-	mwName := np.Name + "-" + adapterName
+	clusterID := np.Spec.ClusterID
+	npKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/nodepools/clusters-%s/%s", np.Spec.ClusterID, np.Name)
 	tr := mock.New()
-	tr.StatusOverrides["mc-us-c1/"+mwName] = &transport.ManifestWorkStatus{
+	tr.StatusOverrides["mc-us-c1/"+clusterID] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
-		ResourceStatuses: []map[string]string{
-			{"readyCondition": "True", "allNodesHealthyCondition": "True"},
+		ResourceStatuses: map[string]map[string]string{
+			npKey: {"readyCondition": "True", "allNodesHealthyCondition": "True"},
 		},
 	}
 
@@ -486,7 +486,7 @@ func TestReconcile_NodeCountHonored(t *testing.T) {
 	_, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
 	require.NoError(t, err)
 	require.Len(t, tr.ApplyCalls, 1)
-	require.Equal(t, int32(3), replicasFromManifestWork(t, tr.ApplyCalls[0].Work))
+	require.Equal(t, int32(3), replicasFromManifests(t, tr.ApplyCalls[0].Manifests))
 }
 
 // TestReconcile_DefaultNodeCount verifies that when Spec.NodeCount is nil, defaultReplicas is used.
@@ -495,14 +495,15 @@ func TestReconcile_DefaultNodeCount(t *testing.T) {
 	np.Spec.NodeCount = nil
 	cluster := testCluster(true, true)
 
-	mwName := np.Name + "-" + adapterName
+	clusterID := np.Spec.ClusterID
+	npKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/nodepools/clusters-%s/%s", np.Spec.ClusterID, np.Name)
 	tr := mock.New()
-	tr.StatusOverrides["mc-us-c1/"+mwName] = &transport.ManifestWorkStatus{
+	tr.StatusOverrides["mc-us-c1/"+clusterID] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
-		ResourceStatuses: []map[string]string{
-			{"readyCondition": "True", "allNodesHealthyCondition": "True"},
+		ResourceStatuses: map[string]map[string]string{
+			npKey: {"readyCondition": "True", "allNodesHealthyCondition": "True"},
 		},
 	}
 
@@ -511,7 +512,7 @@ func TestReconcile_DefaultNodeCount(t *testing.T) {
 	_, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
 	require.NoError(t, err)
 	require.Len(t, tr.ApplyCalls, 1)
-	require.Equal(t, int32(1), replicasFromManifestWork(t, tr.ApplyCalls[0].Work))
+	require.Equal(t, int32(1), replicasFromManifests(t, tr.ApplyCalls[0].Manifests))
 }
 
 // TestReconcile_DefaultPlatformValues verifies that when the NodePool has no GCP platform
@@ -523,15 +524,16 @@ func TestReconcile_DefaultPlatformValues(t *testing.T) {
 
 	cluster := testCluster(true, true) // cluster has GCP.Region = "us-central1"
 
-	mwName := np.Name + "-" + adapterName
+	clusterID := np.Spec.ClusterID
+	npKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/nodepools/clusters-%s/%s", np.Spec.ClusterID, np.Name)
 
 	tr := mock.New()
-	tr.StatusOverrides["mc-us-c1/"+mwName] = &transport.ManifestWorkStatus{
+	tr.StatusOverrides["mc-us-c1/"+clusterID] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
-		ResourceStatuses: []map[string]string{
-			{"readyCondition": "True", "allNodesHealthyCondition": "True"},
+		ResourceStatuses: map[string]map[string]string{
+			npKey: {"readyCondition": "True", "allNodesHealthyCondition": "True"},
 		},
 	}
 
@@ -553,15 +555,16 @@ func TestReconcile_ZoneDerivedFromRegion(t *testing.T) {
 
 	cluster := testCluster(true, true) // cluster region = "us-central1"
 
-	mwName := np.Name + "-" + adapterName
+	clusterID := np.Spec.ClusterID
+	npKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/nodepools/clusters-%s/%s", np.Spec.ClusterID, np.Name)
 
 	tr := mock.New()
-	tr.StatusOverrides["mc-us-c1/"+mwName] = &transport.ManifestWorkStatus{
+	tr.StatusOverrides["mc-us-c1/"+clusterID] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
-		ResourceStatuses: []map[string]string{
-			{"readyCondition": "True", "allNodesHealthyCondition": "True"},
+		ResourceStatuses: map[string]map[string]string{
+			npKey: {"readyCondition": "True", "allNodesHealthyCondition": "True"},
 		},
 	}
 
@@ -586,7 +589,7 @@ func TestReconcile_TransportApplyError(t *testing.T) {
 
 	_, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "apply manifest work")
+	require.Contains(t, err.Error(), "apply resources")
 }
 
 // TestReconcile_MWStatusNil_RequeuesPending verifies that when Apply returns nil status
@@ -621,13 +624,14 @@ func TestReconcile_HappyPath(t *testing.T) {
 	cluster := testCluster(true, true)
 
 	tr := mock.New()
-	mwName := np.Name + "-" + adapterName
-	tr.StatusOverrides["mc-us-c1/"+mwName] = &transport.ManifestWorkStatus{
+	clusterID := np.Spec.ClusterID
+	npKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/nodepools/clusters-%s/%s", np.Spec.ClusterID, np.Name)
+	tr.StatusOverrides["mc-us-c1/"+clusterID] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
-		ResourceStatuses: []map[string]string{
-			{
+		ResourceStatuses: map[string]map[string]string{
+			npKey: {
 				"readyCondition":           "True",
 				"allNodesHealthyCondition": "True",
 				"replicas":                 "2",
@@ -644,7 +648,7 @@ func TestReconcile_HappyPath(t *testing.T) {
 
 	require.Len(t, tr.ApplyCalls, 1)
 	require.Equal(t, "mc-us-c1", tr.ApplyCalls[0].TargetCluster)
-	require.Equal(t, mwName, tr.ApplyCalls[0].Work.Name)
+	require.Equal(t, clusterID, tr.ApplyCalls[0].ClusterID)
 	require.True(t, storeClient.statusWriter.called, "expected Status().Update to be called")
 
 	captured := storeClient.statusWriter.captured.(*privatev1.NodePool)
@@ -664,14 +668,15 @@ func TestReconcile_MWNotApplied_RequeuesPending(t *testing.T) {
 	np := testNodePool("4.16.0")
 	cluster := testCluster(true, true)
 
-	mwName := np.Name + "-" + adapterName
+	clusterID := np.Spec.ClusterID
+	npKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/nodepools/clusters-%s/%s", np.Spec.ClusterID, np.Name)
 	tr := mock.New()
-	tr.StatusOverrides["mc-us-c1/"+mwName] = &transport.ManifestWorkStatus{
+	tr.StatusOverrides["mc-us-c1/"+clusterID] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionFalse, Reason: "ApplyFailed"},
 		},
-		ResourceStatuses: []map[string]string{
-			{"readyCondition": "False"},
+		ResourceStatuses: map[string]map[string]string{
+			npKey: {"readyCondition": "False"},
 		},
 	}
 
@@ -698,14 +703,15 @@ func TestReconcile_StatusUpdateConflict_ReturnsNoError(t *testing.T) {
 	np := testNodePool("4.16.0")
 	cluster := testCluster(true, true)
 
-	mwName := np.Name + "-" + adapterName
+	clusterID := np.Spec.ClusterID
+	npKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/nodepools/clusters-%s/%s", np.Spec.ClusterID, np.Name)
 	tr := mock.New()
-	tr.StatusOverrides["mc-us-c1/"+mwName] = &transport.ManifestWorkStatus{
+	tr.StatusOverrides["mc-us-c1/"+clusterID] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
-		ResourceStatuses: []map[string]string{
-			{"readyCondition": "True", "allNodesHealthyCondition": "True"},
+		ResourceStatuses: map[string]map[string]string{
+			npKey: {"readyCondition": "True", "allNodesHealthyCondition": "True"},
 		},
 	}
 
@@ -723,9 +729,9 @@ func TestReconcile_StatusUpdateError_ReturnsError(t *testing.T) {
 	np := testNodePool("4.16.0")
 	cluster := testCluster(true, true)
 
-	mwName := np.Name + "-" + adapterName
+	clusterID := np.Spec.ClusterID
 	tr := mock.New()
-	tr.StatusOverrides["mc-us-c1/"+mwName] = &transport.ManifestWorkStatus{
+	tr.StatusOverrides["mc-us-c1/"+clusterID] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},

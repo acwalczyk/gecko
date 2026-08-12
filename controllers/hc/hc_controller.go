@@ -16,6 +16,7 @@ import (
 
 	"github.com/openshift-online/gecko/controllers/client/transport"
 	"github.com/openshift-online/gecko/controllers/hc/manifest"
+	"github.com/openshift-online/gecko/controllers/util/constants"
 	"github.com/openshift-online/gecko/controllers/util/logger"
 )
 
@@ -24,9 +25,6 @@ const (
 
 	requeuePending = 15 * time.Second
 	requeueStable  = 5 * time.Minute
-
-	// hostedClusterManifestIndex is the manifest index for the HostedCluster in the ManifestWork.
-	hostedClusterManifestIndex = 3
 )
 
 // Reconciler implements the hc-controller reconcile loop.
@@ -122,7 +120,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		}
 	}
 
-	// Build ManifestWork.
+	// Build manifests.
 	// TODO: ClusterIDUUID and CreatedBy are not yet in the orlop ClusterSpec.
 	mwInput := manifest.Input{
 		ClusterID:            clusterID,
@@ -150,14 +148,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		BaseDomain:           placement.BaseDomain,
 	}
 
-	mw, err := manifest.Build(mwInput)
+	manifests, err := manifest.Build(mwInput)
 	if err != nil {
-		return reconcile.Result{}, fmt.Errorf("%s: build manifest work: %w", adapterName, err)
+		return reconcile.Result{}, fmt.Errorf("%s: build manifests: %w", adapterName, err)
 	}
 
-	mwStatus, err := r.transport.Apply(ctx, placement.ManagementClusterName, mw)
+	mwStatus, err := r.transport.Apply(ctx, placement.ManagementClusterName, clusterID, manifests)
 	if err != nil {
-		return reconcile.Result{}, fmt.Errorf("%s: apply manifest work: %w", adapterName, err)
+		return reconcile.Result{}, fmt.Errorf("%s: apply resources: %w", adapterName, err)
 	}
 
 	// Write status conditions — only update if something changed.
@@ -199,9 +197,9 @@ func (r *Reconciler) setWaitingConditions(cluster *privatev1.Cluster, reason, me
 	return a || b
 }
 
-// applyStatusConditions derives conditions from the ManifestWork status and writes them to the cluster.
+// applyStatusConditions derives conditions from the resource status and writes them to the cluster.
 // Returns true if any condition changed.
-func (r *Reconciler) applyStatusConditions(cluster *privatev1.Cluster, mwStatus *transport.ManifestWorkStatus) bool {
+func (r *Reconciler) applyStatusConditions(cluster *privatev1.Cluster, mwStatus *transport.Status) bool {
 	gen := cluster.Generation
 
 	if mwStatus == nil {
@@ -225,12 +223,13 @@ func (r *Reconciler) applyStatusConditions(cluster *privatev1.Cluster, mwStatus 
 	// Derive ManifestWorkApplied from top-level MW conditions.
 	appliedStatus, appliedReason, appliedMessage := mwCondition(mwStatus.Conditions, "Applied")
 
-	// Derive HostedClusterAvailable and HostedClusterResult fields from HC manifest statusFeedback (index 3).
+	// Derive HostedClusterAvailable and HostedClusterResult fields from HC resource status.
+	hcKey := transport.ResourceKey(constants.HyperShiftGroup, constants.HyperShiftVersion, "hostedclusters",
+		fmt.Sprintf("clusters-%s", cluster.Name), cluster.Name)
 	availableStatus := string(metav1.ConditionFalse)
 	apiEndpoint := ""
 	version := ""
-	if len(mwStatus.ResourceStatuses) > hostedClusterManifestIndex {
-		hcFeedback := mwStatus.ResourceStatuses[hostedClusterManifestIndex]
+	if hcFeedback, ok := mwStatus.ResourceStatuses[hcKey]; ok {
 		if v, ok := hcFeedback["availableCondition"]; ok {
 			availableStatus = v
 		}

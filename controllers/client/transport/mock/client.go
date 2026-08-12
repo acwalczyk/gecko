@@ -2,37 +2,31 @@ package mock
 
 import (
 	"context"
-	"fmt"
 	"sync"
 
 	"github.com/openshift-online/gecko/controllers/client/transport"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/runtime/schema"
-	workv1 "open-cluster-management.io/api/work/v1"
 )
 
 // ApplyCall records arguments from an Apply call.
 type ApplyCall struct {
 	TargetCluster string
-	Work          *workv1.ManifestWork
+	ClusterID     string
+	Manifests     [][]byte
 }
 
 // DeleteCall records arguments from a Delete call.
 type DeleteCall struct {
 	TargetCluster string
-	Name          string
+	ClusterID     string
 }
 
 // Client is an in-memory implementation of transport.Client for use in tests.
 type Client struct {
 	mu sync.RWMutex
 
-	// store holds ManifestWorks keyed by "targetCluster/name".
-	store map[string]*workv1.ManifestWork
-
-	// StatusOverrides allows tests to inject a specific status for GetStatus calls.
-	// Key format: "targetCluster/name".
-	StatusOverrides map[string]*transport.ManifestWorkStatus
+	// StatusOverrides allows tests to inject a specific status for Apply/GetStatus calls.
+	// Key format: "targetCluster/clusterID".
+	StatusOverrides map[string]*transport.Status
 
 	// ApplyCalls records all Apply invocations for test assertions.
 	ApplyCalls []ApplyCall
@@ -47,82 +41,54 @@ var _ transport.Client = (*Client)(nil)
 // New creates a new in-memory mock Client.
 func New() *Client {
 	return &Client{
-		store:           make(map[string]*workv1.ManifestWork),
-		StatusOverrides: make(map[string]*transport.ManifestWorkStatus),
+		StatusOverrides: make(map[string]*transport.Status),
 	}
 }
 
-func storeKey(targetCluster, name string) string {
-	return targetCluster + "/" + name
+func storeKey(targetCluster, clusterID string) string {
+	return targetCluster + "/" + clusterID
 }
 
-// Apply stores the ManifestWork in memory, records the call, and returns any configured status override.
-func (c *Client) Apply(ctx context.Context, targetCluster string, mw *workv1.ManifestWork) (*transport.ManifestWorkStatus, error) {
+// Apply records the call and returns any configured status override.
+func (c *Client) Apply(ctx context.Context, targetCluster, clusterID string, manifests [][]byte) (*transport.Status, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	c.ApplyCalls = append(c.ApplyCalls, ApplyCall{
 		TargetCluster: targetCluster,
-		Work:          mw,
+		ClusterID:     clusterID,
+		Manifests:     manifests,
 	})
 
-	key := storeKey(targetCluster, mw.GetName())
-	c.store[key] = mw.DeepCopy()
-
+	key := storeKey(targetCluster, clusterID)
 	if override, ok := c.StatusOverrides[key]; ok {
 		return override, nil
 	}
-	return &transport.ManifestWorkStatus{}, nil
+	return &transport.Status{}, nil
 }
 
-// GetStatus returns the ManifestWork status. If a StatusOverride is set for this key
-// it is returned; otherwise an empty status is returned. Returns not-found if the
-// ManifestWork has never been applied.
-func (c *Client) GetStatus(ctx context.Context, targetCluster, name string) (*transport.ManifestWorkStatus, error) {
+// GetStatus returns any configured status override, or an empty status.
+func (c *Client) GetStatus(ctx context.Context, targetCluster, clusterID string) (*transport.Status, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	key := storeKey(targetCluster, name)
-
-	if _, ok := c.store[key]; !ok {
-		gr := schema.GroupResource{Group: "work.open-cluster-management.io", Resource: "manifestworks"}
-		return nil, apierrors.NewNotFound(gr, fmt.Sprintf("%s/%s", targetCluster, name))
-	}
-
+	key := storeKey(targetCluster, clusterID)
 	if override, ok := c.StatusOverrides[key]; ok {
 		return override, nil
 	}
-
-	return &transport.ManifestWorkStatus{}, nil
+	return &transport.Status{}, nil
 }
 
-// Delete removes the ManifestWork from the in-memory store and records the call.
-// Not-found is silently ignored.
-func (c *Client) Delete(ctx context.Context, targetCluster, name string) error {
+// Delete records the call. Always succeeds.
+func (c *Client) Delete(ctx context.Context, targetCluster, clusterID string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	c.DeleteCalls = append(c.DeleteCalls, DeleteCall{
 		TargetCluster: targetCluster,
-		Name:          name,
+		ClusterID:     clusterID,
 	})
-
-	key := storeKey(targetCluster, name)
-	delete(c.store, key)
 	return nil
-}
-
-// Get returns the stored ManifestWork or nil if not found. Useful for test assertions.
-func (c *Client) Get(targetCluster, name string) *workv1.ManifestWork {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	key := storeKey(targetCluster, name)
-	mw, ok := c.store[key]
-	if !ok {
-		return nil
-	}
-	return mw.DeepCopy()
 }
 
 // Reset clears all stored state and recorded calls. Useful between test cases.
@@ -130,8 +96,7 @@ func (c *Client) Reset() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.store = make(map[string]*workv1.ManifestWork)
-	c.StatusOverrides = make(map[string]*transport.ManifestWorkStatus)
+	c.StatusOverrides = make(map[string]*transport.Status)
 	c.ApplyCalls = nil
 	c.DeleteCalls = nil
 }
