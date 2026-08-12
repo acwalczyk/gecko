@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+	"time"
 
 	"cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
 	"github.com/stretchr/testify/assert"
@@ -56,12 +57,14 @@ func mcRegistrationJSON(projectID, mode string) []byte {
 }
 
 // newSelector constructs a DynamicSelector using the given mock SM lookup and
-// static DNS domain list.
+// static DNS domain list. Cache TTL is set to zero so every Select() call
+// re-fetches unless the test overrides it.
 func newSelector(sm secretLookup, domains []string) *DynamicSelector {
 	return &DynamicSelector{
 		smLookup: sm,
 		project:  testProject,
 		domains:  domains,
+		cacheTTL: 0, // no caching by default in tests
 	}
 }
 
@@ -92,9 +95,9 @@ func TestNewDynamicSelector(t *testing.T) {
 	})
 }
 
-// ─── eligibleMCs ──────────────────────────────────────────────────────────────
+// ─── fetchEligibleMCs ─────────────────────────────────────────────────────────
 
-func TestDynamicSelector_eligibleMCs(t *testing.T) {
+func TestDynamicSelector_fetchEligibleMCs(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("returns projectIds for secrets with mode=active", func(t *testing.T) {
@@ -106,7 +109,7 @@ func TestDynamicSelector_eligibleMCs(t *testing.T) {
 		}
 
 		s := newSelector(sm, []string{"example.com"})
-		eligible, err := s.eligibleMCs(ctx)
+		eligible, err := s.fetchEligibleMCs(ctx)
 		require.NoError(t, err)
 		assert.Equal(t, []string{"proj-a", "proj-b"}, eligible)
 	})
@@ -120,7 +123,7 @@ func TestDynamicSelector_eligibleMCs(t *testing.T) {
 		}
 
 		s := newSelector(sm, []string{"example.com"})
-		eligible, err := s.eligibleMCs(ctx)
+		eligible, err := s.fetchEligibleMCs(ctx)
 		require.NoError(t, err)
 		assert.Equal(t, []string{"proj-a"}, eligible)
 	})
@@ -128,7 +131,7 @@ func TestDynamicSelector_eligibleMCs(t *testing.T) {
 	t.Run("no secrets → empty slice, no error", func(t *testing.T) {
 		sm := &mockSMLookup{listResponses: map[string][]*secretmanagerpb.Secret{}}
 		s := newSelector(sm, []string{"example.com"})
-		eligible, err := s.eligibleMCs(ctx)
+		eligible, err := s.fetchEligibleMCs(ctx)
 		require.NoError(t, err)
 		assert.Empty(t, eligible)
 	})
@@ -136,13 +139,48 @@ func TestDynamicSelector_eligibleMCs(t *testing.T) {
 	t.Run("listSecrets error → wrapped error", func(t *testing.T) {
 		sm := &mockSMLookup{listErr: fmt.Errorf("gcp unavailable")}
 		s := newSelector(sm, []string{"example.com"})
-		_, err := s.eligibleMCs(ctx)
+		_, err := s.fetchEligibleMCs(ctx)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "list mc-registration secrets")
 		assert.Contains(t, err.Error(), "gcp unavailable")
 	})
 
-	t.Run("accessSecretVersion error → wrapped error mentioning secret name", func(t *testing.T) {
+	t.Run("accessSecretVersion error → skipped, remaining secrets returned", func(t *testing.T) {
+		sm := &mockSMLookup{}
+		sBad := smSecret("projects/p/secrets/mc-registration-bad", nil)
+		sGood := registrationSecret(sm, "projects/p/secrets/mc-registration-good", "proj-good", "active")
+		sm.listResponses = map[string][]*secretmanagerpb.Secret{
+			mcRegistrationLabelFilter: {sBad, sGood},
+		}
+		sm.accessErrs = map[string]error{
+			"projects/p/secrets/mc-registration-bad/versions/latest": fmt.Errorf("permission denied"),
+		}
+
+		s := newSelector(sm, []string{"example.com"})
+		eligible, err := s.fetchEligibleMCs(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"proj-good"}, eligible)
+	})
+
+	t.Run("invalid JSON payload → skipped, remaining secrets returned", func(t *testing.T) {
+		sm := &mockSMLookup{}
+		sGood := registrationSecret(sm, "projects/p/secrets/mc-registration-good", "proj-good", "active")
+		sBad := smSecret("projects/p/secrets/mc-registration-bad", nil)
+		sm.listResponses = map[string][]*secretmanagerpb.Secret{
+			mcRegistrationLabelFilter: {sGood, sBad},
+		}
+		if sm.accessResponses == nil {
+			sm.accessResponses = map[string][]byte{}
+		}
+		sm.accessResponses["projects/p/secrets/mc-registration-bad/versions/latest"] = []byte("not-json")
+
+		s := newSelector(sm, []string{"example.com"})
+		eligible, err := s.fetchEligibleMCs(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"proj-good"}, eligible)
+	})
+
+	t.Run("all secrets broken → empty slice, no error", func(t *testing.T) {
 		sm := &mockSMLookup{
 			listResponses: map[string][]*secretmanagerpb.Secret{
 				mcRegistrationLabelFilter: {smSecret("projects/p/secrets/mc-registration-a", nil)},
@@ -152,25 +190,9 @@ func TestDynamicSelector_eligibleMCs(t *testing.T) {
 			},
 		}
 		s := newSelector(sm, []string{"example.com"})
-		_, err := s.eligibleMCs(ctx)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "access secret")
-		assert.Contains(t, err.Error(), "permission denied")
-	})
-
-	t.Run("invalid JSON payload → error", func(t *testing.T) {
-		sm := &mockSMLookup{
-			listResponses: map[string][]*secretmanagerpb.Secret{
-				mcRegistrationLabelFilter: {smSecret("projects/p/secrets/mc-registration-a", nil)},
-			},
-			accessResponses: map[string][]byte{
-				"projects/p/secrets/mc-registration-a/versions/latest": []byte("not-json"),
-			},
-		}
-		s := newSelector(sm, []string{"example.com"})
-		_, err := s.eligibleMCs(ctx)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "unmarshal")
+		eligible, err := s.fetchEligibleMCs(ctx)
+		require.NoError(t, err)
+		assert.Empty(t, eligible)
 	})
 
 	t.Run("secret with empty projectId is excluded even if active", func(t *testing.T) {
@@ -183,9 +205,60 @@ func TestDynamicSelector_eligibleMCs(t *testing.T) {
 			},
 		}
 		s := newSelector(sm, []string{"example.com"})
-		eligible, err := s.eligibleMCs(ctx)
+		eligible, err := s.fetchEligibleMCs(ctx)
 		require.NoError(t, err)
 		assert.Empty(t, eligible)
+	})
+}
+
+// ─── cache ────────────────────────────────────────────────────────────────────
+
+func TestDynamicSelector_cache(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("second call within TTL uses cached result", func(t *testing.T) {
+		sm := &mockSMLookup{}
+		s1 := registrationSecret(sm, "projects/p/secrets/mc-registration-a", "proj-a", "active")
+		sm.listResponses = map[string][]*secretmanagerpb.Secret{
+			mcRegistrationLabelFilter: {s1},
+		}
+
+		s := newSelector(sm, []string{"example.com"})
+		s.cacheTTL = 1 * time.Minute
+
+		// First call populates cache.
+		e1, err := s.eligibleMCs(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"proj-a"}, e1)
+		assert.Len(t, sm.accessedNames, 1)
+
+		// Second call should use cache — no new SM calls.
+		e2, err := s.eligibleMCs(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"proj-a"}, e2)
+		assert.Len(t, sm.accessedNames, 1) // still 1
+	})
+
+	t.Run("call after TTL expiry re-fetches", func(t *testing.T) {
+		sm := &mockSMLookup{}
+		s1 := registrationSecret(sm, "projects/p/secrets/mc-registration-a", "proj-a", "active")
+		sm.listResponses = map[string][]*secretmanagerpb.Secret{
+			mcRegistrationLabelFilter: {s1},
+		}
+
+		s := newSelector(sm, []string{"example.com"})
+		s.cacheTTL = 1 * time.Millisecond
+
+		_, err := s.eligibleMCs(ctx)
+		require.NoError(t, err)
+		assert.Len(t, sm.accessedNames, 1)
+
+		// Wait for cache to expire.
+		time.Sleep(5 * time.Millisecond)
+
+		_, err = s.eligibleMCs(ctx)
+		require.NoError(t, err)
+		assert.Len(t, sm.accessedNames, 2) // re-fetched
 	})
 }
 
@@ -270,15 +343,6 @@ func TestDynamicSelector_Select(t *testing.T) {
 		assert.Contains(t, err.Error(), "no eligible management clusters")
 	})
 
-	t.Run("no DNS domains configured → error", func(t *testing.T) {
-		sm := buildMock("proj-a")
-		s := newSelector(sm, nil)
-
-		_, _, err := s.Select(ctx)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "no HC DNS domains")
-	})
-
 	t.Run("SM error during eligible MC discovery → error propagated", func(t *testing.T) {
 		sm := &mockSMLookup{listErr: fmt.Errorf("gcp outage")}
 		s := newSelector(sm, []string{"example.com"})
@@ -286,5 +350,22 @@ func TestDynamicSelector_Select(t *testing.T) {
 		_, _, err := s.Select(ctx)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "discover eligible MCs")
+	})
+
+	t.Run("one broken secret skipped, healthy one selected", func(t *testing.T) {
+		sm := &mockSMLookup{}
+		sBad := smSecret("projects/p/secrets/mc-registration-bad", nil)
+		sGood := registrationSecret(sm, "projects/p/secrets/mc-registration-good", "proj-good", "active")
+		sm.listResponses = map[string][]*secretmanagerpb.Secret{
+			mcRegistrationLabelFilter: {sBad, sGood},
+		}
+		sm.accessErrs = map[string]error{
+			"projects/p/secrets/mc-registration-bad/versions/latest": fmt.Errorf("version disabled"),
+		}
+
+		s := newSelector(sm, []string{"example.com"})
+		mc, _, err := s.Select(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, "proj-good", mc)
 	})
 }

@@ -24,12 +24,12 @@ const (
 // Reconciler implements the placement controller reconcile loop.
 type Reconciler struct {
 	client   client.Client
-	selector *DynamicSelector
+	selector Selector
 	log      logger.Logger
 }
 
 // NewReconciler creates a new placement Reconciler.
-func NewReconciler(selector *DynamicSelector, log logger.Logger, c client.Client) *Reconciler {
+func NewReconciler(selector Selector, log logger.Logger, c client.Client) *Reconciler {
 	return &Reconciler{
 		selector: selector,
 		log:      log,

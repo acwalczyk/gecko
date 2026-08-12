@@ -46,9 +46,7 @@ spec:
             - --log-format={{ .Values.logFormat }}
             - --workers={{ .Values.workers }}
             - --secretmanager-project={{ .Values.secretManagerProject }}
-            {{- if .Values.hcDnsDomains }}
             - --hc-dns-domains={{ .Values.hcDnsDomains }}
-            {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       {{- with .Values.nodeSelector }}

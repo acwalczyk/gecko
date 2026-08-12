@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"testing"
 
-	"cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -36,10 +35,12 @@ func testLogger(t *testing.T) logger.Logger {
 
 // mockStatusWriter is a minimal SubResourceWriter for status updates.
 type mockStatusWriter struct {
-	updateErr error
+	updateErr    error
+	updateCalled bool
 }
 
 func (m *mockStatusWriter) Update(_ context.Context, _ client.Object, _ ...client.SubResourceUpdateOption) error {
+	m.updateCalled = true
 	return m.updateErr
 }
 func (m *mockStatusWriter) Create(_ context.Context, _ client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
@@ -128,74 +129,80 @@ func buildCluster(id string, placed bool) *privatev1.Cluster {
 	return c
 }
 
-// workingSelector returns a *DynamicSelector wired to a mock SM lookup that
-// reports one active mc-registration secret and one DNS domain.
-func workingSelector() *DynamicSelector {
-	sm := &mockSMLookup{
-		listResponses: map[string][]*secretmanagerpb.Secret{
-			mcRegistrationLabelFilter: {smSecret("projects/p/secrets/mc-registration-a", nil)},
-		},
-		accessResponses: map[string][]byte{
-			"projects/p/secrets/mc-registration-a/versions/latest": mcRegistrationJSON("mc-us-c1", "active"),
-		},
-	}
-	return newSelector(sm, []string{"hc-us-central1-abc.example.com"})
+// mockSelector is a minimal Selector for reconciler tests.
+type mockSelector struct {
+	mc     string
+	domain string
+	err    error
 }
 
-// failingSelector returns a *DynamicSelector whose Select() always errors.
-func failingSelector(errMsg string) *DynamicSelector {
-	sm := &mockSMLookup{listErr: fmt.Errorf("%s", errMsg)}
-	return newSelector(sm, []string{"hc-us-central1-abc.example.com"})
+func (m *mockSelector) Select(_ context.Context) (string, string, error) {
+	return m.mc, m.domain, m.err
+}
+
+// workingSelector returns a Selector that always succeeds.
+func workingSelector() Selector {
+	return &mockSelector{mc: "mc-us-c1", domain: "hc-us-central1-abc.example.com"}
+}
+
+// failingSelector returns a Selector whose Select() always errors.
+func failingSelector(errMsg string) Selector {
+	return &mockSelector{err: fmt.Errorf("%s", errMsg)}
 }
 
 func TestReconciler(t *testing.T) {
 	tests := []struct {
-		name           string
-		clusterID      string
-		cluster        *privatev1.Cluster // nil → NotFound
-		selector       *DynamicSelector
-		expectUpdate   bool
-		expectedResult reconcile.Result
-		expectError    bool
+		name               string
+		clusterID          string
+		cluster            *privatev1.Cluster // nil → NotFound
+		selector           Selector
+		expectUpdate       bool
+		expectStatusUpdate bool
+		expectedResult     reconcile.Result
+		expectError        bool
 	}{
 		{
-			name:           "happy path: selects MC and domain, updates status",
-			clusterID:      "cluster-1",
-			cluster:        buildCluster("cluster-1", false),
-			selector:       workingSelector(),
-			expectUpdate:   false,
-			expectedResult: reconcile.Result{RequeueAfter: requeueStable},
+			name:               "happy path: selects MC and domain, updates status",
+			clusterID:          "cluster-1",
+			cluster:            buildCluster("cluster-1", false),
+			selector:           workingSelector(),
+			expectUpdate:       false,
+			expectStatusUpdate: true,
+			expectedResult:     reconcile.Result{RequeueAfter: requeueStable},
 		},
 		{
-			name:           "already placed: no update, empty result",
-			clusterID:      "cluster-2",
-			cluster:        buildCluster("cluster-2", true),
-			selector:       workingSelector(),
-			expectUpdate:   false,
-			expectedResult: reconcile.Result{},
+			name:               "already placed: no update, empty result",
+			clusterID:          "cluster-2",
+			cluster:            buildCluster("cluster-2", true),
+			selector:           workingSelector(),
+			expectUpdate:       false,
+			expectStatusUpdate: false,
+			expectedResult:     reconcile.Result{},
 		},
 		{
-			name:           "cluster not found: return empty result, no error",
-			clusterID:      "cluster-missing",
-			cluster:        nil, // → NotFoundError
-			selector:       workingSelector(),
-			expectUpdate:   false,
-			expectedResult: reconcile.Result{},
-			expectError:    false,
+			name:               "cluster not found: return empty result, no error",
+			clusterID:          "cluster-missing",
+			cluster:            nil, // → NotFoundError
+			selector:           workingSelector(),
+			expectUpdate:       false,
+			expectStatusUpdate: false,
+			expectedResult:     reconcile.Result{},
+			expectError:        false,
 		},
 		{
-			name:         "selector error: return error",
-			clusterID:    "cluster-4",
-			cluster:      buildCluster("cluster-4", false),
-			selector:     failingSelector("no candidates available"),
-			expectUpdate: false,
-			expectError:  true,
+			name:               "selector error: return error",
+			clusterID:          "cluster-4",
+			cluster:            buildCluster("cluster-4", false),
+			selector:           failingSelector("no candidates available"),
+			expectUpdate:       false,
+			expectStatusUpdate: false,
+			expectError:        true,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			storeClient := &mockStoreClient{cluster: tc.cluster}
+			storeClient := &mockStoreClient{cluster: tc.cluster, statusWriter: &mockStatusWriter{}}
 
 			reconciler := &Reconciler{
 				client:   storeClient,
@@ -219,6 +226,7 @@ func TestReconciler(t *testing.T) {
 
 			require.Equal(t, tc.expectedResult, result)
 			require.Equal(t, tc.expectUpdate, storeClient.updateCalled, "Update called mismatch")
+			require.Equal(t, tc.expectStatusUpdate, storeClient.statusWriter.updateCalled, "Status().Update() called mismatch")
 		})
 	}
 }
