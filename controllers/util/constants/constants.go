@@ -52,6 +52,15 @@ const (
 	AnnotationCreatedBy = "hyperfleet.io/created-by"
 )
 
+// HyperShift API constants
+const (
+	// HyperShiftGroup is the API group for HyperShift resources (HostedCluster, NodePool, etc.).
+	HyperShiftGroup = "hypershift.openshift.io"
+
+	// HyperShiftVersion is the API version for HyperShift resources.
+	HyperShiftVersion = "v1beta1"
+)
+
 // OCM ManifestWork GVK constants
 const (
 	// ManifestWorkGroup is the API group for OCM ManifestWork resources.
