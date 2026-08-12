@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"cloud.google.com/go/secretmanager/apiv1/secretmanagerpb"
@@ -17,13 +15,14 @@ import (
 
 // mockSMLookup implements secretLookup for tests.
 // listResponses maps filter string to the secrets returned for that filter.
+// accessResponses/accessErrs map a secret version name to its payload/error.
 // A single listErr short-circuits all listSecrets calls.
 type mockSMLookup struct {
-	listResponses map[string][]*secretmanagerpb.Secret
-	listErr       error
-	secretData    []byte
-	accessErr     error
-	accessedName  string // last name passed to accessSecretVersion
+	listResponses   map[string][]*secretmanagerpb.Secret
+	listErr         error
+	accessResponses map[string][]byte
+	accessErrs      map[string]error
+	accessedNames   []string // names passed to accessSecretVersion, in order
 }
 
 func (m *mockSMLookup) listSecrets(_ context.Context, _, filter string) ([]*secretmanagerpb.Secret, error) {
@@ -34,309 +33,62 @@ func (m *mockSMLookup) listSecrets(_ context.Context, _, filter string) ([]*secr
 }
 
 func (m *mockSMLookup) accessSecretVersion(_ context.Context, name string) ([]byte, error) {
-	m.accessedName = name
-	if m.accessErr != nil {
-		return nil, m.accessErr
+	m.accessedNames = append(m.accessedNames, name)
+	if err, ok := m.accessErrs[name]; ok {
+		return nil, err
 	}
-	return m.secretData, nil
+	return m.accessResponses[name], nil
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
-const (
-	filterMCNames = "labels.maestro-consumer-name:*"
-	filterArgoCD  = `labels.infra-type:region name:argocd-cluster`
-	testProject   = "my-project"
-)
+const testProject = "my-project"
 
 // smSecret builds a minimal secretmanagerpb.Secret with the given name and labels.
 func smSecret(name string, labels map[string]string) *secretmanagerpb.Secret {
 	return &secretmanagerpb.Secret{Name: name, Labels: labels}
 }
 
-// maestroResponse encodes a Maestro consumers API response body.
-func maestroResponse(names ...string) []byte {
-	type item struct {
-		Name string `json:"name"`
-	}
-	type page struct {
-		Items []item `json:"items"`
-	}
-	items := make([]item, 0, len(names))
-	for _, n := range names {
-		items = append(items, item{Name: n})
-	}
-	b, _ := json.Marshal(page{Items: items})
-	return b
-}
-
-// dnsPayload encodes a Secret Manager payload with the given comma-separated domains.
-func dnsPayload(domains string) []byte {
-	b, _ := json.Marshal(map[string]string{"meta_hc_dns_domains": domains})
+// mcRegistrationJSON encodes an mc-registration secret payload.
+func mcRegistrationJSON(projectID, mode string) []byte {
+	b, _ := json.Marshal(mcRegistrationPayload{ProjectID: projectID, Mode: mode})
 	return b
 }
 
 // newSelector constructs a DynamicSelector using the given mock SM lookup and
-// an HTTP client pointed at the provided test server (may be nil).
-func newSelector(sm secretLookup, srv *httptest.Server) *DynamicSelector {
-	maestroURL := ""
-	httpClient := &http.Client{}
-	if srv != nil {
-		maestroURL = srv.URL
-		httpClient = srv.Client()
-	}
+// static DNS domain list.
+func newSelector(sm secretLookup, domains []string) *DynamicSelector {
 	return &DynamicSelector{
-		smLookup:   sm,
-		project:    testProject,
-		maestroURL: maestroURL,
-		httpClient: httpClient,
+		smLookup: sm,
+		project:  testProject,
+		domains:  domains,
 	}
 }
 
-// maestroServer returns a test HTTP server that handles the consumers endpoint.
-// If statusCode != 200, it returns that code with the given body.
-// Otherwise it returns 200 with body.
-func maestroServer(t *testing.T, statusCode int, body []byte) *httptest.Server {
-	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/api/maestro/v1/consumers", r.URL.Path)
-		w.WriteHeader(statusCode)
-		_, _ = w.Write(body)
-	}))
+// registrationSecret builds a secret + its accessSecretVersion registration
+// for a given mc-registration secret name, project ID, and mode.
+func registrationSecret(sm *mockSMLookup, name, projectID, mode string) *secretmanagerpb.Secret {
+	secret := smSecret(name, map[string]string{"mc-registration": "true"})
+	if sm.accessResponses == nil {
+		sm.accessResponses = map[string][]byte{}
+	}
+	sm.accessResponses[name+"/versions/latest"] = mcRegistrationJSON(projectID, mode)
+	return secret
 }
 
-// ─── maestroConsumerNames ─────────────────────────────────────────────────────
+// ─── NewDynamicSelector ─────────────────────────────────────────────────────────
 
-func TestDynamicSelector_maestroConsumerNames(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("returns consumer names from valid response", func(t *testing.T) {
-		srv := maestroServer(t, http.StatusOK, maestroResponse("mc-a", "mc-b", "mc-c"))
-		defer srv.Close()
-
-		s := newSelector(&mockSMLookup{}, srv)
-		names, err := s.maestroConsumerNames(ctx)
-		require.NoError(t, err)
-		assert.Equal(t, []string{"mc-a", "mc-b", "mc-c"}, names)
-	})
-
-	t.Run("filters out empty consumer names", func(t *testing.T) {
-		body := []byte(`{"items":[{"name":"mc-a"},{"name":""},{"name":"mc-b"}]}`)
-		srv := maestroServer(t, http.StatusOK, body)
-		defer srv.Close()
-
-		s := newSelector(&mockSMLookup{}, srv)
-		names, err := s.maestroConsumerNames(ctx)
-		require.NoError(t, err)
-		assert.Equal(t, []string{"mc-a", "mc-b"}, names)
-	})
-
-	t.Run("empty items array → empty slice, no error", func(t *testing.T) {
-		srv := maestroServer(t, http.StatusOK, maestroResponse())
-		defer srv.Close()
-
-		s := newSelector(&mockSMLookup{}, srv)
-		names, err := s.maestroConsumerNames(ctx)
-		require.NoError(t, err)
-		assert.Empty(t, names)
-	})
-
-	t.Run("non-200 status → error containing status code", func(t *testing.T) {
-		srv := maestroServer(t, http.StatusInternalServerError, []byte("oops"))
-		defer srv.Close()
-
-		s := newSelector(&mockSMLookup{}, srv)
-		_, err := s.maestroConsumerNames(ctx)
+func TestNewDynamicSelector(t *testing.T) {
+	t.Run("errors when domains empty", func(t *testing.T) {
+		_, err := NewDynamicSelector(nil, testProject, nil)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "500")
 	})
 
-	t.Run("invalid JSON body → error", func(t *testing.T) {
-		srv := maestroServer(t, http.StatusOK, []byte("not-json"))
-		defer srv.Close()
-
-		s := newSelector(&mockSMLookup{}, srv)
-		_, err := s.maestroConsumerNames(ctx)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "unmarshal")
-	})
-
-	t.Run("unreachable server → HTTP error", func(t *testing.T) {
-		s := newSelector(&mockSMLookup{}, nil)
-		s.maestroURL = "http://127.0.0.1:0" // nothing listening
-		_, err := s.maestroConsumerNames(ctx)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "GET consumers")
-	})
-}
-
-// ─── smMCNames ────────────────────────────────────────────────────────────────
-
-func TestDynamicSelector_smMCNames(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("returns MC names from label values", func(t *testing.T) {
-		sm := &mockSMLookup{
-			listResponses: map[string][]*secretmanagerpb.Secret{
-				filterMCNames: {
-					smSecret("projects/p/secrets/s1", map[string]string{"maestro-consumer-name": "mc-a"}),
-					smSecret("projects/p/secrets/s2", map[string]string{"maestro-consumer-name": "mc-b"}),
-				},
-			},
-		}
-		s := newSelector(sm, nil)
-		names, err := s.smMCNames(ctx)
+	t.Run("succeeds with domains", func(t *testing.T) {
+		s, err := NewDynamicSelector(nil, testProject, []string{"a.example.com"})
 		require.NoError(t, err)
-		assert.Equal(t, []string{"mc-a", "mc-b"}, names)
-	})
-
-	t.Run("filters secrets with empty label value", func(t *testing.T) {
-		sm := &mockSMLookup{
-			listResponses: map[string][]*secretmanagerpb.Secret{
-				filterMCNames: {
-					smSecret("projects/p/secrets/s1", map[string]string{"maestro-consumer-name": "mc-a"}),
-					smSecret("projects/p/secrets/s2", map[string]string{"maestro-consumer-name": ""}),
-				},
-			},
-		}
-		s := newSelector(sm, nil)
-		names, err := s.smMCNames(ctx)
-		require.NoError(t, err)
-		assert.Equal(t, []string{"mc-a"}, names)
-	})
-
-	t.Run("no secrets → empty slice, no error", func(t *testing.T) {
-		sm := &mockSMLookup{listResponses: map[string][]*secretmanagerpb.Secret{}}
-		s := newSelector(sm, nil)
-		names, err := s.smMCNames(ctx)
-		require.NoError(t, err)
-		assert.Empty(t, names)
-	})
-
-	t.Run("listSecrets error → wrapped error", func(t *testing.T) {
-		sm := &mockSMLookup{listErr: fmt.Errorf("gcp unavailable")}
-		s := newSelector(sm, nil)
-		_, err := s.smMCNames(ctx)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "list secrets")
-		assert.Contains(t, err.Error(), "gcp unavailable")
-	})
-}
-
-// ─── hcDNSDomains ─────────────────────────────────────────────────────────────
-
-func TestDynamicSelector_hcDNSDomains(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("parses single domain from secret payload", func(t *testing.T) {
-		sm := &mockSMLookup{
-			listResponses: map[string][]*secretmanagerpb.Secret{
-				filterArgoCD: {smSecret("projects/p/secrets/argocd", nil)},
-			},
-			secretData: dnsPayload("us-central1.example.com"),
-		}
-		s := newSelector(sm, nil)
-		domains, err := s.hcDNSDomains(ctx)
-		require.NoError(t, err)
-		assert.Equal(t, []string{"us-central1.example.com"}, domains)
-	})
-
-	t.Run("splits comma-separated domains", func(t *testing.T) {
-		sm := &mockSMLookup{
-			listResponses: map[string][]*secretmanagerpb.Secret{
-				filterArgoCD: {smSecret("projects/p/secrets/argocd", nil)},
-			},
-			secretData: dnsPayload("a.example.com,b.example.com,c.example.com"),
-		}
-		s := newSelector(sm, nil)
-		domains, err := s.hcDNSDomains(ctx)
-		require.NoError(t, err)
-		assert.Equal(t, []string{"a.example.com", "b.example.com", "c.example.com"}, domains)
-	})
-
-	t.Run("trims whitespace around domain entries", func(t *testing.T) {
-		sm := &mockSMLookup{
-			listResponses: map[string][]*secretmanagerpb.Secret{
-				filterArgoCD: {smSecret("projects/p/secrets/argocd", nil)},
-			},
-			secretData: dnsPayload("  a.example.com , b.example.com "),
-		}
-		s := newSelector(sm, nil)
-		domains, err := s.hcDNSDomains(ctx)
-		require.NoError(t, err)
-		assert.Equal(t, []string{"a.example.com", "b.example.com"}, domains)
-	})
-
-	t.Run("uses first matching secret when multiple returned", func(t *testing.T) {
-		sm := &mockSMLookup{
-			listResponses: map[string][]*secretmanagerpb.Secret{
-				filterArgoCD: {
-					smSecret("projects/p/secrets/first", nil),
-					smSecret("projects/p/secrets/second", nil),
-				},
-			},
-			secretData: dnsPayload("first.example.com"),
-		}
-		s := newSelector(sm, nil)
-		_, err := s.hcDNSDomains(ctx)
-		require.NoError(t, err)
-		assert.Equal(t, "projects/p/secrets/first/versions/latest", sm.accessedName)
-	})
-
-	t.Run("no matching secret → error mentioning project", func(t *testing.T) {
-		sm := &mockSMLookup{listResponses: map[string][]*secretmanagerpb.Secret{}}
-		s := newSelector(sm, nil)
-		_, err := s.hcDNSDomains(ctx)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), testProject)
-	})
-
-	t.Run("listSecrets error → error propagated", func(t *testing.T) {
-		sm := &mockSMLookup{listErr: fmt.Errorf("gcp down")}
-		s := newSelector(sm, nil)
-		_, err := s.hcDNSDomains(ctx)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "list argocd-cluster secrets")
-	})
-
-	t.Run("accessSecretVersion error → error propagated", func(t *testing.T) {
-		sm := &mockSMLookup{
-			listResponses: map[string][]*secretmanagerpb.Secret{
-				filterArgoCD: {smSecret("projects/p/secrets/argocd", nil)},
-			},
-			accessErr: fmt.Errorf("permission denied"),
-		}
-		s := newSelector(sm, nil)
-		_, err := s.hcDNSDomains(ctx)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "access secret")
-		assert.Contains(t, err.Error(), "permission denied")
-	})
-
-	t.Run("invalid JSON secret payload → error", func(t *testing.T) {
-		sm := &mockSMLookup{
-			listResponses: map[string][]*secretmanagerpb.Secret{
-				filterArgoCD: {smSecret("projects/p/secrets/argocd", nil)},
-			},
-			secretData: []byte("not-json"),
-		}
-		s := newSelector(sm, nil)
-		_, err := s.hcDNSDomains(ctx)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "unmarshal")
-	})
-
-	t.Run("empty meta_hc_dns_domains field → empty slice", func(t *testing.T) {
-		sm := &mockSMLookup{
-			listResponses: map[string][]*secretmanagerpb.Secret{
-				filterArgoCD: {smSecret("projects/p/secrets/argocd", nil)},
-			},
-			secretData: dnsPayload(""),
-		}
-		s := newSelector(sm, nil)
-		domains, err := s.hcDNSDomains(ctx)
-		require.NoError(t, err)
-		assert.Empty(t, domains)
+		assert.Equal(t, []string{"a.example.com"}, s.domains)
+		assert.Equal(t, testProject, s.project)
 	})
 }
 
@@ -345,83 +97,95 @@ func TestDynamicSelector_hcDNSDomains(t *testing.T) {
 func TestDynamicSelector_eligibleMCs(t *testing.T) {
 	ctx := context.Background()
 
-	makeSM := func(mcNames ...string) *mockSMLookup {
-		secrets := make([]*secretmanagerpb.Secret, 0, len(mcNames))
-		for i, n := range mcNames {
-			secrets = append(secrets, smSecret(
-				fmt.Sprintf("projects/p/secrets/s%d", i),
-				map[string]string{"maestro-consumer-name": n},
-			))
+	t.Run("returns projectIds for secrets with mode=active", func(t *testing.T) {
+		sm := &mockSMLookup{}
+		s1 := registrationSecret(sm, "projects/p/secrets/mc-registration-a", "proj-a", "active")
+		s2 := registrationSecret(sm, "projects/p/secrets/mc-registration-b", "proj-b", "active")
+		sm.listResponses = map[string][]*secretmanagerpb.Secret{
+			mcRegistrationLabelFilter: {s1, s2},
 		}
-		return &mockSMLookup{
-			listResponses: map[string][]*secretmanagerpb.Secret{filterMCNames: secrets},
+
+		s := newSelector(sm, []string{"example.com"})
+		eligible, err := s.eligibleMCs(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"proj-a", "proj-b"}, eligible)
+	})
+
+	t.Run("filters out secrets with mode=maintenance", func(t *testing.T) {
+		sm := &mockSMLookup{}
+		s1 := registrationSecret(sm, "projects/p/secrets/mc-registration-a", "proj-a", "active")
+		s2 := registrationSecret(sm, "projects/p/secrets/mc-registration-b", "proj-b", "maintenance")
+		sm.listResponses = map[string][]*secretmanagerpb.Secret{
+			mcRegistrationLabelFilter: {s1, s2},
 		}
-	}
 
-	t.Run("returns intersection of SM and Maestro sets", func(t *testing.T) {
-		sm := makeSM("mc-a", "mc-b", "mc-c")
-		srv := maestroServer(t, http.StatusOK, maestroResponse("mc-b", "mc-c", "mc-d"))
-		defer srv.Close()
-
-		s := newSelector(sm, srv)
+		s := newSelector(sm, []string{"example.com"})
 		eligible, err := s.eligibleMCs(ctx)
 		require.NoError(t, err)
-		assert.ElementsMatch(t, []string{"mc-b", "mc-c"}, eligible)
+		assert.Equal(t, []string{"proj-a"}, eligible)
 	})
 
-	t.Run("SM returns empty → no eligible MCs", func(t *testing.T) {
-		sm := makeSM() // no secrets
-		srv := maestroServer(t, http.StatusOK, maestroResponse("mc-a"))
-		defer srv.Close()
-
-		s := newSelector(sm, srv)
+	t.Run("no secrets → empty slice, no error", func(t *testing.T) {
+		sm := &mockSMLookup{listResponses: map[string][]*secretmanagerpb.Secret{}}
+		s := newSelector(sm, []string{"example.com"})
 		eligible, err := s.eligibleMCs(ctx)
 		require.NoError(t, err)
 		assert.Empty(t, eligible)
 	})
 
-	t.Run("Maestro returns empty → no eligible MCs", func(t *testing.T) {
-		sm := makeSM("mc-a", "mc-b")
-		srv := maestroServer(t, http.StatusOK, maestroResponse())
-		defer srv.Close()
-
-		s := newSelector(sm, srv)
-		eligible, err := s.eligibleMCs(ctx)
-		require.NoError(t, err)
-		assert.Empty(t, eligible)
-	})
-
-	t.Run("no overlap between SM and Maestro → empty", func(t *testing.T) {
-		sm := makeSM("mc-a", "mc-b")
-		srv := maestroServer(t, http.StatusOK, maestroResponse("mc-c", "mc-d"))
-		defer srv.Close()
-
-		s := newSelector(sm, srv)
-		eligible, err := s.eligibleMCs(ctx)
-		require.NoError(t, err)
-		assert.Empty(t, eligible)
-	})
-
-	t.Run("SM error → error propagated", func(t *testing.T) {
-		sm := &mockSMLookup{listErr: fmt.Errorf("sm down")}
-		srv := maestroServer(t, http.StatusOK, maestroResponse("mc-a"))
-		defer srv.Close()
-
-		s := newSelector(sm, srv)
+	t.Run("listSecrets error → wrapped error", func(t *testing.T) {
+		sm := &mockSMLookup{listErr: fmt.Errorf("gcp unavailable")}
+		s := newSelector(sm, []string{"example.com"})
 		_, err := s.eligibleMCs(ctx)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "secret manager MC lookup")
+		assert.Contains(t, err.Error(), "list mc-registration secrets")
+		assert.Contains(t, err.Error(), "gcp unavailable")
 	})
 
-	t.Run("Maestro error → error propagated", func(t *testing.T) {
-		sm := makeSM("mc-a")
-		srv := maestroServer(t, http.StatusInternalServerError, []byte("maestro down"))
-		defer srv.Close()
-
-		s := newSelector(sm, srv)
+	t.Run("accessSecretVersion error → wrapped error mentioning secret name", func(t *testing.T) {
+		sm := &mockSMLookup{
+			listResponses: map[string][]*secretmanagerpb.Secret{
+				mcRegistrationLabelFilter: {smSecret("projects/p/secrets/mc-registration-a", nil)},
+			},
+			accessErrs: map[string]error{
+				"projects/p/secrets/mc-registration-a/versions/latest": fmt.Errorf("permission denied"),
+			},
+		}
+		s := newSelector(sm, []string{"example.com"})
 		_, err := s.eligibleMCs(ctx)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "maestro consumer lookup")
+		assert.Contains(t, err.Error(), "access secret")
+		assert.Contains(t, err.Error(), "permission denied")
+	})
+
+	t.Run("invalid JSON payload → error", func(t *testing.T) {
+		sm := &mockSMLookup{
+			listResponses: map[string][]*secretmanagerpb.Secret{
+				mcRegistrationLabelFilter: {smSecret("projects/p/secrets/mc-registration-a", nil)},
+			},
+			accessResponses: map[string][]byte{
+				"projects/p/secrets/mc-registration-a/versions/latest": []byte("not-json"),
+			},
+		}
+		s := newSelector(sm, []string{"example.com"})
+		_, err := s.eligibleMCs(ctx)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unmarshal")
+	})
+
+	t.Run("secret with empty projectId is excluded even if active", func(t *testing.T) {
+		sm := &mockSMLookup{
+			listResponses: map[string][]*secretmanagerpb.Secret{
+				mcRegistrationLabelFilter: {smSecret("projects/p/secrets/mc-registration-a", nil)},
+			},
+			accessResponses: map[string][]byte{
+				"projects/p/secrets/mc-registration-a/versions/latest": mcRegistrationJSON("", "active"),
+			},
+		}
+		s := newSelector(sm, []string{"example.com"})
+		eligible, err := s.eligibleMCs(ctx)
+		require.NoError(t, err)
+		assert.Empty(t, eligible)
 	})
 }
 
@@ -430,60 +194,53 @@ func TestDynamicSelector_eligibleMCs(t *testing.T) {
 func TestDynamicSelector_Select(t *testing.T) {
 	ctx := context.Background()
 
-	// buildFullMock wires up SM with the given MC names (in both SM and Maestro)
-	// and the given DNS domains, then returns the selector + test server.
-	buildFullMock := func(t *testing.T, mcNames []string, domains string) (*DynamicSelector, *httptest.Server) {
-		t.Helper()
-		secrets := make([]*secretmanagerpb.Secret, 0, len(mcNames))
-		for i, n := range mcNames {
-			secrets = append(secrets, smSecret(
-				fmt.Sprintf("projects/p/secrets/mc%d", i),
-				map[string]string{"maestro-consumer-name": n},
-			))
+	// buildMock wires up SM with mc-registration secrets for the given
+	// (projectID, mode) pairs, all active unless mode is overridden.
+	buildMock := func(projectIDs ...string) *mockSMLookup {
+		sm := &mockSMLookup{}
+		secrets := make([]*secretmanagerpb.Secret, 0, len(projectIDs))
+		for i, p := range projectIDs {
+			name := fmt.Sprintf("projects/p/secrets/mc-registration-%d", i)
+			secrets = append(secrets, registrationSecret(sm, name, p, "active"))
 		}
-		sm := &mockSMLookup{
-			listResponses: map[string][]*secretmanagerpb.Secret{
-				filterMCNames: secrets,
-				filterArgoCD:  {smSecret("projects/p/secrets/argocd", nil)},
-			},
-			secretData: dnsPayload(domains),
+		sm.listResponses = map[string][]*secretmanagerpb.Secret{
+			mcRegistrationLabelFilter: secrets,
 		}
-		srv := maestroServer(t, http.StatusOK, maestroResponse(mcNames...))
-		return newSelector(sm, srv), srv
+		return sm
 	}
 
 	t.Run("happy path: returns single MC and domain", func(t *testing.T) {
-		s, srv := buildFullMock(t, []string{"mc-a"}, "us-central1.example.com")
-		defer srv.Close()
+		sm := buildMock("proj-a")
+		s := newSelector(sm, []string{"us-central1.example.com"})
 
-		mc, domain, err := s.Select(ctx, nil)
+		mc, domain, err := s.Select(ctx)
 		require.NoError(t, err)
-		assert.Equal(t, "mc-a", mc)
+		assert.Equal(t, "proj-a", mc)
 		assert.Equal(t, "us-central1.example.com", domain)
 	})
 
 	t.Run("round-robins across multiple eligible MCs", func(t *testing.T) {
-		s, srv := buildFullMock(t, []string{"mc-a", "mc-b", "mc-c"}, "example.com")
-		defer srv.Close()
+		sm := buildMock("proj-a", "proj-b", "proj-c")
+		s := newSelector(sm, []string{"example.com"})
 
 		seen := map[string]bool{}
 		for i := 0; i < 6; i++ {
-			mc, _, err := s.Select(ctx, nil)
+			mc, _, err := s.Select(ctx)
 			require.NoError(t, err)
 			seen[mc] = true
 		}
-		assert.True(t, seen["mc-a"], "mc-a should be selected at least once")
-		assert.True(t, seen["mc-b"], "mc-b should be selected at least once")
-		assert.True(t, seen["mc-c"], "mc-c should be selected at least once")
+		assert.True(t, seen["proj-a"], "proj-a should be selected at least once")
+		assert.True(t, seen["proj-b"], "proj-b should be selected at least once")
+		assert.True(t, seen["proj-c"], "proj-c should be selected at least once")
 	})
 
 	t.Run("round-robins across multiple DNS domains independently", func(t *testing.T) {
-		s, srv := buildFullMock(t, []string{"mc-a"}, "zone1.example.com,zone2.example.com")
-		defer srv.Close()
+		sm := buildMock("proj-a")
+		s := newSelector(sm, []string{"zone1.example.com", "zone2.example.com"})
 
 		seen := map[string]bool{}
 		for i := 0; i < 4; i++ {
-			_, domain, err := s.Select(ctx, nil)
+			_, domain, err := s.Select(ctx)
 			require.NoError(t, err)
 			seen[domain] = true
 		}
@@ -492,60 +249,41 @@ func TestDynamicSelector_Select(t *testing.T) {
 	})
 
 	t.Run("no eligible MCs → error mentioning check hint", func(t *testing.T) {
-		// SM has mc-a but Maestro has none → intersection is empty
-		sm := &mockSMLookup{
-			listResponses: map[string][]*secretmanagerpb.Secret{
-				filterMCNames: {smSecret("s1", map[string]string{"maestro-consumer-name": "mc-a"})},
-			},
-		}
-		srv := maestroServer(t, http.StatusOK, maestroResponse()) // no consumers
-		defer srv.Close()
+		sm := &mockSMLookup{listResponses: map[string][]*secretmanagerpb.Secret{}}
+		s := newSelector(sm, []string{"example.com"})
 
-		s := newSelector(sm, srv)
-		_, _, err := s.Select(ctx, nil)
+		_, _, err := s.Select(ctx)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "no eligible management clusters")
 	})
 
-	t.Run("no DNS domains in secret → error mentioning project", func(t *testing.T) {
-		sm := &mockSMLookup{
-			listResponses: map[string][]*secretmanagerpb.Secret{
-				filterMCNames: {smSecret("s1", map[string]string{"maestro-consumer-name": "mc-a"})},
-				filterArgoCD:  {smSecret("projects/p/secrets/argocd", nil)},
-			},
-			secretData: dnsPayload(""), // empty domains
+	t.Run("all MCs in maintenance → no eligible MCs error", func(t *testing.T) {
+		sm := &mockSMLookup{}
+		secret := registrationSecret(sm, "projects/p/secrets/mc-registration-a", "proj-a", "maintenance")
+		sm.listResponses = map[string][]*secretmanagerpb.Secret{
+			mcRegistrationLabelFilter: {secret},
 		}
-		srv := maestroServer(t, http.StatusOK, maestroResponse("mc-a"))
-		defer srv.Close()
+		s := newSelector(sm, []string{"example.com"})
 
-		s := newSelector(sm, srv)
-		_, _, err := s.Select(ctx, nil)
+		_, _, err := s.Select(ctx)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no eligible management clusters")
+	})
+
+	t.Run("no DNS domains configured → error", func(t *testing.T) {
+		sm := buildMock("proj-a")
+		s := newSelector(sm, nil)
+
+		_, _, err := s.Select(ctx)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "no HC DNS domains")
 	})
 
 	t.Run("SM error during eligible MC discovery → error propagated", func(t *testing.T) {
 		sm := &mockSMLookup{listErr: fmt.Errorf("gcp outage")}
-		srv := maestroServer(t, http.StatusOK, maestroResponse("mc-a"))
-		defer srv.Close()
+		s := newSelector(sm, []string{"example.com"})
 
-		s := newSelector(sm, srv)
-		_, _, err := s.Select(ctx, nil)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "discover eligible MCs")
-	})
-
-	t.Run("Maestro error → error propagated through Select", func(t *testing.T) {
-		sm := &mockSMLookup{
-			listResponses: map[string][]*secretmanagerpb.Secret{
-				filterMCNames: {smSecret("s1", map[string]string{"maestro-consumer-name": "mc-a"})},
-			},
-		}
-		srv := maestroServer(t, http.StatusServiceUnavailable, []byte("down"))
-		defer srv.Close()
-
-		s := newSelector(sm, srv)
-		_, _, err := s.Select(ctx, nil)
+		_, _, err := s.Select(ctx)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "discover eligible MCs")
 	})

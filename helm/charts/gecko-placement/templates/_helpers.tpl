@@ -72,9 +72,10 @@ Validate required values.
 {{- if not (trim (toString .Values.image.tag)) -}}
 {{- fail "image.tag must be set (e.g. --set image.tag=abc1234)" -}}
 {{- end -}}
-{{- if not .Values.secretManagerProject -}}
-{{- if not .Values.candidates -}}
-{{- fail "either secretManagerProject or candidates must be set" -}}
+{{- if not (trim (toString .Values.secretManagerProject)) -}}
+{{- fail "secretManagerProject must be set" -}}
 {{- end -}}
+{{- if not (trim (toString .Values.hcDnsDomains)) -}}
+{{- fail "hcDnsDomains must be set" -}}
 {{- end -}}
 {{- end }}
