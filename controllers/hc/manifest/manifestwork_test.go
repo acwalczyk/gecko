@@ -215,6 +215,17 @@ func TestBuild_Labels(t *testing.T) {
 	require.Equal(t, "hosted-cluster", mw.Labels["hyperfleet.io/component"])
 }
 
+func TestBuild_RBACJobEmptyCreatedBy(t *testing.T) {
+	input := testInput()
+	input.CreatedBy = ""
+	mw, err := manifest.Build(input)
+	require.NoError(t, err)
+
+	var obj map[string]any
+	require.NoError(t, json.Unmarshal(mw.Spec.Workload.Manifests[4].Raw, &obj))
+	require.Equal(t, "Job", obj["kind"])
+}
+
 func TestBuild_GenerationAnnotation(t *testing.T) {
 	input := testInput()
 	mw, err := manifest.Build(input)

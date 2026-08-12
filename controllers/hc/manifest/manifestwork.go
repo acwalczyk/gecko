@@ -434,6 +434,16 @@ func buildRBACJob(input Input, hcNS string) (workv1.Manifest, error) {
 	ttl := int64(300)
 	backoffLimit := int32(10)
 	activeDeadline := int64(1800)
+	subjects := `- apiGroup: rbac.authorization.k8s.io
+  kind: Group
+  name: redhat.com`
+	if input.CreatedBy != "" {
+		subjects += fmt.Sprintf(`
+- apiGroup: rbac.authorization.k8s.io
+  kind: User
+  name: "%s"`, input.CreatedBy)
+	}
+
 	clusterAdminScript := fmt.Sprintf(`set -euo pipefail
 
 echo "Waiting for API server to be fully ready (up to 25 minutes)..."
@@ -466,19 +476,14 @@ roleRef:
   kind: ClusterRole
   name: cluster-admin
 subjects:
-- apiGroup: rbac.authorization.k8s.io
-  kind: Group
-  name: redhat.com
-- apiGroup: rbac.authorization.k8s.io
-  kind: User
-  name: "%s"
+%s
 EOF
 
 echo "ClusterRoleBinding created successfully"
 
 echo "Verifying ClusterRoleBinding..."
 kubectl --kubeconfig=/kubeconfig/kubeconfig get clusterrolebinding redhat-domain-admins -o yaml
-`, input.CreatedBy)
+`, subjects)
 
 	obj := map[string]any{
 		"apiVersion": "batch/v1",
