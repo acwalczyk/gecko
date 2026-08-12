@@ -7,7 +7,7 @@ require (
 	github.com/go-logr/logr v1.4.4
 	github.com/openshift-online/gecko/platform-api v0.0.0-00010101000000-000000000000
 	github.com/openshift-online/maestro v0.0.0-20260804152054-ab480c6578bc
-	github.com/openshift-online/ocm-sdk-go v0.1.507
+	github.com/openshift-online/ocm-sdk-go v0.1.508
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
 	go.opentelemetry.io/otel/trace v1.44.0
