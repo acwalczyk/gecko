@@ -29,18 +29,25 @@ var (
 	conversionTestServerStarted bool
 )
 
-// freePort asks the OS for an available port, then closes the listener so the
-// port can be used by the test server. This avoids hardcoding ports that
-// collide when tests run in parallel.
-func freePort(t *testing.T) int {
+// freePorts returns n distinct OS-assigned ports. It keeps every listener open
+// until all ports are chosen, so the OS cannot assign the same port twice, then
+// closes them for the caller to bind.
+func freePorts(t *testing.T, n int) []int {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("failed to get free port: %v", err)
+	listeners := make([]net.Listener, n)
+	ports := make([]int, n)
+	for i := range ports {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("failed to get free port: %v", err)
+		}
+		listeners[i] = l
+		ports[i] = l.Addr().(*net.TCPAddr).Port
 	}
-	port := l.Addr().(*net.TCPAddr).Port
-	l.Close()
-	return port
+	for _, l := range listeners {
+		l.Close()
+	}
+	return ports
 }
 
 // ensureConversionTestServer starts the test server with both public and private APIs if not already started
@@ -89,19 +96,22 @@ func ensureConversionTestServer(t *testing.T) {
 		return memory.NewMemoryStore(resourceType, s, gvk), nil
 	}
 
+	// Get two distinct ports for private and public APIs
+	ports := freePorts(t, 2)
+
 	// Start server with both private and public APIs
 	opts := apiserver.Options{
 		Address:     "127.0.0.1",
 		CORSOrigins: []string{"*"},
 		Private: apiserver.PrivateAPIOptions{
-			Port:        freePort(t),
+			Port:        ports[0],
 			Resources:   privateResources,
 			Scheme:      privateScheme,
 			DisableAuth: true,
 		},
 		Public: apiserver.PublicAPIOptions{
 			Enable:    true,
-			Port:      freePort(t),
+			Port:      ports[1],
 			Resources: publicResources,
 			Scheme:    publicScheme,
 		},
