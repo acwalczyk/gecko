@@ -45,10 +45,6 @@ spec:
             - --log-level={{ .Values.logLevel }}
             - --log-format={{ .Values.logFormat }}
             - --workers={{ .Values.workers }}
-            - --maestro-grpc-addr={{ .Values.maestro.grpcAddr }}
-            - --maestro-http-addr={{ .Values.maestro.httpAddr }}
-            - --maestro-source-id={{ .Values.maestro.sourceID }}
-            - --maestro-insecure={{ .Values.maestro.insecure }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       {{- with .Values.nodeSelector }}

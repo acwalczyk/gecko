@@ -14,12 +14,6 @@ logLevel: info
 logFormat: json
 workers: 10
 
-maestro:
-  grpcAddr: "maestro-grpc.hyperfleet.svc.cluster.local:8090"
-  httpAddr: "http://maestro.hyperfleet.svc.cluster.local:8000"
-  sourceID: nodepool-controller
-  insecure: true
-
 serviceAccount:
   create: true
   annotations: {}

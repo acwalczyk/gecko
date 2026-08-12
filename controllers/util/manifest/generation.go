@@ -4,10 +4,7 @@
 // This package handles:
 //   - Manifest validation (apiVersion, kind, name, generation annotation)
 //   - Generation annotation extraction and comparison
-//   - ManifestWork validation for OCM
 //   - Discovery interface for finding resources/manifests
-//
-// Used by both k8sclient (Kubernetes resources) and maestroclient (ManifestWork).
 package manifest
 
 import (
@@ -20,7 +17,6 @@ import (
 	apperrors "github.com/openshift-online/gecko/controllers/util/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	workv1 "open-cluster-management.io/api/work/v1"
 )
 
 // Operation represents the type of operation to perform on a resource
@@ -166,40 +162,6 @@ func ValidateGeneration(meta metav1.ObjectMeta) error {
 
 	if gen <= 0 {
 		return apperrors.Validation("%s annotation must be > 0, got %d", constants.AnnotationGeneration, gen).AsError()
-	}
-
-	return nil
-}
-
-// ValidateManifestWorkGeneration validates that the generation annotation exists on both:
-// 1. The ManifestWork metadata (required)
-// 2. All manifests within the ManifestWork workload (required)
-//
-// Returns error if any generation annotation is missing or invalid.
-// This ensures templates properly set generation annotations throughout the ManifestWork.
-func ValidateManifestWorkGeneration(work *workv1.ManifestWork) error {
-	if work == nil {
-		return apperrors.Validation("work cannot be nil").AsError()
-	}
-
-	// Validate ManifestWork-level generation (required)
-	if err := ValidateGeneration(work.ObjectMeta); err != nil {
-		return apperrors.Validation("ManifestWork %q: %v", work.Name, err).AsError()
-	}
-
-	// Validate each manifest has generation annotation (required)
-	for i, m := range work.Spec.Workload.Manifests {
-		obj := &unstructured.Unstructured{}
-		if err := obj.UnmarshalJSON(m.Raw); err != nil {
-			return apperrors.Validation("ManifestWork %q manifest[%d]: failed to unmarshal: %v", work.Name, i, err).AsError()
-		}
-
-		// Validate generation annotation exists
-		if err := ValidateGenerationFromUnstructured(obj); err != nil {
-			kind := obj.GetKind()
-			name := obj.GetName()
-			return apperrors.Validation("ManifestWork %q manifest[%d] %s/%s: %v", work.Name, i, kind, name, err).AsError()
-		}
 	}
 
 	return nil
@@ -361,151 +323,4 @@ func BuildLabelSelector(labels map[string]string) string {
 		pairs = append(pairs, k+"="+labels[k])
 	}
 	return strings.Join(pairs, ",")
-}
-
-// MatchesLabels checks if an object's labels match the given label selector.
-// Returns true if all selector labels are present in the object's labels.
-func MatchesLabels(obj *unstructured.Unstructured, labelSelector string) bool {
-	if labelSelector == "" {
-		return true
-	}
-
-	objLabels := obj.GetLabels()
-	if objLabels == nil {
-		return false
-	}
-
-	// Parse selector string (e.g., "app=myapp,env=prod")
-	pairs := strings.Split(labelSelector, ",")
-	for _, pair := range pairs {
-		kv := strings.SplitN(pair, "=", 2)
-		if len(kv) != 2 {
-			continue
-		}
-		key, value := kv[0], kv[1]
-		if objLabels[key] != value {
-			return false
-		}
-	}
-
-	return true
-}
-
-// DiscoverNestedManifest finds manifests within a parent resource (e.g., ManifestWork)
-// that match the discovery criteria. The parent is expected to contain nested manifests at
-// spec.workload.manifests (OCM ManifestWork structure).
-//
-// Parameters:
-//   - parent: The parent unstructured resource containing nested manifests
-//   - discovery: Discovery configuration (namespace, name, or label selector)
-//
-// Returns:
-//   - List of matching manifests as unstructured objects
-//   - The manifest with the highest generation if multiple match
-func DiscoverNestedManifest(
-	parent *unstructured.Unstructured,
-	discovery Discovery,
-) (*unstructured.UnstructuredList, error) {
-	list := &unstructured.UnstructuredList{}
-
-	if parent == nil || discovery == nil {
-		return list, nil
-	}
-
-	// Extract spec.workload.manifests from the unstructured parent
-	manifests, found, err := unstructured.NestedSlice(
-		parent.Object, "spec", "workload", "manifests")
-	if err != nil {
-		return nil, apperrors.Validation(
-			"failed to extract spec.workload.manifests from %q: %v",
-			parent.GetName(), err)
-	}
-	if !found {
-		return list, nil
-	}
-
-	for i, m := range manifests {
-		manifestMap, ok := m.(map[string]interface{})
-		if !ok {
-			return nil, apperrors.Validation("%q manifest[%d]: unexpected type %T",
-				parent.GetName(), i, m)
-		}
-
-		obj := &unstructured.Unstructured{Object: manifestMap}
-
-		// Check if manifest matches discovery criteria
-		if MatchesDiscoveryCriteria(obj, discovery) {
-			list.Items = append(list.Items, *obj)
-		}
-	}
-
-	return list, nil
-}
-
-// EnrichWithResourceStatus finds the matching status.resourceStatus.manifests[] entry
-// in the parent resource and merges its statusFeedback and conditions onto the nested object.
-// Correlation uses resourceMeta.name + resourceMeta.namespace matching against the nested
-// object's metadata.name and metadata.namespace.
-// No-op if parent or nested is nil, or if no matching entry is found.
-func EnrichWithResourceStatus(parent, nested *unstructured.Unstructured) {
-	if parent == nil || nested == nil {
-		return
-	}
-
-	statusManifests, found, err := unstructured.NestedSlice(
-		parent.Object, "status", "resourceStatus", "manifests")
-	if err != nil || !found {
-		return
-	}
-
-	nestedName := nested.GetName()
-	nestedNamespace := nested.GetNamespace()
-
-	for _, entry := range statusManifests {
-		entryMap, ok := entry.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		resourceMeta, ok := entryMap["resourceMeta"].(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		metaName, ok := resourceMeta["name"].(string)
-		if !ok {
-			continue
-		}
-		metaNamespace, ok := resourceMeta["namespace"].(string)
-		if !ok {
-			continue
-		}
-
-		if metaName == nestedName && metaNamespace == nestedNamespace {
-			if sf, exists := entryMap["statusFeedback"]; exists {
-				nested.Object["statusFeedback"] = sf
-			}
-			if conds, exists := entryMap["conditions"]; exists {
-				nested.Object["conditions"] = conds
-			}
-			return
-		}
-	}
-}
-
-// MatchesDiscoveryCriteria checks if a resource matches the discovery criteria
-// (namespace, name, or labels).
-func MatchesDiscoveryCriteria(obj *unstructured.Unstructured, discovery Discovery) bool {
-	// Check namespace if specified
-	if ns := discovery.GetNamespace(); ns != "" && obj.GetNamespace() != ns {
-		return false
-	}
-
-	// Check name if single resource discovery
-	if discovery.IsSingleResource() {
-		return obj.GetName() == discovery.GetName()
-	}
-
-	// Check label selector
-	return MatchesLabels(obj, discovery.GetLabelSelector())
 }
