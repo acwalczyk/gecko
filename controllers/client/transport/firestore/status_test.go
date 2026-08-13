@@ -100,6 +100,36 @@ func TestExtractResourceStatuses_HostedCluster(t *testing.T) {
 	assert.Equal(t, "4.14.0", statuses[key]["version"])
 }
 
+func TestExtractResourceStatuses_HostedCluster_PartialVersionSkipped(t *testing.T) {
+	// History is newest-first: the first entry is Partial (upgrade in progress).
+	// Only the Completed entry should be reported as the cluster version.
+	hcJSON, err := json.Marshal(map[string]any{
+		"status": map[string]any{
+			"conditions": []any{
+				map[string]any{"type": "Available", "status": "True"},
+			},
+			"version": map[string]any{
+				"history": []any{
+					map[string]any{"version": "4.15.0", "state": "Partial"},
+					map[string]any{"version": "4.14.0", "state": "Completed"},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	ref := kubeapplier.ResourceReference{
+		Group: "hypershift.openshift.io", Version: "v1beta1",
+		Resource: "hostedclusters", Namespace: "clusters-abc", Name: "my-hc",
+	}
+	reads := []kubeapplier.ReadDesire{makeReadDesire(ref, hcJSON)}
+	statuses := extractResourceStatuses(reads)
+
+	key := "hypershift.openshift.io/v1beta1/hostedclusters/clusters-abc/my-hc"
+	require.Contains(t, statuses, key)
+	assert.Equal(t, "4.14.0", statuses[key]["version"], "should report the last Completed version, not the Partial one")
+}
+
 func TestExtractResourceStatuses_NodePool(t *testing.T) {
 	npJSON, err := json.Marshal(map[string]any{
 		"status": map[string]any{

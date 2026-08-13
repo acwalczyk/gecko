@@ -147,8 +147,11 @@ func extractHCFields(raw []byte) map[string]string {
 		fields["controlPlaneEndpoint"] = host
 	}
 
-	if len(obj.Status.Version.History) > 0 {
-		fields["version"] = obj.Status.Version.History[0].Version
+	for _, h := range obj.Status.Version.History {
+		if h.State == "Completed" {
+			fields["version"] = h.Version
+			break
+		}
 	}
 
 	return fields
