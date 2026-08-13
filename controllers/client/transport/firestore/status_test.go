@@ -91,7 +91,8 @@ func TestExtractResourceStatuses_HostedCluster(t *testing.T) {
 		Resource: "hostedclusters", Namespace: "clusters-abc", Name: "my-hc",
 	}
 	reads := []kubeapplier.ReadDesire{makeReadDesire(ref, hcJSON)}
-	statuses := extractResourceStatuses(reads)
+	statuses, err := extractResourceStatuses(reads)
+	require.NoError(t, err)
 
 	key := "hypershift.openshift.io/v1beta1/hostedclusters/clusters-abc/my-hc"
 	require.Contains(t, statuses, key)
@@ -123,7 +124,8 @@ func TestExtractResourceStatuses_HostedCluster_PartialVersionSkipped(t *testing.
 		Resource: "hostedclusters", Namespace: "clusters-abc", Name: "my-hc",
 	}
 	reads := []kubeapplier.ReadDesire{makeReadDesire(ref, hcJSON)}
-	statuses := extractResourceStatuses(reads)
+	statuses, err := extractResourceStatuses(reads)
+	require.NoError(t, err)
 
 	key := "hypershift.openshift.io/v1beta1/hostedclusters/clusters-abc/my-hc"
 	require.Contains(t, statuses, key)
@@ -146,7 +148,8 @@ func TestExtractResourceStatuses_NodePool(t *testing.T) {
 		Resource: "nodepools", Namespace: "clusters-abc", Name: "my-np",
 	}
 	reads := []kubeapplier.ReadDesire{makeReadDesire(ref, npJSON)}
-	statuses := extractResourceStatuses(reads)
+	statuses, err := extractResourceStatuses(reads)
+	require.NoError(t, err)
 
 	key := "hypershift.openshift.io/v1beta1/nodepools/clusters-abc/my-np"
 	require.Contains(t, statuses, key)
@@ -160,9 +163,20 @@ func TestExtractResourceStatuses_NilKubeContent(t *testing.T) {
 		Resource: "hostedclusters", Namespace: "clusters-abc", Name: "my-hc",
 	}
 	reads := []kubeapplier.ReadDesire{makeReadDesire(ref, nil)}
-	statuses := extractResourceStatuses(reads)
+	statuses, err := extractResourceStatuses(reads)
+	require.NoError(t, err)
 	// Key is present but inner map is empty
 	key := "hypershift.openshift.io/v1beta1/hostedclusters/clusters-abc/my-hc"
 	assert.Contains(t, statuses, key)
 	assert.Empty(t, statuses[key])
+}
+
+func TestExtractResourceStatuses_CorruptKubeContent_ReturnsError(t *testing.T) {
+	ref := kubeapplier.ResourceReference{
+		Group: "hypershift.openshift.io", Version: "v1beta1",
+		Resource: "hostedclusters", Namespace: "clusters-abc", Name: "my-hc",
+	}
+	reads := []kubeapplier.ReadDesire{makeReadDesire(ref, []byte("not valid json"))}
+	_, err := extractResourceStatuses(reads)
+	require.Error(t, err)
 }

@@ -84,7 +84,7 @@ func aggregateConditions(desires []kubeapplier.ApplyDesire) []metav1.Condition {
 // For HostedCluster resources it extracts: availableCondition, controlPlaneEndpoint, version.
 // For NodePool resources it extracts: readyCondition, allNodesHealthyCondition.
 // Other resources: empty inner map (no known fields to extract).
-func extractResourceStatuses(reads []kubeapplier.ReadDesire) map[string]map[string]string {
+func extractResourceStatuses(reads []kubeapplier.ReadDesire) (map[string]map[string]string, error) {
 	result := make(map[string]map[string]string, len(reads))
 	for _, rd := range reads {
 		key := resourceKey(rd.Spec.TargetItem)
@@ -96,23 +96,27 @@ func extractResourceStatuses(reads []kubeapplier.ReadDesire) map[string]map[stri
 		}
 
 		ref := rd.Spec.TargetItem
+		var err error
 		switch {
 		case ref.Resource == "hostedclusters" && ref.Group == constants.HyperShiftGroup:
-			fields = extractHCFields(rd.Status.KubeContent.Raw)
+			fields, err = extractHCFields(rd.Status.KubeContent.Raw)
 		case ref.Resource == "nodepools" && ref.Group == constants.HyperShiftGroup:
-			fields = extractNPFields(rd.Status.KubeContent.Raw)
+			fields, err = extractNPFields(rd.Status.KubeContent.Raw)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("extract resource status %s: %w", key, err)
 		}
 
 		result[key] = fields
 	}
-	return result
+	return result, nil
 }
 
 // extractHCFields extracts HostedCluster status fields from raw live-object JSON.
 //   - availableCondition: .status.conditions[type=Available].status
 //   - controlPlaneEndpoint: .status.controlPlaneEndpoint.host
 //   - version: .status.version.history[0].version
-func extractHCFields(raw []byte) map[string]string {
+func extractHCFields(raw []byte) (map[string]string, error) {
 	fields := map[string]string{}
 
 	var obj struct {
@@ -133,7 +137,7 @@ func extractHCFields(raw []byte) map[string]string {
 		} `json:"status"`
 	}
 	if err := json.Unmarshal(raw, &obj); err != nil {
-		return fields
+		return nil, fmt.Errorf("unmarshal HostedCluster live object: %w", err)
 	}
 
 	for _, c := range obj.Status.Conditions {
@@ -154,13 +158,13 @@ func extractHCFields(raw []byte) map[string]string {
 		}
 	}
 
-	return fields
+	return fields, nil
 }
 
 // extractNPFields extracts NodePool status fields from raw live-object JSON.
 //   - readyCondition: .status.conditions[type=Ready].status
 //   - allNodesHealthyCondition: .status.conditions[type=AllNodesHealthy].status
-func extractNPFields(raw []byte) map[string]string {
+func extractNPFields(raw []byte) (map[string]string, error) {
 	fields := map[string]string{}
 
 	var obj struct {
@@ -172,7 +176,7 @@ func extractNPFields(raw []byte) map[string]string {
 		} `json:"status"`
 	}
 	if err := json.Unmarshal(raw, &obj); err != nil {
-		return fields
+		return nil, fmt.Errorf("unmarshal NodePool live object: %w", err)
 	}
 
 	for _, c := range obj.Status.Conditions {
@@ -184,5 +188,5 @@ func extractNPFields(raw []byte) map[string]string {
 		}
 	}
 
-	return fields
+	return fields, nil
 }

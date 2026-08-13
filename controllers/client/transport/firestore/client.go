@@ -250,9 +250,14 @@ func (c *Client) GetStatus(ctx context.Context, targetCluster, clusterID string)
 		}
 	}
 
+	resourceStatuses, err := extractResourceStatuses(readDesires)
+	if err != nil {
+		return nil, fmt.Errorf("firestore transport: GetStatus %s/%s: %w", targetCluster, clusterID, err)
+	}
+
 	return &transport.Status{
 		Conditions:       aggregateConditions(applyDesires),
-		ResourceStatuses: extractResourceStatuses(readDesires),
+		ResourceStatuses: resourceStatuses,
 	}, nil
 }
 
