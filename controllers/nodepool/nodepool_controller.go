@@ -175,7 +175,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 	managementCluster := cluster.Status.PlacementResult.ManagementClusterName
 
-	mwStatus, err := r.transport.Apply(ctx, managementCluster, clusterID, manifests)
+	mwStatus, err := r.transport.Apply(ctx, managementCluster, nodepoolID, manifests)
 	if err != nil {
 		return reconcile.Result{}, fmt.Errorf("nodepool reconciler: apply resources: %w", err)
 	}
