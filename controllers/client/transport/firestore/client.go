@@ -269,23 +269,18 @@ func (c *Client) Delete(ctx context.Context, targetCluster, clusterID string) er
 		return err
 	}
 
-	// Query ApplyDesire specs docs to find all resources for this clusterID.
-	applySnaps, err := mc.specs.Collection(collectionApplyDesires).
-		Where("spec.clusterID", "==", clusterID).
-		Documents(ctx).GetAll()
-	if err != nil {
-		return fmt.Errorf("firestore transport: Delete %s/%s query apply desires: %w", targetCluster, clusterID, err)
-	}
-
-	if len(applySnaps) == 0 {
-		c.log.Infof(ctx, "firestore transport: Delete %s/%s: no apply desires found, nothing to delete", targetCluster, clusterID)
-		return nil
-	}
-
-	// Use a transaction to atomically write DeleteDesires and remove
-	// ApplyDesire/ReadDesire docs. This prevents partial state where source
-	// docs are deleted but DeleteDesires are not written.
+	// Use a transaction to atomically query, write DeleteDesires, and remove
+	// ApplyDesire/ReadDesire docs. Reading inside the transaction ensures
+	// Firestore detects concurrent Apply writes and retries on conflict.
+	var count int
+	query := mc.specs.Collection(collectionApplyDesires).Where("spec.clusterID", "==", clusterID)
 	err = mc.specs.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		count = 0
+		applySnaps, err := tx.Documents(query).GetAll()
+		if err != nil {
+			return fmt.Errorf("query apply desires: %w", err)
+		}
+
 		for _, snap := range applySnaps {
 			var ad kubeapplier.ApplyDesire
 			if err := snap.DataTo(&ad); err != nil {
@@ -312,6 +307,7 @@ func (c *Client) Delete(ctx context.Context, targetCluster, clusterID string) er
 			if err := tx.Delete(snap.Ref); err != nil {
 				return fmt.Errorf("delete apply desire: %w", err)
 			}
+			count++
 		}
 		return nil
 	})
@@ -319,7 +315,12 @@ func (c *Client) Delete(ctx context.Context, targetCluster, clusterID string) er
 		return fmt.Errorf("firestore transport: Delete %s/%s transaction: %w", targetCluster, clusterID, err)
 	}
 
-	c.log.Infof(ctx, "firestore transport: deleted %d resources for %s/%s", len(applySnaps), targetCluster, clusterID)
+	if count == 0 {
+		c.log.Infof(ctx, "firestore transport: Delete %s/%s: no apply desires found, nothing to delete", targetCluster, clusterID)
+		return nil
+	}
+
+	c.log.Infof(ctx, "firestore transport: deleted %d resources for %s/%s", count, targetCluster, clusterID)
 	return nil
 }
 
