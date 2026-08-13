@@ -21,7 +21,7 @@ func aggregateConditions(desires []kubeapplier.ApplyDesire) []metav1.Condition {
 			Type:    "Applied",
 			Status:  metav1.ConditionFalse,
 			Reason:  "NoApplyDesires",
-			Message: "No ApplyDesire documents found for this ManifestWork",
+			Message: "No ApplyDesire documents found",
 		}}
 	}
 

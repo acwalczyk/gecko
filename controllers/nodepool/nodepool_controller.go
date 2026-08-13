@@ -211,8 +211,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		}
 	}
 
-	if !meta.IsStatusConditionTrue(np.Status.Conditions, "NodePoolManifestWorkApplied") {
-		log.Infof(ctx, "nodepool reconciler: nodepool %s MW not yet applied, requeueing after %s", nodepoolID, requeuePending)
+	if !meta.IsStatusConditionTrue(np.Status.Conditions, "NodePoolResourcesApplied") {
+		log.Infof(ctx, "nodepool reconciler: nodepool %s resources not yet applied, requeueing after %s", nodepoolID, requeuePending)
 		return reconcile.Result{RequeueAfter: requeuePending}, nil
 	}
 	log.Infof(ctx, "nodepool reconciler: nodepool %s reconciled, requeueing after %s", nodepoolID, requeueStable)
@@ -229,7 +229,7 @@ func (r *Reconciler) handleDeletion(ctx context.Context, np *privatev1.NodePool,
 
 	// Only call transport.Delete if resources were applied to an MC.
 	if clusterFound &&
-		meta.FindStatusCondition(np.Status.Conditions, "NodePoolManifestWorkApplied") != nil &&
+		meta.FindStatusCondition(np.Status.Conditions, "NodePoolResourcesApplied") != nil &&
 		cluster.Status.PlacementResult != nil && cluster.Status.PlacementResult.ManagementClusterName != "" {
 		mcName := cluster.Status.PlacementResult.ManagementClusterName
 		log.Infof(ctx, "nodepool reconciler: deleting resources for nodepool %s from %s", nodepoolID, mcName)
@@ -249,12 +249,12 @@ func (r *Reconciler) handleDeletion(ctx context.Context, np *privatev1.NodePool,
 	return reconcile.Result{}, nil
 }
 
-// setWaitingNPConditions sets NodePoolManifestWorkApplied and NodePoolAvailable to Unknown.
+// setWaitingNPConditions sets NodePoolResourcesApplied and NodePoolAvailable to Unknown.
 // Returns true if either condition changed.
 func setWaitingNPConditions(np *privatev1.NodePool, reason, message string) bool {
 	gen := np.Generation
 	a := meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
-		Type:               "NodePoolManifestWorkApplied",
+		Type:               "NodePoolResourcesApplied",
 		Status:             metav1.ConditionUnknown,
 		Reason:             reason,
 		Message:            message,
@@ -277,21 +277,21 @@ func (r *Reconciler) applyStatusConditions(np *privatev1.NodePool, mwStatus *tra
 
 	if mwStatus == nil {
 		a := meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
-			Type:               "NodePoolManifestWorkApplied",
+			Type:               "NodePoolResourcesApplied",
 			Status:             metav1.ConditionFalse,
-			Reason:             "ManifestWorkNotFound",
+			Reason:             "ResourcesNotFound",
 			ObservedGeneration: gen,
 		})
 		b := meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
 			Type:               "NodePoolAvailable",
 			Status:             metav1.ConditionFalse,
-			Reason:             "ManifestWorkNotFound",
+			Reason:             "ResourcesNotFound",
 			ObservedGeneration: gen,
 		})
 		return a || b
 	}
 
-	// Extract conditions from top-level ManifestWork conditions.
+	// Extract conditions from top-level applied conditions.
 	appliedStatus := metav1.ConditionStatus("False")
 	appliedReason := "Unknown"
 	for _, c := range mwStatus.Conditions {
@@ -329,7 +329,7 @@ func (r *Reconciler) applyStatusConditions(np *privatev1.NodePool, mwStatus *tra
 	}
 
 	a := meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
-		Type:               "NodePoolManifestWorkApplied",
+		Type:               "NodePoolResourcesApplied",
 		Status:             appliedStatus,
 		Reason:             appliedReason,
 		ObservedGeneration: gen,

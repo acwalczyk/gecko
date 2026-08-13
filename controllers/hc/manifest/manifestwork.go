@@ -1,4 +1,4 @@
-// Package manifest provides the ManifestWork builder for the hc-controller.
+// Package manifest provides the manifest builder for the hc-controller.
 package manifest
 
 import (
@@ -7,7 +7,7 @@ import (
 	"strconv"
 )
 
-// Input holds all parameters needed to build the HC ManifestWork.
+// Input holds all parameters needed to build the HC manifests.
 type Input struct {
 	ClusterID                    string
 	ClusterName                  string

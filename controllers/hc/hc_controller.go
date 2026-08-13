@@ -1,4 +1,4 @@
-// Package hc implements the hc-controller reconciler for managing HostedClusters via ManifestWork.
+// Package hc implements the hc-controller reconciler for managing HostedClusters via kube-applier-gcp.
 package hc
 
 import (
@@ -183,8 +183,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		}
 	}
 
-	if !meta.IsStatusConditionTrue(cluster.Status.Conditions, "ManifestWorkApplied") {
-		log.Infof(ctx, "hc-controller: cluster %s MW not yet applied, requeueing after %s", clusterID, requeuePending)
+	if !meta.IsStatusConditionTrue(cluster.Status.Conditions, "ResourcesApplied") {
+		log.Infof(ctx, "hc-controller: cluster %s resources not yet applied, requeueing after %s", clusterID, requeuePending)
 		return reconcile.Result{RequeueAfter: requeuePending}, nil
 	}
 	log.Infof(ctx, "hc-controller: cluster %s reconciled, requeueing after %s", clusterID, requeueStable)
@@ -200,7 +200,7 @@ func (r *Reconciler) handleDeletion(ctx context.Context, cluster *privatev1.Clus
 	clusterID := cluster.Name
 
 	// Only call transport.Delete if resources were applied to an MC.
-	if meta.FindStatusCondition(cluster.Status.Conditions, "ManifestWorkApplied") != nil &&
+	if meta.FindStatusCondition(cluster.Status.Conditions, "ResourcesApplied") != nil &&
 		cluster.Status.PlacementResult != nil && cluster.Status.PlacementResult.ManagementClusterName != "" {
 		mcName := cluster.Status.PlacementResult.ManagementClusterName
 		log.Infof(ctx, "%s: deleting resources for cluster %s from %s", adapterName, clusterID, mcName)
@@ -218,12 +218,12 @@ func (r *Reconciler) handleDeletion(ctx context.Context, cluster *privatev1.Clus
 	return reconcile.Result{}, nil
 }
 
-// setWaitingConditions sets ManifestWorkApplied and HostedClusterAvailable to Unknown.
+// setWaitingConditions sets ResourcesApplied and HostedClusterAvailable to Unknown.
 // Returns true if either condition changed.
 func (r *Reconciler) setWaitingConditions(cluster *privatev1.Cluster, reason, message string) bool {
 	gen := cluster.Generation
 	a := meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
-		Type:               "ManifestWorkApplied",
+		Type:               "ResourcesApplied",
 		Status:             metav1.ConditionUnknown,
 		Reason:             reason,
 		Message:            message,
@@ -246,24 +246,24 @@ func (r *Reconciler) applyStatusConditions(cluster *privatev1.Cluster, mwStatus 
 
 	if mwStatus == nil {
 		a := meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
-			Type:               "ManifestWorkApplied",
+			Type:               "ResourcesApplied",
 			Status:             metav1.ConditionFalse,
-			Reason:             "ManifestWorkNotFound",
-			Message:            "ManifestWork has not been processed yet",
+			Reason:             "ResourcesNotFound",
+			Message:            "Resources have not been applied yet",
 			ObservedGeneration: gen,
 		})
 		b := meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
 			Type:               "HostedClusterAvailable",
 			Status:             metav1.ConditionFalse,
-			Reason:             "ManifestWorkNotFound",
-			Message:            "ManifestWork has not been processed yet",
+			Reason:             "ResourcesNotFound",
+			Message:            "Resources have not been applied yet",
 			ObservedGeneration: gen,
 		})
 		return a || b
 	}
 
-	// Derive ManifestWorkApplied from top-level MW conditions.
-	appliedStatus, appliedReason, appliedMessage := mwCondition(mwStatus.Conditions, "Applied")
+	// Derive ResourcesApplied from top-level conditions.
+	appliedStatus, appliedReason, appliedMessage := firstCondition(mwStatus.Conditions, "Applied")
 
 	// Derive HostedClusterAvailable and HostedClusterResult fields from HC resource status.
 	hcKey := transport.ResourceKey(constants.HyperShiftGroup, constants.HyperShiftVersion, "hostedclusters",
@@ -284,7 +284,7 @@ func (r *Reconciler) applyStatusConditions(cluster *privatev1.Cluster, mwStatus 
 	}
 
 	a := meta.SetStatusCondition(&cluster.Status.Conditions, metav1.Condition{
-		Type:               "ManifestWorkApplied",
+		Type:               "ResourcesApplied",
 		Status:             metav1.ConditionStatus(appliedStatus),
 		Reason:             appliedReason,
 		Message:            appliedMessage,
@@ -315,9 +315,9 @@ func (r *Reconciler) applyStatusConditions(cluster *privatev1.Cluster, mwStatus 
 	return a || b || c
 }
 
-// mwCondition returns the status, reason, and message of the first MW condition matching condType.
+// firstCondition returns the status, reason, and message of the first condition matching condType.
 // Defaults: status="False", reason="Unknown", message="".
-func mwCondition(conds []metav1.Condition, condType string) (status, reason, message string) {
+func firstCondition(conds []metav1.Condition, condType string) (status, reason, message string) {
 	for _, c := range conds {
 		if c.Type == condType {
 			return string(c.Status), c.Reason, c.Message

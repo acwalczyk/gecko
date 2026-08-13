@@ -432,13 +432,13 @@ func TestReconcile_TransportApplyError(t *testing.T) {
 }
 
 // TestReconcile_MWStatusNil_RequeuesPending verifies that when Apply returns nil status
-// (ManifestWork not yet processed), both conditions are set to False and the reconciler
+// (resources not yet processed), both conditions are set to False and the reconciler
 // requeues with the pending interval.
 func TestReconcile_MWStatusNil_RequeuesPending(t *testing.T) {
 	clusterID := "cluster-abc"
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 
-	// Apply returns nil status to simulate the ManifestWork not yet having a status.
+	// Apply returns nil status to simulate the resources not yet having a status.
 	tr := &errTransport{}
 	r, storeClient := buildReconciler(t, cluster, nil, tr, nil)
 
@@ -453,7 +453,7 @@ func TestReconcile_MWStatusNil_RequeuesPending(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestReconcile_HappyPath verifies the full reconcile path when all dependencies are ready
-// and the ManifestWork has been applied successfully.
+// and the resources have been applied successfully.
 func TestReconcile_HappyPath(t *testing.T) {
 	clusterID := "cluster-abc"
 	mcName := "mc-cluster-1"
@@ -518,7 +518,7 @@ func TestReconcile_HCFeedback_SetsHostedClusterResult(t *testing.T) {
 	require.Equal(t, "4.15.0", captured.Status.HostedClusterResult.Version)
 }
 
-// TestReconcile_MWNoAppliedCondition_RequeuesPending verifies that when the ManifestWork
+// TestReconcile_MWNoAppliedCondition_RequeuesPending verifies that when the resources
 // status has no "Applied" condition, the reconciler requeues with the pending interval.
 // This also exercises the mwCondition default return path.
 func TestReconcile_MWNoAppliedCondition_RequeuesPending(t *testing.T) {
@@ -560,7 +560,7 @@ func TestReconcile_MWNotApplied_RequeuesPending(t *testing.T) {
 }
 
 // TestReconcile_ApplyConditions_Idempotent verifies that when the cluster's conditions
-// already match the current MW status, applyStatusConditions returns false and
+// already match the current applied status, applyStatusConditions returns false and
 // Status.Update is not called.
 func TestReconcile_ApplyConditions_Idempotent(t *testing.T) {
 	clusterID := "cluster-abc"
@@ -570,7 +570,7 @@ func TestReconcile_ApplyConditions_Idempotent(t *testing.T) {
 	// Pre-populate conditions to exactly match what applyStatusConditions would set,
 	// including ObservedGeneration (cluster.Generation = 2).
 	cluster.Status.Conditions = []metav1.Condition{
-		{Type: "ManifestWorkApplied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully", Message: "", ObservedGeneration: 2},
+		{Type: "ResourcesApplied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully", Message: "", ObservedGeneration: 2},
 		{Type: "HostedClusterAvailable", Status: metav1.ConditionFalse, Reason: "HostedClusterAvailable", Message: "", ObservedGeneration: 2},
 	}
 
@@ -646,7 +646,7 @@ func TestReconcile_WithServiceAccountsRef(t *testing.T) {
 
 	result, err := r.Reconcile(context.Background(), clusterReq(clusterID))
 	require.NoError(t, err)
-	require.Equal(t, 5*time.Minute, result.RequeueAfter) // ManifestWorkApplied=True → requeueStable
+	require.Equal(t, 5*time.Minute, result.RequeueAfter) // ResourcesApplied=True → requeueStable
 	require.Len(t, tr.ApplyCalls, 1)
 	require.True(t, storeClient.statusWriter.called)
 }
@@ -726,7 +726,7 @@ func TestReconcile_Deletion_HappyPath(t *testing.T) {
 	mcName := "mc-cluster-1"
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 	cluster.Status.Conditions = append(cluster.Status.Conditions, metav1.Condition{
-		Type: "ManifestWorkApplied", Status: metav1.ConditionTrue, Reason: "Applied",
+		Type: "ResourcesApplied", Status: metav1.ConditionTrue, Reason: "Applied",
 	})
 	now := metav1.Now()
 	cluster.SetDeletionTimestamp(&now)
@@ -779,7 +779,7 @@ func TestReconcile_Deletion_TransportError(t *testing.T) {
 	clusterID := "cluster-abc"
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 	cluster.Status.Conditions = append(cluster.Status.Conditions, metav1.Condition{
-		Type: "ManifestWorkApplied", Status: metav1.ConditionTrue, Reason: "Applied",
+		Type: "ResourcesApplied", Status: metav1.ConditionTrue, Reason: "Applied",
 	})
 	now := metav1.Now()
 	cluster.SetDeletionTimestamp(&now)
@@ -818,7 +818,7 @@ func TestReconcile_Deletion_RemoveFinalizerError(t *testing.T) {
 	clusterID := "cluster-abc"
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 	cluster.Status.Conditions = append(cluster.Status.Conditions, metav1.Condition{
-		Type: "ManifestWorkApplied", Status: metav1.ConditionTrue, Reason: "Applied",
+		Type: "ResourcesApplied", Status: metav1.ConditionTrue, Reason: "Applied",
 	})
 	now := metav1.Now()
 	cluster.SetDeletionTimestamp(&now)

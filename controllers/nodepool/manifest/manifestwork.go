@@ -1,4 +1,4 @@
-// Package manifest provides the ManifestWork builder for the nodepool controller.
+// Package manifest provides the manifest builder for the nodepool controller.
 package manifest
 
 import (
@@ -18,7 +18,7 @@ const (
 	defaultReplicas = int32(1)
 )
 
-// Input holds all parameters for building the NodePool ManifestWork.
+// Input holds all parameters for building the NodePool manifests.
 type Input struct {
 	NodePoolID         string
 	NodePoolName       string

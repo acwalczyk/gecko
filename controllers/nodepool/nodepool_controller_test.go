@@ -597,13 +597,13 @@ func TestReconcile_TransportApplyError(t *testing.T) {
 }
 
 // TestReconcile_MWStatusNil_RequeuesPending verifies that when Apply returns nil status
-// (ManifestWork not yet processed), both conditions are set to False and the reconciler
+// (resources not yet processed), both conditions are set to False and the reconciler
 // requeues with the pending interval.
 func TestReconcile_MWStatusNil_RequeuesPending(t *testing.T) {
 	np := testNodePool("4.16.0")
 	cluster := testCluster(true, true)
 
-	// Apply returns nil status to simulate the ManifestWork not yet having a status.
+	// Apply returns nil status to simulate the resources not yet having a status.
 	tr := &errTransport{}
 	r, storeClient := buildReconciler(t, np, cluster, tr, nil, nil, nil)
 
@@ -616,7 +616,7 @@ func TestReconcile_MWStatusNil_RequeuesPending(t *testing.T) {
 	available := meta.FindStatusCondition(captured.Status.Conditions, "NodePoolAvailable")
 	require.NotNil(t, available)
 	require.Equal(t, metav1.ConditionFalse, available.Status)
-	require.Equal(t, "ManifestWorkNotFound", available.Reason)
+	require.Equal(t, "ResourcesNotFound", available.Reason)
 }
 
 // ---------------------------------------------------------------------------
@@ -800,7 +800,7 @@ func TestReconcile_AddFinalizer_UpdateError(t *testing.T) {
 func TestReconcile_Deletion_HappyPath(t *testing.T) {
 	np := testNodePool("4.16.0")
 	np.Status.Conditions = append(np.Status.Conditions, metav1.Condition{
-		Type: "NodePoolManifestWorkApplied", Status: metav1.ConditionTrue, Reason: "Applied",
+		Type: "NodePoolResourcesApplied", Status: metav1.ConditionTrue, Reason: "Applied",
 	})
 	now := metav1.Now()
 	np.SetDeletionTimestamp(&now)
@@ -869,7 +869,7 @@ func TestReconcile_Deletion_NoPlacement(t *testing.T) {
 func TestReconcile_Deletion_TransportError(t *testing.T) {
 	np := testNodePool("4.16.0")
 	np.Status.Conditions = append(np.Status.Conditions, metav1.Condition{
-		Type: "NodePoolManifestWorkApplied", Status: metav1.ConditionTrue, Reason: "Applied",
+		Type: "NodePoolResourcesApplied", Status: metav1.ConditionTrue, Reason: "Applied",
 	})
 	now := metav1.Now()
 	np.SetDeletionTimestamp(&now)
@@ -908,7 +908,7 @@ func TestReconcile_Deletion_NoFinalizer(t *testing.T) {
 func TestReconcile_Deletion_RemoveFinalizerError(t *testing.T) {
 	np := testNodePool("4.16.0")
 	np.Status.Conditions = append(np.Status.Conditions, metav1.Condition{
-		Type: "NodePoolManifestWorkApplied", Status: metav1.ConditionTrue, Reason: "Applied",
+		Type: "NodePoolResourcesApplied", Status: metav1.ConditionTrue, Reason: "Applied",
 	})
 	now := metav1.Now()
 	np.SetDeletionTimestamp(&now)
