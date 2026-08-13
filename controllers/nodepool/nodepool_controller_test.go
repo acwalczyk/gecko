@@ -20,6 +20,7 @@ import (
 
 	"github.com/openshift-online/gecko/controllers/client/transport"
 	"github.com/openshift-online/gecko/controllers/client/transport/mock"
+	"github.com/openshift-online/gecko/controllers/util/constants"
 	"github.com/openshift-online/gecko/controllers/util/logger"
 )
 
@@ -69,6 +70,9 @@ type mockStoreClient struct {
 	npGetErr     error
 	clsGetErr    error
 	statusWriter *mockStatusWriter
+	updateCalled bool
+	updateErr    error
+	updated      client.Object
 }
 
 func (m *mockStoreClient) Get(_ context.Context, _ client.ObjectKey, obj client.Object, _ ...client.GetOption) error {
@@ -107,8 +111,10 @@ func (m *mockStoreClient) Create(_ context.Context, _ client.Object, _ ...client
 func (m *mockStoreClient) Delete(_ context.Context, _ client.Object, _ ...client.DeleteOption) error {
 	return nil
 }
-func (m *mockStoreClient) Update(_ context.Context, _ client.Object, _ ...client.UpdateOption) error {
-	return nil
+func (m *mockStoreClient) Update(_ context.Context, obj client.Object, _ ...client.UpdateOption) error {
+	m.updateCalled = true
+	m.updated = obj
+	return m.updateErr
 }
 func (m *mockStoreClient) Patch(_ context.Context, _ client.Object, _ client.Patch, _ ...client.PatchOption) error {
 	return nil
@@ -131,6 +137,7 @@ func (m *mockStoreClient) IsObjectNamespaced(_ runtime.Object) (bool, error) { r
 type errTransport struct {
 	applyErr    error
 	applyResult *transport.Status
+	deleteErr   error
 }
 
 func (e *errTransport) Apply(_ context.Context, _, _ string, _ [][]byte) (*transport.Status, error) {
@@ -139,7 +146,7 @@ func (e *errTransport) Apply(_ context.Context, _, _ string, _ [][]byte) (*trans
 func (e *errTransport) GetStatus(_ context.Context, _, _ string) (*transport.Status, error) {
 	return nil, nil
 }
-func (e *errTransport) Delete(_ context.Context, _, _ string) error { return nil }
+func (e *errTransport) Delete(_ context.Context, _, _ string) error { return e.deleteErr }
 
 // npReq returns a reconcile.Request for the given clusterID/nodepoolID pair.
 func npReq(clusterID, nodepoolID string) reconcile.Request {
@@ -158,6 +165,7 @@ func testNodePool(vrVersion string) *privatev1.NodePool {
 	np := &privatev1.NodePool{}
 	np.SetName("np-test")
 	np.SetNamespace("cluster-test")
+	np.SetFinalizers([]string{constants.FinalizerNodePool})
 	np.Spec = privatev1.NodePoolSpec{
 		ClusterID: "cluster-test",
 		Platform: privatev1.NodePoolPlatformSpec{
@@ -736,4 +744,187 @@ func TestReconcile_StatusUpdateError_ReturnsError(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "update nodepool status")
 	require.True(t, storeClient.statusWriter.called)
+}
+
+// ---------------------------------------------------------------------------
+// Test cases – finalizer management
+// ---------------------------------------------------------------------------
+
+// TestReconcile_AddsFinalizer verifies that a nodepool without the finalizer gets it added
+// and the reconciler returns immediately to re-reconcile.
+func TestReconcile_AddsFinalizer(t *testing.T) {
+	np := testNodePool("4.16.0")
+	np.SetFinalizers(nil) // no finalizer yet
+	cluster := testCluster(true, true)
+
+	tr := mock.New()
+	r, storeClient := buildReconciler(t, np, cluster, tr, nil, nil, nil)
+
+	result, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
+	require.NoError(t, err)
+	require.Zero(t, result.RequeueAfter)
+	require.True(t, storeClient.updateCalled, "expected Update to be called to add finalizer")
+	require.Empty(t, tr.ApplyCalls, "should not Apply before finalizer is persisted")
+
+	updated := storeClient.updated.(*privatev1.NodePool)
+	require.Contains(t, updated.Finalizers, constants.FinalizerNodePool)
+}
+
+// TestReconcile_AddFinalizer_UpdateError verifies that an Update error when adding the
+// finalizer is propagated.
+func TestReconcile_AddFinalizer_UpdateError(t *testing.T) {
+	np := testNodePool("4.16.0")
+	np.SetFinalizers(nil)
+	cluster := testCluster(true, true)
+
+	tr := mock.New()
+	storeClient := &mockStoreClient{
+		nodepool:     np,
+		cluster:      cluster,
+		statusWriter: &mockStatusWriter{},
+		updateErr:    fmt.Errorf("etcd write error"),
+	}
+	r := New(tr, newTestLogger(t), storeClient)
+
+	_, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "add finalizer")
+}
+
+// ---------------------------------------------------------------------------
+// Test cases – deletion
+// ---------------------------------------------------------------------------
+
+// TestReconcile_Deletion_HappyPath verifies that when a nodepool has a DeletionTimestamp,
+// transport.Delete is called with the nodepoolID and the finalizer is removed.
+func TestReconcile_Deletion_HappyPath(t *testing.T) {
+	np := testNodePool("4.16.0")
+	np.Status.Conditions = append(np.Status.Conditions, metav1.Condition{
+		Type: "NodePoolManifestWorkApplied", Status: metav1.ConditionTrue, Reason: "Applied",
+	})
+	now := metav1.Now()
+	np.SetDeletionTimestamp(&now)
+	cluster := testCluster(true, true)
+
+	tr := mock.New()
+	r, storeClient := buildReconciler(t, np, cluster, tr, nil, nil, nil)
+
+	result, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
+	require.NoError(t, err)
+	require.Zero(t, result.RequeueAfter)
+
+	require.Len(t, tr.DeleteCalls, 1)
+	require.Equal(t, "mc-us-c1", tr.DeleteCalls[0].TargetCluster)
+	require.Equal(t, "np-test", tr.DeleteCalls[0].ClusterID)
+	require.Empty(t, tr.ApplyCalls, "should not Apply during deletion")
+
+	require.True(t, storeClient.updateCalled, "expected Update to remove finalizer")
+	updated := storeClient.updated.(*privatev1.NodePool)
+	require.NotContains(t, updated.Finalizers, constants.FinalizerNodePool)
+}
+
+// TestReconcile_Deletion_ClusterNotFound verifies that when the parent cluster is gone,
+// transport.Delete is NOT called but the finalizer is still removed.
+func TestReconcile_Deletion_ClusterNotFound(t *testing.T) {
+	np := testNodePool("4.16.0")
+	now := metav1.Now()
+	np.SetDeletionTimestamp(&now)
+
+	tr := mock.New()
+	r, storeClient := buildReconciler(t, np, nil, tr, nil, nil, nil) // nil cluster → NotFound
+
+	result, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
+	require.NoError(t, err)
+	require.Zero(t, result.RequeueAfter)
+
+	require.Empty(t, tr.DeleteCalls, "should not call Delete when cluster not found")
+	require.True(t, storeClient.updateCalled, "expected Update to remove finalizer")
+	updated := storeClient.updated.(*privatev1.NodePool)
+	require.NotContains(t, updated.Finalizers, constants.FinalizerNodePool)
+}
+
+// TestReconcile_Deletion_NoPlacement verifies that when the parent cluster has no placement,
+// transport.Delete is NOT called but the finalizer is still removed.
+func TestReconcile_Deletion_NoPlacement(t *testing.T) {
+	np := testNodePool("4.16.0")
+	now := metav1.Now()
+	np.SetDeletionTimestamp(&now)
+	cluster := testCluster(false, false) // no placement
+
+	tr := mock.New()
+	r, storeClient := buildReconciler(t, np, cluster, tr, nil, nil, nil)
+
+	result, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
+	require.NoError(t, err)
+	require.Zero(t, result.RequeueAfter)
+
+	require.Empty(t, tr.DeleteCalls, "should not call Delete without placement")
+	require.True(t, storeClient.updateCalled, "expected Update to remove finalizer")
+	updated := storeClient.updated.(*privatev1.NodePool)
+	require.NotContains(t, updated.Finalizers, constants.FinalizerNodePool)
+}
+
+// TestReconcile_Deletion_TransportError verifies that a transport.Delete error is
+// propagated and the finalizer is NOT removed (controller will retry).
+func TestReconcile_Deletion_TransportError(t *testing.T) {
+	np := testNodePool("4.16.0")
+	np.Status.Conditions = append(np.Status.Conditions, metav1.Condition{
+		Type: "NodePoolManifestWorkApplied", Status: metav1.ConditionTrue, Reason: "Applied",
+	})
+	now := metav1.Now()
+	np.SetDeletionTimestamp(&now)
+	cluster := testCluster(true, true)
+
+	tr := &errTransport{deleteErr: fmt.Errorf("firestore unavailable")}
+	r, storeClient := buildReconciler(t, np, cluster, tr, nil, nil, nil)
+
+	_, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "delete resources")
+	require.False(t, storeClient.updateCalled, "finalizer should not be removed on error")
+}
+
+// TestReconcile_Deletion_NoFinalizer verifies that when the nodepool has a DeletionTimestamp
+// but no finalizer, the reconciler returns immediately (nothing to do).
+func TestReconcile_Deletion_NoFinalizer(t *testing.T) {
+	np := testNodePool("4.16.0")
+	np.SetFinalizers(nil)
+	now := metav1.Now()
+	np.SetDeletionTimestamp(&now)
+	cluster := testCluster(true, true)
+
+	tr := mock.New()
+	r, storeClient := buildReconciler(t, np, cluster, tr, nil, nil, nil)
+
+	result, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
+	require.NoError(t, err)
+	require.Zero(t, result.RequeueAfter)
+	require.Empty(t, tr.DeleteCalls)
+	require.False(t, storeClient.updateCalled)
+}
+
+// TestReconcile_Deletion_RemoveFinalizerError verifies that an error removing the
+// finalizer after successful transport.Delete is propagated.
+func TestReconcile_Deletion_RemoveFinalizerError(t *testing.T) {
+	np := testNodePool("4.16.0")
+	np.Status.Conditions = append(np.Status.Conditions, metav1.Condition{
+		Type: "NodePoolManifestWorkApplied", Status: metav1.ConditionTrue, Reason: "Applied",
+	})
+	now := metav1.Now()
+	np.SetDeletionTimestamp(&now)
+	cluster := testCluster(true, true)
+
+	tr := mock.New()
+	storeClient := &mockStoreClient{
+		nodepool:     np,
+		cluster:      cluster,
+		statusWriter: &mockStatusWriter{},
+		updateErr:    fmt.Errorf("etcd write error"),
+	}
+	r := New(tr, newTestLogger(t), storeClient)
+
+	_, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "remove finalizer")
+	require.Len(t, tr.DeleteCalls, 1, "transport.Delete should have been called before finalizer removal failed")
 }

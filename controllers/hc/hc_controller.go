@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
@@ -55,6 +56,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			return reconcile.Result{}, nil
 		}
 		return reconcile.Result{}, fmt.Errorf("%s: get cluster: %w", adapterName, err)
+	}
+
+	// Handle deletion.
+	if !cluster.DeletionTimestamp.IsZero() {
+		return r.handleDeletion(ctx, &cluster, log)
+	}
+
+	// Ensure finalizer is present.
+	if !controllerutil.ContainsFinalizer(&cluster, constants.FinalizerCluster) {
+		controllerutil.AddFinalizer(&cluster, constants.FinalizerCluster)
+		if err := r.client.Update(ctx, &cluster); err != nil {
+			return reconcile.Result{}, fmt.Errorf("%s: add finalizer: %w", adapterName, err)
+		}
+		return reconcile.Result{}, nil // re-reconcile with finalizer in place
 	}
 
 	// Check placement readiness.
@@ -174,6 +189,33 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 	log.Infof(ctx, "hc-controller: cluster %s reconciled, requeueing after %s", clusterID, requeueStable)
 	return reconcile.Result{RequeueAfter: requeueStable}, nil
+}
+
+// handleDeletion cleans up management-cluster resources and removes the finalizer.
+func (r *Reconciler) handleDeletion(ctx context.Context, cluster *privatev1.Cluster, log logger.Logger) (reconcile.Result, error) {
+	if !controllerutil.ContainsFinalizer(cluster, constants.FinalizerCluster) {
+		return reconcile.Result{}, nil
+	}
+
+	clusterID := cluster.Name
+
+	// Only call transport.Delete if resources were applied to an MC.
+	if meta.FindStatusCondition(cluster.Status.Conditions, "ManifestWorkApplied") != nil &&
+		cluster.Status.PlacementResult != nil && cluster.Status.PlacementResult.ManagementClusterName != "" {
+		mcName := cluster.Status.PlacementResult.ManagementClusterName
+		log.Infof(ctx, "%s: deleting resources for cluster %s from %s", adapterName, clusterID, mcName)
+		if err := r.transport.Delete(ctx, mcName, clusterID); err != nil {
+			return reconcile.Result{}, fmt.Errorf("%s: delete resources: %w", adapterName, err)
+		}
+	}
+
+	controllerutil.RemoveFinalizer(cluster, constants.FinalizerCluster)
+	if err := r.client.Update(ctx, cluster); err != nil {
+		return reconcile.Result{}, fmt.Errorf("%s: remove finalizer: %w", adapterName, err)
+	}
+
+	log.Infof(ctx, "%s: finalizer removed for cluster %s", adapterName, clusterID)
+	return reconcile.Result{}, nil
 }
 
 // setWaitingConditions sets ManifestWorkApplied and HostedClusterAvailable to Unknown.

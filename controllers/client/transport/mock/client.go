@@ -33,6 +33,9 @@ type Client struct {
 
 	// DeleteCalls records all Delete invocations for test assertions.
 	DeleteCalls []DeleteCall
+
+	// DeleteErr, if non-nil, is returned by Delete.
+	DeleteErr error
 }
 
 // Ensure Client implements transport.Client.
@@ -88,7 +91,7 @@ func (c *Client) Delete(ctx context.Context, targetCluster, clusterID string) er
 		TargetCluster: targetCluster,
 		ClusterID:     clusterID,
 	})
-	return nil
+	return c.DeleteErr
 }
 
 // Reset clears all stored state and recorded calls. Useful between test cases.
@@ -99,4 +102,5 @@ func (c *Client) Reset() {
 	c.StatusOverrides = make(map[string]*transport.Status)
 	c.ApplyCalls = nil
 	c.DeleteCalls = nil
+	c.DeleteErr = nil
 }

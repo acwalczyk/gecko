@@ -11,6 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
@@ -63,13 +64,33 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	clusterID := np.Spec.ClusterID
 	log = log.With("clusterID", clusterID)
 	var cluster privatev1.Cluster
+	clusterFound := true
 	clusterKey := types.NamespacedName{Namespace: req.Namespace, Name: clusterID}
 	if err := r.client.Get(ctx, clusterKey, &cluster); err != nil {
-		if apierrors.IsNotFound(err) {
-			log.Infof(ctx, "cluster %s not found for nodepool %s, skipping", clusterID, nodepoolID)
-			return reconcile.Result{}, nil
+		if !apierrors.IsNotFound(err) {
+			return reconcile.Result{}, fmt.Errorf("nodepool reconciler: get cluster: %w", err)
 		}
-		return reconcile.Result{}, fmt.Errorf("nodepool reconciler: get cluster: %w", err)
+		clusterFound = false
+	}
+
+	// Handle deletion.
+	if !np.DeletionTimestamp.IsZero() {
+		return r.handleDeletion(ctx, &np, &cluster, clusterFound, log)
+	}
+
+	// If cluster not found, nothing to reconcile.
+	if !clusterFound {
+		log.Infof(ctx, "cluster %s not found for nodepool %s, skipping", clusterID, nodepoolID)
+		return reconcile.Result{}, nil
+	}
+
+	// Ensure finalizer is present.
+	if !controllerutil.ContainsFinalizer(&np, constants.FinalizerNodePool) {
+		controllerutil.AddFinalizer(&np, constants.FinalizerNodePool)
+		if err := r.client.Update(ctx, &np); err != nil {
+			return reconcile.Result{}, fmt.Errorf("nodepool reconciler: add finalizer: %w", err)
+		}
+		return reconcile.Result{}, nil // re-reconcile with finalizer in place
 	}
 
 	// Gate: cluster placement must be ready.
@@ -196,6 +217,36 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 	log.Infof(ctx, "nodepool reconciler: nodepool %s reconciled, requeueing after %s", nodepoolID, requeueStable)
 	return reconcile.Result{RequeueAfter: requeueStable}, nil
+}
+
+// handleDeletion cleans up management-cluster resources and removes the finalizer.
+func (r *Reconciler) handleDeletion(ctx context.Context, np *privatev1.NodePool, cluster *privatev1.Cluster, clusterFound bool, log logger.Logger) (reconcile.Result, error) {
+	if !controllerutil.ContainsFinalizer(np, constants.FinalizerNodePool) {
+		return reconcile.Result{}, nil
+	}
+
+	nodepoolID := np.Name
+
+	// Only call transport.Delete if resources were applied to an MC.
+	if clusterFound &&
+		meta.FindStatusCondition(np.Status.Conditions, "NodePoolManifestWorkApplied") != nil &&
+		cluster.Status.PlacementResult != nil && cluster.Status.PlacementResult.ManagementClusterName != "" {
+		mcName := cluster.Status.PlacementResult.ManagementClusterName
+		log.Infof(ctx, "nodepool reconciler: deleting resources for nodepool %s from %s", nodepoolID, mcName)
+		if err := r.transport.Delete(ctx, mcName, nodepoolID); err != nil {
+			return reconcile.Result{}, fmt.Errorf("nodepool reconciler: delete resources: %w", err)
+		}
+	} else {
+		log.Infof(ctx, "nodepool reconciler: parent cluster not available for nodepool %s, skipping transport cleanup", nodepoolID)
+	}
+
+	controllerutil.RemoveFinalizer(np, constants.FinalizerNodePool)
+	if err := r.client.Update(ctx, np); err != nil {
+		return reconcile.Result{}, fmt.Errorf("nodepool reconciler: remove finalizer: %w", err)
+	}
+
+	log.Infof(ctx, "nodepool reconciler: finalizer removed for nodepool %s", nodepoolID)
+	return reconcile.Result{}, nil
 }
 
 // setWaitingNPConditions sets NodePoolManifestWorkApplied and NodePoolAvailable to Unknown.

@@ -52,6 +52,17 @@ const (
 	AnnotationCreatedBy = "hyperfleet.io/created-by"
 )
 
+// Finalizer constants for deletion handling.
+const (
+	// FinalizerCluster is the finalizer added by the hc-controller to ensure
+	// management-cluster resources are cleaned up before a Cluster CR is deleted.
+	FinalizerCluster = "hyperfleet.io/cluster-finalizer"
+
+	// FinalizerNodePool is the finalizer added by the nodepool-controller to ensure
+	// management-cluster resources are cleaned up before a NodePool CR is deleted.
+	FinalizerNodePool = "hyperfleet.io/nodepool-finalizer"
+)
+
 // HyperShift API constants
 const (
 	// HyperShiftGroup is the API group for HyperShift resources (HostedCluster, NodePool, etc.).
