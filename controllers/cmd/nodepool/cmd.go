@@ -27,6 +27,7 @@ func NewCommand(rf *setup.RootFlags) *cobra.Command {
 			}
 
 			t := fstransport.New(log)
+			defer t.Close()
 
 			scheme := setup.NewScheme()
 			mgr, err := rf.NewManager(scheme, log)
