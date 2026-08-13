@@ -179,6 +179,65 @@ func TestIntegration_GetStatus_AllSuccessful(t *testing.T) {
 	assert.Equal(t, metav1.ConditionTrue, status.Conditions[0].Status)
 }
 
+// TestIntegration_GetStatus_MissingStatusDocReportsPending verifies that when
+// some resources have no status document yet, GetStatus reports Applied=False
+// rather than prematurely reporting Applied=True based on the subset that do.
+func TestIntegration_GetStatus_MissingStatusDocReportsPending(t *testing.T) {
+	ctx := context.Background()
+	c := newTestClient(t)
+	opts := emulatorOpts(t)
+
+	specsClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "specs", opts...)
+	require.NoError(t, err)
+	defer specsClient.Close()
+
+	statusClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "status", opts...)
+	require.NoError(t, err)
+	defer statusClient.Close()
+
+	clearCollection(ctx, t, specsClient, "applydesires")
+	clearCollection(ctx, t, statusClient, "applydesires")
+	defer clearCollection(ctx, t, specsClient, "applydesires")
+	defer clearCollection(ctx, t, statusClient, "applydesires")
+
+	specDoc := func(id string) map[string]any {
+		return map[string]any{
+			"spec": map[string]any{
+				"clusterID":         testClusterID,
+				"managementCluster": testMCName,
+				"targetItem": map[string]any{
+					"group": "hypershift.openshift.io", "version": "v1beta1",
+					"resource": "hostedclusters", "namespace": "clusters-abc", "name": id,
+				},
+			},
+		}
+	}
+
+	// Two resources in specs DB.
+	_, err = specsClient.Collection("applydesires").Doc("doc-1").Set(ctx, specDoc("hc-1"))
+	require.NoError(t, err)
+	_, err = specsClient.Collection("applydesires").Doc("doc-2").Set(ctx, specDoc("hc-2"))
+	require.NoError(t, err)
+
+	// Only doc-1 has a status doc with Successful=True; doc-2 is missing.
+	_, err = statusClient.Collection("applydesires").Doc("doc-1").Set(ctx, map[string]any{
+		"spec": map[string]any{"clusterID": "", "managementCluster": "", "targetItem": map[string]any{}},
+		"status": map[string]any{
+			"conditions": []any{
+				map[string]any{"type": "Successful", "status": "True", "reason": "NoErrors"},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	status, err := c.GetStatus(ctx, testMCName, testClusterID)
+	require.NoError(t, err)
+	require.Len(t, status.Conditions, 1)
+	assert.Equal(t, "Applied", status.Conditions[0].Type)
+	// Must be False/Unknown — not True — because doc-2 has no status yet.
+	assert.NotEqual(t, metav1.ConditionTrue, status.Conditions[0].Status)
+}
+
 func TestIntegration_GetStatus_ExtractsHCKubeContent(t *testing.T) {
 	ctx := context.Background()
 	c := newTestClient(t)

@@ -195,17 +195,19 @@ func (c *Client) GetStatus(ctx context.Context, targetCluster, clusterID string)
 			return nil, fmt.Errorf("firestore transport: GetStatus %s/%s fetch status apply desires: %w", targetCluster, clusterID, err)
 		}
 		for i, snap := range statusApplySnaps {
+			// Spec from status DB is empty — use the spec from the specs DB.
+			var specsAD kubeapplier.ApplyDesire
+			if err := specsApplySnaps[i].DataTo(&specsAD); err != nil {
+				return nil, fmt.Errorf("firestore transport: GetStatus %s/%s decode specs apply desire %s: %w", targetCluster, clusterID, specsApplySnaps[i].Ref.ID, err)
+			}
 			if !snap.Exists() {
+				// kube-applier-gcp has not created the status doc yet; report it as pending.
+				applyDesires = append(applyDesires, kubeapplier.ApplyDesire{Spec: specsAD.Spec})
 				continue
 			}
 			var ad kubeapplier.ApplyDesire
 			if err := snap.DataTo(&ad); err != nil {
 				return nil, fmt.Errorf("firestore transport: GetStatus %s/%s decode apply desire %s: %w", targetCluster, clusterID, snap.Ref.ID, err)
-			}
-			// Spec from status DB is empty — use the spec from the specs DB.
-			var specsAD kubeapplier.ApplyDesire
-			if err := specsApplySnaps[i].DataTo(&specsAD); err != nil {
-				return nil, fmt.Errorf("firestore transport: GetStatus %s/%s decode specs apply desire %s: %w", targetCluster, clusterID, snap.Ref.ID, err)
 			}
 			ad.Spec = specsAD.Spec
 			applyDesires = append(applyDesires, ad)
