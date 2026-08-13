@@ -26,12 +26,21 @@ func aggregateConditions(desires []kubeapplier.ApplyDesire) []metav1.Condition {
 	}
 
 	allTrue := true
+	anyPending := false
 	for _, d := range desires {
 		found := false
 		for _, c := range d.Status.Conditions {
 			if c.Type == kubeapplier.ConditionTypeSuccessful {
 				found = true
-				if c.Status != metav1.ConditionTrue {
+				switch c.Status {
+				case metav1.ConditionTrue:
+					// applied successfully
+				case metav1.ConditionUnknown:
+					// kube-applier-gcp is still processing
+					allTrue = false
+					anyPending = true
+				default:
+					// ConditionFalse — apply failed
 					allTrue = false
 				}
 				break
@@ -40,6 +49,7 @@ func aggregateConditions(desires []kubeapplier.ApplyDesire) []metav1.Condition {
 		if !found {
 			// kube-applier-gcp has not yet processed this desire
 			allTrue = false
+			anyPending = true
 		}
 	}
 
@@ -52,23 +62,13 @@ func aggregateConditions(desires []kubeapplier.ApplyDesire) []metav1.Condition {
 		}}
 	}
 
-	// Check if any desire has no Successful condition (still pending)
-	for _, d := range desires {
-		hasCond := false
-		for _, c := range d.Status.Conditions {
-			if c.Type == kubeapplier.ConditionTypeSuccessful {
-				hasCond = true
-				break
-			}
-		}
-		if !hasCond {
-			return []metav1.Condition{{
-				Type:    "Applied",
-				Status:  metav1.ConditionFalse,
-				Reason:  "Pending",
-				Message: "One or more resources not yet processed by kube-applier-gcp",
-			}}
-		}
+	if anyPending {
+		return []metav1.Condition{{
+			Type:    "Applied",
+			Status:  metav1.ConditionFalse,
+			Reason:  "Pending",
+			Message: "One or more resources not yet processed by kube-applier-gcp",
+		}}
 	}
 
 	return []metav1.Condition{{
@@ -115,7 +115,7 @@ func extractResourceStatuses(reads []kubeapplier.ReadDesire) (map[string]map[str
 // extractHCFields extracts HostedCluster status fields from raw live-object JSON.
 //   - availableCondition: .status.conditions[type=Available].status
 //   - controlPlaneEndpoint: .status.controlPlaneEndpoint.host
-//   - version: .status.version.history[0].version
+//   - version: first .status.version.history[].version where state == "Completed"
 func extractHCFields(raw []byte) (map[string]string, error) {
 	fields := map[string]string{}
 

@@ -69,15 +69,8 @@ func (c *Client) clients(ctx context.Context, mcName string) (*mcClients, error)
 	}
 	c.mu.RUnlock()
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Double-check after acquiring write lock.
-	if mc, ok := c.cache[mcName]; ok {
-		return mc, nil
-	}
-
-	// MCs are identified by their GCP project ID.
+	// Construct clients outside the lock to avoid blocking other goroutines
+	// during gRPC dialing. MCs are identified by their GCP project ID.
 	specsClient, err := firestore.NewClientWithDatabase(ctx, mcName, specsDBName, c.dialOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("firestore transport: create specs client for MC %q: %w", mcName, err)
@@ -87,6 +80,17 @@ func (c *Client) clients(ctx context.Context, mcName string) (*mcClients, error)
 	if err != nil {
 		specsClient.Close() //nolint:errcheck
 		return nil, fmt.Errorf("firestore transport: create status client for MC %q: %w", mcName, err)
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Re-check after acquiring write lock — another goroutine may have populated
+	// the cache while we were dialing. Close the duplicate pair if so.
+	if mc, ok := c.cache[mcName]; ok {
+		specsClient.Close()   //nolint:errcheck
+		statusClient.Close()  //nolint:errcheck
+		return mc, nil
 	}
 
 	mc := &mcClients{specs: specsClient, status: statusClient}

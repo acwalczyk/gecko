@@ -49,6 +49,17 @@ func TestAggregateConditions_Empty(t *testing.T) {
 	assert.Equal(t, "NoApplyDesires", conds[0].Reason)
 }
 
+func TestAggregateConditions_SuccessfulUnknownIsPending(t *testing.T) {
+	desires := []kubeapplier.ApplyDesire{
+		applyCond(metav1.ConditionTrue),
+		applyCond(metav1.ConditionUnknown),
+	}
+	conds := aggregateConditions(desires)
+	require.Len(t, conds, 1)
+	assert.Equal(t, metav1.ConditionFalse, conds[0].Status)
+	assert.Equal(t, "Pending", conds[0].Reason)
+}
+
 func TestAggregateConditions_NoSuccessfulCondition(t *testing.T) {
 	// Desire exists but kube-applier-gcp hasn't set status yet
 	desires := []kubeapplier.ApplyDesire{

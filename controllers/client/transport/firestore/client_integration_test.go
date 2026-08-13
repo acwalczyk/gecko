@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"cloud.google.com/go/firestore"
 	"github.com/stretchr/testify/assert"
@@ -111,7 +112,7 @@ func statusApplyDesire(conditions []metav1.Condition) kubeapplier.ApplyDesire {
 }
 
 func TestIntegration_Apply_WritesApplyAndReadDesires(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)\n\tdefer cancel()
 	c := newTestClient(t)
 	opts := emulatorOpts(t)
 
@@ -148,7 +149,7 @@ func TestIntegration_Apply_WritesApplyAndReadDesires(t *testing.T) {
 }
 
 func TestIntegration_GetStatus_AllSuccessful(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)\n\tdefer cancel()
 	c := newTestClient(t)
 	opts := emulatorOpts(t)
 
@@ -188,7 +189,7 @@ func TestIntegration_GetStatus_AllSuccessful(t *testing.T) {
 // some resources have no status document yet, GetStatus reports Applied=False
 // rather than prematurely reporting Applied=True based on the subset that do.
 func TestIntegration_GetStatus_MissingStatusDocReportsPending(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)\n\tdefer cancel()
 	c := newTestClient(t)
 	opts := emulatorOpts(t)
 
@@ -226,7 +227,7 @@ func TestIntegration_GetStatus_MissingStatusDocReportsPending(t *testing.T) {
 }
 
 func TestIntegration_GetStatus_ExtractsHCKubeContent(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)\n\tdefer cancel()
 	c := newTestClient(t)
 	opts := emulatorOpts(t)
 
@@ -292,7 +293,7 @@ func TestIntegration_GetStatus_ExtractsHCKubeContent(t *testing.T) {
 }
 
 func TestIntegration_Delete_WritesDeleteDesireAndRemovesApplyRead(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)\n\tdefer cancel()
 	c := newTestClient(t)
 	opts := emulatorOpts(t)
 
