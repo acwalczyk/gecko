@@ -275,50 +275,41 @@ func (c *Client) Delete(ctx context.Context, targetCluster, clusterID string) er
 		return nil
 	}
 
-	batch := mc.specs.BulkWriter(ctx)
-	var jobs []*firestore.BulkWriterJob
+	// Use a transaction to atomically write DeleteDesires and remove
+	// ApplyDesire/ReadDesire docs. This prevents partial state where source
+	// docs are deleted but DeleteDesires are not written.
+	err = mc.specs.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		for _, snap := range applySnaps {
+			var ad kubeapplier.ApplyDesire
+			if err := snap.DataTo(&ad); err != nil {
+				return fmt.Errorf("decode apply desire: %w", err)
+			}
 
-	for _, snap := range applySnaps {
-		var ad kubeapplier.ApplyDesire
-		if err := snap.DataTo(&ad); err != nil {
-			return fmt.Errorf("firestore transport: Delete %s/%s decode apply desire: %w", targetCluster, clusterID, err)
+			ref := ad.Spec.TargetItem
+			taskKey := ad.Spec.ClusterID
+
+			// Write DeleteDesire.
+			deleteID, deleteData := buildDeleteDesireDoc(taskKey, targetCluster, ref)
+			deleteRef := mc.specs.Collection(collectionDeleteDesires).Doc(deleteID)
+			if err := tx.Set(deleteRef, deleteData); err != nil {
+				return fmt.Errorf("set delete desire: %w", err)
+			}
+
+			// Delete the ReadDesire doc (same document ID as the ApplyDesire).
+			readRef := mc.specs.Collection(collectionReadDesires).Doc(snap.Ref.ID)
+			if err := tx.Delete(readRef); err != nil {
+				return fmt.Errorf("delete read desire: %w", err)
+			}
+
+			// Delete the ApplyDesire doc.
+			if err := tx.Delete(snap.Ref); err != nil {
+				return fmt.Errorf("delete apply desire: %w", err)
+			}
 		}
-
-		ref := ad.Spec.TargetItem
-		taskKey := ad.Spec.ClusterID
-
-		// Write DeleteDesire
-		deleteID, deleteData := buildDeleteDesireDoc(taskKey, targetCluster, ref)
-		deleteRef := mc.specs.Collection(collectionDeleteDesires).Doc(deleteID)
-		job, err := batch.Set(deleteRef, deleteData)
-		if err != nil {
-			return fmt.Errorf("firestore transport: Delete %s/%s set delete desire: %w", targetCluster, clusterID, err)
-		}
-		jobs = append(jobs, job)
-
-		// Delete the ReadDesire doc (same document ID as the ApplyDesire).
-		readRef := mc.specs.Collection(collectionReadDesires).Doc(snap.Ref.ID)
-		job, err = batch.Delete(readRef)
-		if err != nil {
-			return fmt.Errorf("firestore transport: Delete %s/%s delete read desire: %w", targetCluster, clusterID, err)
-		}
-		jobs = append(jobs, job)
-
-		// Delete the ApplyDesire doc.
-		job, err = batch.Delete(snap.Ref)
-		if err != nil {
-			return fmt.Errorf("firestore transport: Delete %s/%s delete apply desire: %w", targetCluster, clusterID, err)
-		}
-		jobs = append(jobs, job)
-	}
-
-	batch.Flush()
-
-	// Check job results for write errors.
-	for _, job := range jobs {
-		if _, err := job.Results(); err != nil {
-			return fmt.Errorf("firestore transport: Delete %s/%s write error: %w", targetCluster, clusterID, err)
-		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("firestore transport: Delete %s/%s transaction: %w", targetCluster, clusterID, err)
 	}
 
 	c.log.Infof(ctx, "firestore transport: deleted %d resources for %s/%s", len(applySnaps), targetCluster, clusterID)
