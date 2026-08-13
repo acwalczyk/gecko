@@ -43,12 +43,12 @@ func TestBuild_HappyPath(t *testing.T) {
 	require.Equal(t, "clusters-cluster-abc", meta["namespace"])
 
 	metaLabels := meta["labels"].(map[string]any)
-	require.Equal(t, "cluster-abc", metaLabels["hyperfleet.io/cluster-id"])
-	require.Equal(t, "np-001", metaLabels["hyperfleet.io/nodepool-id"])
-	require.Equal(t, "nodepool-controller", metaLabels["hyperfleet.io/managed-by"])
+	require.Equal(t, "cluster-abc", metaLabels["gcp.managed.openshift.io/cluster-id"])
+	require.Equal(t, "np-001", metaLabels["gcp.managed.openshift.io/nodepool-id"])
+	require.Equal(t, "nodepool-controller", metaLabels["gcp.managed.openshift.io/managed-by"])
 
 	metaAnnotations := meta["annotations"].(map[string]any)
-	require.Equal(t, "3", metaAnnotations["hyperfleet.io/generation"])
+	require.Equal(t, "3", metaAnnotations["gcp.managed.openshift.io/generation"])
 
 	spec := nodePool["spec"].(map[string]any)
 	require.Equal(t, "my-cluster", spec["clusterName"])

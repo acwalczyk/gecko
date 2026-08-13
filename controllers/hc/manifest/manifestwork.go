@@ -129,13 +129,13 @@ func buildNamespace(input Input, clusterNS string) ([]byte, error) {
 		"metadata": map[string]any{
 			"name": clusterNS,
 			"labels": map[string]any{
-				"hyperfleet.io/cluster-id":    input.ClusterID,
-				"hyperfleet.io/cluster-name":  input.ClusterName,
-				"hyperfleet.io/managed-by":    "hc-controller",
-				"hyperfleet.io/resource-type": "namespace",
+				"gcp.managed.openshift.io/cluster-id":    input.ClusterID,
+				"gcp.managed.openshift.io/cluster-name":  input.ClusterName,
+				"gcp.managed.openshift.io/managed-by":    "hc-controller",
+				"gcp.managed.openshift.io/resource-type": "namespace",
 			},
 			"annotations": map[string]any{
-				"hyperfleet.io/generation": genStr,
+				"gcp.managed.openshift.io/generation": genStr,
 			},
 		},
 	}
@@ -155,7 +155,7 @@ func buildExternalSecret(input Input, clusterNS string) ([]byte, error) {
 			"name":      "pull-secret",
 			"namespace": clusterNS,
 			"annotations": map[string]any{
-				"hyperfleet.io/generation": genStr,
+				"gcp.managed.openshift.io/generation": genStr,
 			},
 		},
 		"spec": map[string]any{
@@ -198,12 +198,12 @@ func buildCertificate(input Input, clusterNS string) ([]byte, error) {
 			"name":      "external-api-cert",
 			"namespace": clusterNS,
 			"labels": map[string]any{
-				"hyperfleet.io/cluster-id":    input.ClusterID,
-				"hyperfleet.io/managed-by":    "hc-controller",
-				"hyperfleet.io/resource-type": "certificate",
+				"gcp.managed.openshift.io/cluster-id":    input.ClusterID,
+				"gcp.managed.openshift.io/managed-by":    "hc-controller",
+				"gcp.managed.openshift.io/resource-type": "certificate",
 			},
 			"annotations": map[string]any{
-				"hyperfleet.io/generation": genStr,
+				"gcp.managed.openshift.io/generation": genStr,
 			},
 		},
 		"spec": map[string]any{
@@ -241,7 +241,7 @@ func buildHostedCluster(input Input, clusterNS string) ([]byte, error) {
 	oauthHostname := fmt.Sprintf("oauth.%s-%s.%s", input.ClusterName, input.Slug, input.BaseDomain)
 
 	annotations := map[string]any{
-		"hyperfleet.io/generation":                                      genStr,
+		"gcp.managed.openshift.io/generation":                                      genStr,
 		"hypershift.openshift.io/pod-security-admission-label-override": "baseline",
 		"hypershift.openshift.io/skip-kas-conflict-san-validation":      "true",
 	}
@@ -259,9 +259,9 @@ func buildHostedCluster(input Input, clusterNS string) ([]byte, error) {
 			"name":      input.ClusterName,
 			"namespace": clusterNS,
 			"labels": map[string]any{
-				"hyperfleet.io/cluster-id":    input.ClusterID,
-				"hyperfleet.io/managed-by":    "hc-controller",
-				"hyperfleet.io/resource-type": "hosted-cluster",
+				"gcp.managed.openshift.io/cluster-id":    input.ClusterID,
+				"gcp.managed.openshift.io/managed-by":    "hc-controller",
+				"gcp.managed.openshift.io/resource-type": "hosted-cluster",
 			},
 			"annotations": annotations,
 		},
@@ -463,13 +463,13 @@ kubectl --kubeconfig=/kubeconfig/kubeconfig get clusterrolebinding redhat-domain
 			"name":      jobName,
 			"namespace": hcNS,
 			"labels": map[string]any{
-				"hyperfleet.io/cluster-id":    input.ClusterID,
-				"hyperfleet.io/managed-by":    "hc-controller",
-				"hyperfleet.io/resource-type": "rbac-setup",
+				"gcp.managed.openshift.io/cluster-id":    input.ClusterID,
+				"gcp.managed.openshift.io/managed-by":    "hc-controller",
+				"gcp.managed.openshift.io/resource-type": "rbac-setup",
 				"job":                         "rbac-setup",
 			},
 			"annotations": map[string]any{
-				"hyperfleet.io/generation": genStr,
+				"gcp.managed.openshift.io/generation": genStr,
 			},
 		},
 		"spec": map[string]any{
@@ -480,7 +480,7 @@ kubectl --kubeconfig=/kubeconfig/kubeconfig get clusterrolebinding redhat-domain
 				"metadata": map[string]any{
 					"labels": map[string]any{
 						"job":                      "rbac-setup",
-						"hyperfleet.io/cluster-id": input.ClusterID,
+						"gcp.managed.openshift.io/cluster-id": input.ClusterID,
 					},
 				},
 				"spec": map[string]any{

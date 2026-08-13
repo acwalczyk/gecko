@@ -74,12 +74,12 @@ func Build(input Input) ([][]byte, error) {
 			"name":      input.NodePoolName,
 			"namespace": namespace,
 			"labels": map[string]any{
-				"hyperfleet.io/cluster-id":  input.ClusterID,
-				"hyperfleet.io/nodepool-id": input.NodePoolID,
-				"hyperfleet.io/managed-by":  "nodepool-controller",
+				"gcp.managed.openshift.io/cluster-id":  input.ClusterID,
+				"gcp.managed.openshift.io/nodepool-id": input.NodePoolID,
+				"gcp.managed.openshift.io/managed-by":  "nodepool-controller",
 			},
 			"annotations": map[string]any{
-				"hyperfleet.io/generation": genStr,
+				"gcp.managed.openshift.io/generation": genStr,
 			},
 		},
 		"spec": map[string]any{
