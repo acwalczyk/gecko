@@ -18,6 +18,7 @@ import (
 
 	fstransport "github.com/openshift-online/gecko/controllers/client/transport/firestore"
 	"github.com/openshift-online/gecko/controllers/util/logger"
+	"github.com/openshift-online/kube-applier-gcp/pkg/api/kubeapplier"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -81,6 +82,34 @@ func clearCollection(ctx context.Context, t *testing.T, client *firestore.Client
 	}
 }
 
+// applyDesireSpec builds a minimal ApplyDesireSpec for the given clusterID and resource name.
+func applyDesireSpec(clusterID, name string) kubeapplier.ApplyDesireSpec {
+	return kubeapplier.ApplyDesireSpec{
+		ManagementCluster: testMCName,
+		ClusterID:         clusterID,
+		TargetItem: kubeapplier.ResourceReference{
+			Group:     "hypershift.openshift.io",
+			Version:   "v1beta1",
+			Resource:  "hostedclusters",
+			Namespace: fmt.Sprintf("clusters-%s", clusterID),
+			Name:      name,
+		},
+	}
+}
+
+// specsApplyDesire returns an ApplyDesire suitable for writing to the specs DB.
+func specsApplyDesire(clusterID, name string) kubeapplier.ApplyDesire {
+	return kubeapplier.ApplyDesire{Spec: applyDesireSpec(clusterID, name)}
+}
+
+// statusApplyDesire returns an ApplyDesire as kube-applier-gcp writes it to the
+// status DB: spec fields are empty, status carries the applied conditions.
+func statusApplyDesire(conditions []metav1.Condition) kubeapplier.ApplyDesire {
+	return kubeapplier.ApplyDesire{
+		Status: kubeapplier.ApplyDesireStatus{Conditions: conditions},
+	}
+}
+
 func TestIntegration_Apply_WritesApplyAndReadDesires(t *testing.T) {
 	ctx := context.Background()
 	c := newTestClient(t)
@@ -140,36 +169,12 @@ func TestIntegration_GetStatus_AllSuccessful(t *testing.T) {
 
 	const docID = "doc-1"
 
-	// Specs DB: document with clusterID so GetStatus can discover the doc ID.
-	specsDoc := map[string]any{
-		"spec": map[string]any{
-			"clusterID":         testClusterID,
-			"managementCluster": testMCName,
-			"targetItem": map[string]any{
-				"group": "hypershift.openshift.io", "version": "v1beta1",
-				"resource": "hostedclusters", "namespace": "clusters-abc", "name": "my-hc",
-			},
-		},
-	}
-	_, err = specsClient.Collection("applydesires").Doc(docID).Set(ctx, specsDoc)
+	_, err = specsClient.Collection("applydesires").Doc(docID).Set(ctx, specsApplyDesire(testClusterID, "my-hc"))
 	require.NoError(t, err)
 
-	// Status DB: same doc ID, but spec fields empty (matches real kube-applier-gcp behavior).
-	statusDoc := map[string]any{
-		"spec": map[string]any{
-			"clusterID":         "",
-			"managementCluster": "",
-			"targetItem": map[string]any{
-				"group": "", "version": "", "resource": "", "name": "",
-			},
-		},
-		"status": map[string]any{
-			"conditions": []any{
-				map[string]any{"type": "Successful", "status": "True", "reason": "NoErrors"},
-			},
-		},
-	}
-	_, err = statusClient.Collection("applydesires").Doc(docID).Set(ctx, statusDoc)
+	_, err = statusClient.Collection("applydesires").Doc(docID).Set(ctx, statusApplyDesire([]metav1.Condition{
+		{Type: "Successful", Status: metav1.ConditionTrue, Reason: "NoErrors"},
+	}))
 	require.NoError(t, err)
 
 	status, err := c.GetStatus(ctx, testMCName, testClusterID)
@@ -200,34 +205,16 @@ func TestIntegration_GetStatus_MissingStatusDocReportsPending(t *testing.T) {
 	defer clearCollection(ctx, t, specsClient, "applydesires")
 	defer clearCollection(ctx, t, statusClient, "applydesires")
 
-	specDoc := func(id string) map[string]any {
-		return map[string]any{
-			"spec": map[string]any{
-				"clusterID":         testClusterID,
-				"managementCluster": testMCName,
-				"targetItem": map[string]any{
-					"group": "hypershift.openshift.io", "version": "v1beta1",
-					"resource": "hostedclusters", "namespace": "clusters-abc", "name": id,
-				},
-			},
-		}
-	}
-
 	// Two resources in specs DB.
-	_, err = specsClient.Collection("applydesires").Doc("doc-1").Set(ctx, specDoc("hc-1"))
+	_, err = specsClient.Collection("applydesires").Doc("doc-1").Set(ctx, specsApplyDesire(testClusterID, "hc-1"))
 	require.NoError(t, err)
-	_, err = specsClient.Collection("applydesires").Doc("doc-2").Set(ctx, specDoc("hc-2"))
+	_, err = specsClient.Collection("applydesires").Doc("doc-2").Set(ctx, specsApplyDesire(testClusterID, "hc-2"))
 	require.NoError(t, err)
 
 	// Only doc-1 has a status doc with Successful=True; doc-2 is missing.
-	_, err = statusClient.Collection("applydesires").Doc("doc-1").Set(ctx, map[string]any{
-		"spec": map[string]any{"clusterID": "", "managementCluster": "", "targetItem": map[string]any{}},
-		"status": map[string]any{
-			"conditions": []any{
-				map[string]any{"type": "Successful", "status": "True", "reason": "NoErrors"},
-			},
-		},
-	})
+	_, err = statusClient.Collection("applydesires").Doc("doc-1").Set(ctx, statusApplyDesire([]metav1.Condition{
+		{Type: "Successful", Status: metav1.ConditionTrue, Reason: "NoErrors"},
+	}))
 	require.NoError(t, err)
 
 	status, err := c.GetStatus(ctx, testMCName, testClusterID)
@@ -258,21 +245,24 @@ func TestIntegration_GetStatus_ExtractsHCKubeContent(t *testing.T) {
 
 	const docID = "rd-1"
 
-	// Specs DB: document with clusterID and targetItem so GetStatus can discover the doc ID.
-	specsReadDoc := map[string]any{
-		"spec": map[string]any{
-			"clusterID":         testClusterID,
-			"managementCluster": testMCName,
-			"targetItem": map[string]any{
-				"group": "hypershift.openshift.io", "version": "v1beta1",
-				"resource": "hostedclusters", "namespace": "clusters-abc", "name": "my-hc",
+	specsReadDesire := kubeapplier.ReadDesire{
+		Spec: kubeapplier.ReadDesireSpec{
+			ManagementCluster: testMCName,
+			ClusterID:         testClusterID,
+			TargetItem: kubeapplier.ResourceReference{
+				Group:     "hypershift.openshift.io",
+				Version:   "v1beta1",
+				Resource:  "hostedclusters",
+				Namespace: "clusters-abc",
+				Name:      "my-hc",
 			},
 		},
 	}
-	_, err = specsClient.Collection("readdesires").Doc(docID).Set(ctx, specsReadDoc)
+	_, err = specsClient.Collection("readdesires").Doc(docID).Set(ctx, specsReadDesire)
 	require.NoError(t, err)
 
-	// Status DB: same doc ID, spec fields empty, but has status_kubeContent with live object.
+	// Status DB: spec fields empty (kube-applier-gcp doesn't copy them),
+	// status_kubeContent carries the live object — stored at doc root, not in the struct.
 	hcLiveObject := map[string]any{
 		"status": map[string]any{
 			"conditions": []any{
@@ -284,18 +274,11 @@ func TestIntegration_GetStatus_ExtractsHCKubeContent(t *testing.T) {
 			},
 		},
 	}
-	readStatusDoc := map[string]any{
-		"spec": map[string]any{
-			"clusterID":         "",
-			"managementCluster": "",
-			"targetItem": map[string]any{
-				"group": "", "version": "", "resource": "", "name": "",
-			},
-		},
-		"status":             map[string]any{},
+	_, err = statusClient.Collection("readdesires").Doc(docID).Set(ctx, map[string]any{
+		"spec":               kubeapplier.ReadDesireSpec{},
+		"status":             kubeapplier.ReadDesireStatus{},
 		"status_kubeContent": hcLiveObject,
-	}
-	_, err = statusClient.Collection("readdesires").Doc(docID).Set(ctx, readStatusDoc)
+	})
 	require.NoError(t, err)
 
 	status, err := c.GetStatus(ctx, testMCName, testClusterID)
@@ -349,8 +332,8 @@ func TestIntegration_Delete_WritesDeleteDesireAndRemovesApplyRead(t *testing.T) 
 	deleteSnaps, err := specsClient.Collection("deletedesires").Documents(ctx).GetAll()
 	require.NoError(t, err)
 	assert.Len(t, deleteSnaps, 1, "DeleteDesire should have been written")
-	data := deleteSnaps[0].Data()
-	spec, ok := data["spec"].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, testClusterID, spec["clusterID"])
+
+	var dd kubeapplier.DeleteDesire
+	require.NoError(t, deleteSnaps[0].DataTo(&dd))
+	assert.Equal(t, testClusterID, dd.Spec.ClusterID)
 }
