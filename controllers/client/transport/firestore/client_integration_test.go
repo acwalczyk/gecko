@@ -112,7 +112,8 @@ func statusApplyDesire(conditions []metav1.Condition) kubeapplier.ApplyDesire {
 }
 
 func TestIntegration_Apply_WritesApplyAndReadDesires(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)\n\tdefer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	c := newTestClient(t)
 	opts := emulatorOpts(t)
 
@@ -149,7 +150,8 @@ func TestIntegration_Apply_WritesApplyAndReadDesires(t *testing.T) {
 }
 
 func TestIntegration_GetStatus_AllSuccessful(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)\n\tdefer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	c := newTestClient(t)
 	opts := emulatorOpts(t)
 
@@ -189,7 +191,8 @@ func TestIntegration_GetStatus_AllSuccessful(t *testing.T) {
 // some resources have no status document yet, GetStatus reports Applied=False
 // rather than prematurely reporting Applied=True based on the subset that do.
 func TestIntegration_GetStatus_MissingStatusDocReportsPending(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)\n\tdefer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	c := newTestClient(t)
 	opts := emulatorOpts(t)
 
@@ -227,7 +230,8 @@ func TestIntegration_GetStatus_MissingStatusDocReportsPending(t *testing.T) {
 }
 
 func TestIntegration_GetStatus_ExtractsHCKubeContent(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)\n\tdefer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	c := newTestClient(t)
 	opts := emulatorOpts(t)
 
@@ -293,7 +297,8 @@ func TestIntegration_GetStatus_ExtractsHCKubeContent(t *testing.T) {
 }
 
 func TestIntegration_Delete_WritesDeleteDesireAndRemovesApplyRead(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)\n\tdefer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	c := newTestClient(t)
 	opts := emulatorOpts(t)
 
@@ -337,4 +342,70 @@ func TestIntegration_Delete_WritesDeleteDesireAndRemovesApplyRead(t *testing.T) 
 	var dd kubeapplier.DeleteDesire
 	require.NoError(t, deleteSnaps[0].DataTo(&dd))
 	assert.Equal(t, testClusterID, dd.Spec.ClusterID)
+}
+
+// TestIntegration_Delete_ChunksLargeBatches verifies that Delete correctly
+// processes more resources than the Firestore 500-write-per-transaction limit
+// by chunking them into multiple transactions.
+func TestIntegration_Delete_ChunksLargeBatches(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	c := newTestClient(t)
+	opts := emulatorOpts(t)
+
+	specsClient, err := firestore.NewClientWithDatabase(ctx, testMCName, "specs", opts...)
+	require.NoError(t, err)
+	defer specsClient.Close()
+
+	clearCollection(ctx, t, specsClient, "applydesires")
+	clearCollection(ctx, t, specsClient, "readdesires")
+	clearCollection(ctx, t, specsClient, "deletedesires")
+	defer clearCollection(ctx, t, specsClient, "applydesires")
+	defer clearCollection(ctx, t, specsClient, "readdesires")
+	defer clearCollection(ctx, t, specsClient, "deletedesires")
+
+	// Seed 200 ApplyDesire + ReadDesire docs — enough to require 2 chunks
+	// (maxDeleteBatchSize = 166, so 200 requires 2 transactions).
+	const resourceCount = 200
+	const chunkedClusterID = "cluster-chunked"
+
+	batch := specsClient.BulkWriter(ctx)
+	for i := range resourceCount {
+		name := fmt.Sprintf("resource-%d", i)
+		docID := fmt.Sprintf("chunked-%d", i)
+
+		ad := specsApplyDesire(chunkedClusterID, name)
+		applyRef := specsClient.Collection("applydesires").Doc(docID)
+		_, err := batch.Set(applyRef, ad)
+		require.NoError(t, err)
+
+		rd := kubeapplier.ReadDesire{Spec: kubeapplier.ReadDesireSpec{
+			ManagementCluster: testMCName,
+			ClusterID:         chunkedClusterID,
+			TargetItem:        ad.Spec.TargetItem,
+		}}
+		readRef := specsClient.Collection("readdesires").Doc(docID)
+		_, err = batch.Set(readRef, rd)
+		require.NoError(t, err)
+	}
+	batch.Flush()
+
+	err = c.Delete(ctx, testMCName, chunkedClusterID)
+	require.NoError(t, err)
+
+	applySnaps, err := specsClient.Collection("applydesires").
+		Where("spec.clusterID", "==", chunkedClusterID).
+		Documents(ctx).GetAll()
+	require.NoError(t, err)
+	assert.Empty(t, applySnaps, "all ApplyDesires should be deleted")
+
+	readSnaps, err := specsClient.Collection("readdesires").
+		Where("spec.clusterID", "==", chunkedClusterID).
+		Documents(ctx).GetAll()
+	require.NoError(t, err)
+	assert.Empty(t, readSnaps, "all ReadDesires should be deleted")
+
+	deleteSnaps, err := specsClient.Collection("deletedesires").Documents(ctx).GetAll()
+	require.NoError(t, err)
+	assert.Len(t, deleteSnaps, resourceCount, "one DeleteDesire per resource")
 }

@@ -5,6 +5,7 @@ package firestore
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -26,6 +27,12 @@ const (
 const (
 	specsDBName  = "specs"
 	statusDBName = "status"
+
+	// maxDeleteBatchSize is the maximum number of resources to delete per
+	// Firestore transaction. Each resource requires 3 writes (Set DeleteDesire,
+	// Delete ReadDesire, Delete ApplyDesire) and Firestore limits transactions
+	// to 500 writes.
+	maxDeleteBatchSize = 166
 )
 
 // mcClients caches the Firestore client pair for one management cluster.
@@ -229,17 +236,19 @@ func (c *Client) GetStatus(ctx context.Context, targetCluster, clusterID string)
 			return nil, fmt.Errorf("firestore transport: GetStatus %s/%s fetch status read desires: %w", targetCluster, clusterID, err)
 		}
 		for i, snap := range statusReadSnaps {
+			// Spec from status DB is empty — use the spec from the specs DB.
+			var specsRD kubeapplier.ReadDesire
+			if err := specsReadSnaps[i].DataTo(&specsRD); err != nil {
+				return nil, fmt.Errorf("firestore transport: GetStatus %s/%s decode specs read desire %s: %w", targetCluster, clusterID, specsReadSnaps[i].Ref.ID, err)
+			}
 			if !snap.Exists() {
+				// kube-applier-gcp has not created the status doc yet; report it as pending.
+				readDesires = append(readDesires, kubeapplier.ReadDesire{Spec: specsRD.Spec})
 				continue
 			}
 			var rd kubeapplier.ReadDesire
 			if err := snap.DataTo(&rd); err != nil {
 				return nil, fmt.Errorf("firestore transport: GetStatus %s/%s decode read desire %s: %w", targetCluster, clusterID, snap.Ref.ID, err)
-			}
-			// Spec from status DB is empty — use the spec from the specs DB.
-			var specsRD kubeapplier.ReadDesire
-			if err := specsReadSnaps[i].DataTo(&specsRD); err != nil {
-				return nil, fmt.Errorf("firestore transport: GetStatus %s/%s decode specs read desire %s: %w", targetCluster, clusterID, snap.Ref.ID, err)
 			}
 			rd.Spec = specsRD.Spec
 			// Manually decode status_kubeContent (stored as map[string]any at doc root).
@@ -267,64 +276,78 @@ func (c *Client) GetStatus(ctx context.Context, targetCluster, clusterID string)
 
 // Delete writes one DeleteDesire document per resource and removes the
 // corresponding ApplyDesire and ReadDesire documents from the specs DB.
+// Resources are processed in batches to stay within Firestore's
+// 500-write-per-transaction limit.
 func (c *Client) Delete(ctx context.Context, targetCluster, clusterID string) error {
 	mc, err := c.clients(ctx, targetCluster)
 	if err != nil {
 		return err
 	}
 
-	// Use a transaction to atomically query, write DeleteDesires, and remove
-	// ApplyDesire/ReadDesire docs. Reading inside the transaction ensures
-	// Firestore detects concurrent Apply writes and retries on conflict.
-	var count int
-	query := mc.specs.Collection(collectionApplyDesires).Where("spec.clusterID", "==", clusterID)
-	err = mc.specs.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
-		count = 0
-		applySnaps, err := tx.Documents(query).GetAll()
-		if err != nil {
-			return fmt.Errorf("query apply desires: %w", err)
-		}
-
-		for _, snap := range applySnaps {
-			var ad kubeapplier.ApplyDesire
-			if err := snap.DataTo(&ad); err != nil {
-				return fmt.Errorf("decode apply desire: %w", err)
-			}
-
-			ref := ad.Spec.TargetItem
-			taskKey := ad.Spec.ClusterID
-
-			// Write DeleteDesire.
-			deleteID, deleteData := buildDeleteDesireDoc(taskKey, targetCluster, ref)
-			deleteRef := mc.specs.Collection(collectionDeleteDesires).Doc(deleteID)
-			if err := tx.Set(deleteRef, deleteData); err != nil {
-				return fmt.Errorf("set delete desire: %w", err)
-			}
-
-			// Delete the ReadDesire doc (same document ID as the ApplyDesire).
-			readRef := mc.specs.Collection(collectionReadDesires).Doc(snap.Ref.ID)
-			if err := tx.Delete(readRef); err != nil {
-				return fmt.Errorf("delete read desire: %w", err)
-			}
-
-			// Delete the ApplyDesire doc.
-			if err := tx.Delete(snap.Ref); err != nil {
-				return fmt.Errorf("delete apply desire: %w", err)
-			}
-			count++
-		}
-		return nil
-	})
+	// Query all ApplyDesires for this clusterID.
+	applySnaps, err := mc.specs.Collection(collectionApplyDesires).
+		Where("spec.clusterID", "==", clusterID).
+		Documents(ctx).GetAll()
 	if err != nil {
-		return fmt.Errorf("firestore transport: Delete %s/%s transaction: %w", targetCluster, clusterID, err)
+		return fmt.Errorf("firestore transport: Delete %s/%s query apply desires: %w", targetCluster, clusterID, err)
 	}
 
-	if count == 0 {
+	if len(applySnaps) == 0 {
 		c.log.Infof(ctx, "firestore transport: Delete %s/%s: no apply desires found, nothing to delete", targetCluster, clusterID)
 		return nil
 	}
 
-	c.log.Infof(ctx, "firestore transport: deleted %d resources for %s/%s", count, targetCluster, clusterID)
+	// Process in chunks to stay within Firestore's 500-write-per-transaction
+	// limit. Each resource requires 3 writes (Set DeleteDesire, Delete
+	// ReadDesire, Delete ApplyDesire).
+	var errs []error
+	for i := 0; i < len(applySnaps); i += maxDeleteBatchSize {
+		end := i + maxDeleteBatchSize
+		if end > len(applySnaps) {
+			end = len(applySnaps)
+		}
+		chunk := applySnaps[i:end]
+
+		err := mc.specs.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+			for _, snap := range chunk {
+				var ad kubeapplier.ApplyDesire
+				if err := snap.DataTo(&ad); err != nil {
+					return fmt.Errorf("decode apply desire: %w", err)
+				}
+
+				ref := ad.Spec.TargetItem
+				taskKey := ad.Spec.ClusterID
+
+				// Write DeleteDesire.
+				deleteID, deleteData := buildDeleteDesireDoc(taskKey, targetCluster, ref)
+				deleteRef := mc.specs.Collection(collectionDeleteDesires).Doc(deleteID)
+				if err := tx.Set(deleteRef, deleteData); err != nil {
+					return fmt.Errorf("set delete desire: %w", err)
+				}
+
+				// Delete the ReadDesire doc (same document ID as the ApplyDesire).
+				readRef := mc.specs.Collection(collectionReadDesires).Doc(snap.Ref.ID)
+				if err := tx.Delete(readRef); err != nil {
+					return fmt.Errorf("delete read desire: %w", err)
+				}
+
+				// Delete the ApplyDesire doc.
+				if err := tx.Delete(snap.Ref); err != nil {
+					return fmt.Errorf("delete apply desire: %w", err)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			errs = append(errs, fmt.Errorf("chunk %d-%d: %w", i, end-1, err))
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("firestore transport: Delete %s/%s: %d chunk(s) failed: %w", targetCluster, clusterID, len(errs), errors.Join(errs...))
+	}
+
+	c.log.Infof(ctx, "firestore transport: deleted %d resources for %s/%s", len(applySnaps), targetCluster, clusterID)
 	return nil
 }
 
