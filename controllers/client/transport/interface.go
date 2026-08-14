@@ -2,26 +2,32 @@ package transport
 
 import (
 	"context"
+	"fmt"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	workv1 "open-cluster-management.io/api/work/v1"
 )
 
-// ManifestWorkStatus holds the status read back from Maestro after applying a ManifestWork.
-type ManifestWorkStatus struct {
-	// Conditions contains the top-level ManifestWork conditions (Applied, Available, etc.).
-	Conditions []metav1.Condition
-	// ResourceStatuses contains statusFeedback values keyed by manifest index then by name.
-	// e.g. ResourceStatuses[0]["availableCondition"] = "True"
-	ResourceStatuses []map[string]string
+// ResourceKey returns the identity key used in ResourceStatuses for a given resource.
+// Format: "{group}/{version}/{resource}/{namespace}/{name}"
+func ResourceKey(group, version, resource, namespace, name string) string {
+	return fmt.Sprintf("%s/%s/%s/%s/%s", group, version, resource, namespace, name)
 }
 
-// Client abstracts the transport layer (Maestro today, Firestore in future).
+// Status holds the status read back from the transport after applying resources.
+type Status struct {
+	// Conditions contains top-level conditions (Applied, Available, etc.).
+	Conditions []metav1.Condition
+	// ResourceStatuses contains statusFeedback values keyed by resource identity then by field name.
+	// Key format: "{group}/{version}/{resource}/{namespace}/{name}"
+	ResourceStatuses map[string]map[string]string
+}
+
+// Client abstracts the transport layer for delivering resources to management clusters.
 type Client interface {
-	// Apply creates or updates a ManifestWork on the target cluster and returns its current status.
-	Apply(ctx context.Context, targetCluster string, mw *workv1.ManifestWork) (*ManifestWorkStatus, error)
-	// GetStatus reads back the ManifestWork status.
-	GetStatus(ctx context.Context, targetCluster, name string) (*ManifestWorkStatus, error)
-	// Delete removes the ManifestWork from the target cluster.
-	Delete(ctx context.Context, targetCluster, name string) error
+	// Apply creates or updates resources on the target cluster and returns current status.
+	Apply(ctx context.Context, targetCluster, clusterID string, manifests [][]byte) (*Status, error)
+	// GetStatus reads back the status of resources for the given clusterID.
+	GetStatus(ctx context.Context, targetCluster, clusterID string) (*Status, error)
+	// Delete removes all resources for the given clusterID from the target cluster.
+	Delete(ctx context.Context, targetCluster, clusterID string) error
 }

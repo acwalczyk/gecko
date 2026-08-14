@@ -12,7 +12,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	workv1 "open-cluster-management.io/api/work/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -21,6 +20,7 @@ import (
 	"github.com/openshift-online/gecko/controllers/client/transport"
 	"github.com/openshift-online/gecko/controllers/client/transport/mock"
 	"github.com/openshift-online/gecko/controllers/hc"
+	"github.com/openshift-online/gecko/controllers/util/constants"
 	"github.com/openshift-online/gecko/controllers/util/logger"
 )
 
@@ -67,6 +67,9 @@ type mockStoreClient struct {
 	cluster      *privatev1.Cluster
 	getErr       error
 	statusWriter *mockStatusWriter
+	updateCalled bool
+	updateErr    error
+	updated      client.Object
 }
 
 func (m *mockStoreClient) Get(_ context.Context, _ client.ObjectKey, obj client.Object, _ ...client.GetOption) error {
@@ -95,8 +98,10 @@ func (m *mockStoreClient) Create(_ context.Context, _ client.Object, _ ...client
 func (m *mockStoreClient) Delete(_ context.Context, _ client.Object, _ ...client.DeleteOption) error {
 	return nil
 }
-func (m *mockStoreClient) Update(_ context.Context, _ client.Object, _ ...client.UpdateOption) error {
-	return nil
+func (m *mockStoreClient) Update(_ context.Context, obj client.Object, _ ...client.UpdateOption) error {
+	m.updateCalled = true
+	m.updated = obj
+	return m.updateErr
 }
 func (m *mockStoreClient) Patch(_ context.Context, _ client.Object, _ client.Patch, _ ...client.PatchOption) error {
 	return nil
@@ -118,16 +123,17 @@ func (m *mockStoreClient) IsObjectNamespaced(_ runtime.Object) (bool, error) { r
 // errTransport is a transport.Client that returns configurable errors.
 type errTransport struct {
 	applyErr    error
-	applyResult *transport.ManifestWorkStatus
+	applyResult *transport.Status
+	deleteErr   error
 }
 
-func (e *errTransport) Apply(_ context.Context, _ string, _ *workv1.ManifestWork) (*transport.ManifestWorkStatus, error) {
+func (e *errTransport) Apply(_ context.Context, _, _ string, _ [][]byte) (*transport.Status, error) {
 	return e.applyResult, e.applyErr
 }
-func (e *errTransport) GetStatus(_ context.Context, _, _ string) (*transport.ManifestWorkStatus, error) {
+func (e *errTransport) GetStatus(_ context.Context, _, _ string) (*transport.Status, error) {
 	return nil, nil
 }
-func (e *errTransport) Delete(_ context.Context, _, _ string) error { return nil }
+func (e *errTransport) Delete(_ context.Context, _, _ string) error { return e.deleteErr }
 
 // clusterReq returns a reconcile.Request for the given cluster name.
 func clusterReq(name string) reconcile.Request {
@@ -147,6 +153,7 @@ func buildReadyCluster(clusterID, version string) *privatev1.Cluster {
 	c.SetName(clusterID)
 	c.SetNamespace("hyperfleet")
 	c.SetGeneration(2)
+	c.SetFinalizers([]string{constants.FinalizerCluster})
 	c.Spec = privatev1.ClusterSpec{
 		InfraID: "infra-xyz",
 		Release: privatev1.ReleaseSpec{Version: version},
@@ -175,19 +182,24 @@ func buildReadyCluster(clusterID, version string) *privatev1.Cluster {
 }
 
 // buildReconciler wires up an hc.Reconciler backed by the given store and transport.
-// getErr is injected into the cluster Get call; statusErr is returned by Status().Update.
+// getErr is injected into the cluster Get call; statusErr is returned by Status().Update;
+// updateErr is returned by Update (used for finalizer add/remove).
 func buildReconciler(
 	t *testing.T,
 	cluster *privatev1.Cluster,
 	getErr error,
 	tr transport.Client,
 	statusErr error,
+	opts ...func(*mockStoreClient),
 ) (*hc.Reconciler, *mockStoreClient) {
 	t.Helper()
 	storeClient := &mockStoreClient{
 		cluster:      cluster,
 		getErr:       getErr,
 		statusWriter: &mockStatusWriter{updateErr: statusErr},
+	}
+	for _, o := range opts {
+		o(storeClient)
 	}
 	return hc.New(tr, testLogger(t), storeClient), storeClient
 }
@@ -224,6 +236,7 @@ func TestReconcile_DependenciesNotReady_NoPlacement(t *testing.T) {
 	cluster := &privatev1.Cluster{}
 	cluster.SetName(clusterID)
 	cluster.SetNamespace("hyperfleet")
+	cluster.SetFinalizers([]string{constants.FinalizerCluster})
 	cluster.Status.VersionResolution = &privatev1.VersionResolutionResult{
 		ReleaseImage:   "quay.io/openshift-release-dev/ocp-release:4.15.0-x86_64",
 		ReleaseVersion: "4.15.0",
@@ -246,6 +259,7 @@ func TestReconcile_PlacementNotReady_StatusUpdateConflict(t *testing.T) {
 	cluster := &privatev1.Cluster{}
 	cluster.SetName(clusterID)
 	cluster.SetNamespace("hyperfleet")
+	cluster.SetFinalizers([]string{constants.FinalizerCluster})
 	// No conditions → setWaitingConditions adds them → returns true → Status.Update called.
 
 	tr := mock.New()
@@ -265,6 +279,7 @@ func TestReconcile_PlacementNotReady_StatusUpdateError(t *testing.T) {
 	cluster := &privatev1.Cluster{}
 	cluster.SetName(clusterID)
 	cluster.SetNamespace("hyperfleet")
+	cluster.SetFinalizers([]string{constants.FinalizerCluster})
 
 	tr := mock.New()
 	r, _ := buildReconciler(t, cluster, nil, tr, fmt.Errorf("server error"))
@@ -281,6 +296,7 @@ func TestReconcile_VRNil_SetsWaitingConditions(t *testing.T) {
 	cluster := &privatev1.Cluster{}
 	cluster.SetName(clusterID)
 	cluster.SetNamespace("hyperfleet")
+	cluster.SetFinalizers([]string{constants.FinalizerCluster})
 	cluster.Status.PlacementResult = &privatev1.PlacementResult{
 		ManagementClusterName: "mc-cluster-1",
 		BaseDomain:            "example.com",
@@ -304,6 +320,7 @@ func TestReconcile_VRNil_StatusUpdateConflict(t *testing.T) {
 	cluster := &privatev1.Cluster{}
 	cluster.SetName(clusterID)
 	cluster.SetNamespace("hyperfleet")
+	cluster.SetFinalizers([]string{constants.FinalizerCluster})
 	cluster.Status.PlacementResult = &privatev1.PlacementResult{ManagementClusterName: "mc-1"}
 
 	tr := mock.New()
@@ -322,6 +339,7 @@ func TestReconcile_VRNil_StatusUpdateError(t *testing.T) {
 	cluster := &privatev1.Cluster{}
 	cluster.SetName(clusterID)
 	cluster.SetNamespace("hyperfleet")
+	cluster.SetFinalizers([]string{constants.FinalizerCluster})
 	cluster.Status.PlacementResult = &privatev1.PlacementResult{ManagementClusterName: "mc-1"}
 
 	tr := mock.New()
@@ -396,7 +414,7 @@ func TestReconcile_ManifestBuildError(t *testing.T) {
 
 	_, err := r.Reconcile(context.Background(), clusterReq(clusterID))
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "build manifest work")
+	require.Contains(t, err.Error(), "build manifests")
 	require.Empty(t, tr.ApplyCalls)
 }
 
@@ -410,17 +428,17 @@ func TestReconcile_TransportApplyError(t *testing.T) {
 
 	_, err := r.Reconcile(context.Background(), clusterReq(clusterID))
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "apply manifest work")
+	require.Contains(t, err.Error(), "apply resources")
 }
 
 // TestReconcile_MWStatusNil_RequeuesPending verifies that when Apply returns nil status
-// (ManifestWork not yet processed), both conditions are set to False and the reconciler
+// (resources not yet processed), both conditions are set to False and the reconciler
 // requeues with the pending interval.
 func TestReconcile_MWStatusNil_RequeuesPending(t *testing.T) {
 	clusterID := "cluster-abc"
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 
-	// Apply returns nil status to simulate the ManifestWork not yet having a status.
+	// Apply returns nil status to simulate the resources not yet having a status.
 	tr := &errTransport{}
 	r, storeClient := buildReconciler(t, cluster, nil, tr, nil)
 
@@ -435,22 +453,21 @@ func TestReconcile_MWStatusNil_RequeuesPending(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestReconcile_HappyPath verifies the full reconcile path when all dependencies are ready
-// and the ManifestWork has been applied successfully.
+// and the resources have been applied successfully.
 func TestReconcile_HappyPath(t *testing.T) {
 	clusterID := "cluster-abc"
-	mwName := clusterID + "-hc-controller"
 	mcName := "mc-cluster-1"
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 
 	tr := mock.New()
-	tr.StatusOverrides[mcName+"/"+mwName] = &transport.ManifestWorkStatus{
+	hcKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/hostedclusters/clusters-%s/%s", clusterID, clusterID)
+	tr.StatusOverrides[mcName+"/"+clusterID] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully", LastTransitionTime: metav1.Now()},
 		},
-		ResourceStatuses: []map[string]string{
-			{}, {}, {}, // indices 0-2
-			{"availableCondition": "True", "degradedCondition": "False"}, // index 3 = HC
+		ResourceStatuses: map[string]map[string]string{
+			hcKey: {"availableCondition": "True", "degradedCondition": "False"},
 		},
 	}
 
@@ -461,7 +478,7 @@ func TestReconcile_HappyPath(t *testing.T) {
 	require.Equal(t, 5*time.Minute, result.RequeueAfter)
 	require.Len(t, tr.ApplyCalls, 1)
 	require.Equal(t, mcName, tr.ApplyCalls[0].TargetCluster)
-	require.Equal(t, mwName, tr.ApplyCalls[0].Work.Name)
+	require.Equal(t, clusterID, tr.ApplyCalls[0].ClusterID)
 	require.True(t, storeClient.statusWriter.called, "expected Status().Update to be called")
 }
 
@@ -469,19 +486,18 @@ func TestReconcile_HappyPath(t *testing.T) {
 // version fields from HC status feedback are written to cluster.Status.HostedClusterResult.
 func TestReconcile_HCFeedback_SetsHostedClusterResult(t *testing.T) {
 	clusterID := "cluster-abc"
-	mwName := clusterID + "-hc-controller"
 	mcName := "mc-cluster-1"
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 
 	tr := mock.New()
-	tr.StatusOverrides[mcName+"/"+mwName] = &transport.ManifestWorkStatus{
+	hcKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/hostedclusters/clusters-%s/%s", clusterID, clusterID)
+	tr.StatusOverrides[mcName+"/"+clusterID] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully", LastTransitionTime: metav1.Now()},
 		},
-		ResourceStatuses: []map[string]string{
-			{}, {}, {},
-			{
+		ResourceStatuses: map[string]map[string]string{
+			hcKey: {
 				"availableCondition":   "True",
 				"controlPlaneEndpoint": "api.my-cluster-user.example.com",
 				"version":              "4.15.0",
@@ -502,18 +518,17 @@ func TestReconcile_HCFeedback_SetsHostedClusterResult(t *testing.T) {
 	require.Equal(t, "4.15.0", captured.Status.HostedClusterResult.Version)
 }
 
-// TestReconcile_MWNoAppliedCondition_RequeuesPending verifies that when the ManifestWork
+// TestReconcile_MWNoAppliedCondition_RequeuesPending verifies that when the resources
 // status has no "Applied" condition, the reconciler requeues with the pending interval.
 // This also exercises the mwCondition default return path.
 func TestReconcile_MWNoAppliedCondition_RequeuesPending(t *testing.T) {
 	clusterID := "cluster-abc"
-	mwName := clusterID + "-hc-controller"
 	mcName := "mc-cluster-1"
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 
 	tr := mock.New()
-	tr.StatusOverrides[mcName+"/"+mwName] = &transport.ManifestWorkStatus{} // no conditions at all
+	tr.StatusOverrides[mcName+"/"+clusterID] = &transport.Status{} // no conditions at all
 
 	r, _ := buildReconciler(t, cluster, nil, tr, nil)
 
@@ -526,13 +541,12 @@ func TestReconcile_MWNoAppliedCondition_RequeuesPending(t *testing.T) {
 // explicitly False, the reconciler requeues with the pending interval.
 func TestReconcile_MWNotApplied_RequeuesPending(t *testing.T) {
 	clusterID := "cluster-abc"
-	mwName := clusterID + "-hc-controller"
 	mcName := "mc-cluster-1"
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 
 	tr := mock.New()
-	tr.StatusOverrides[mcName+"/"+mwName] = &transport.ManifestWorkStatus{
+	tr.StatusOverrides[mcName+"/"+clusterID] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionFalse, Reason: "ApplyFailed", LastTransitionTime: metav1.Now()},
 		},
@@ -546,23 +560,22 @@ func TestReconcile_MWNotApplied_RequeuesPending(t *testing.T) {
 }
 
 // TestReconcile_ApplyConditions_Idempotent verifies that when the cluster's conditions
-// already match the current MW status, applyStatusConditions returns false and
+// already match the current applied status, applyStatusConditions returns false and
 // Status.Update is not called.
 func TestReconcile_ApplyConditions_Idempotent(t *testing.T) {
 	clusterID := "cluster-abc"
-	mwName := clusterID + "-hc-controller"
 	mcName := "mc-cluster-1"
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 	// Pre-populate conditions to exactly match what applyStatusConditions would set,
 	// including ObservedGeneration (cluster.Generation = 2).
 	cluster.Status.Conditions = []metav1.Condition{
-		{Type: "ManifestWorkApplied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully", Message: "", ObservedGeneration: 2},
+		{Type: "ResourcesApplied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully", Message: "", ObservedGeneration: 2},
 		{Type: "HostedClusterAvailable", Status: metav1.ConditionFalse, Reason: "HostedClusterAvailable", Message: "", ObservedGeneration: 2},
 	}
 
 	tr := mock.New()
-	tr.StatusOverrides[mcName+"/"+mwName] = &transport.ManifestWorkStatus{
+	tr.StatusOverrides[mcName+"/"+clusterID] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
@@ -581,14 +594,13 @@ func TestReconcile_ApplyConditions_Idempotent(t *testing.T) {
 // Status.Update after applyStatusConditions is silently swallowed.
 func TestReconcile_StatusUpdateConflict_ReturnsNoError(t *testing.T) {
 	clusterID := "cluster-abc"
-	mwName := clusterID + "-hc-controller"
 	mcName := "mc-cluster-1"
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 	// No prior conditions → applyStatusConditions will add them → returns true → Update called.
 
 	tr := mock.New()
-	tr.StatusOverrides[mcName+"/"+mwName] = &transport.ManifestWorkStatus{
+	tr.StatusOverrides[mcName+"/"+clusterID] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
@@ -606,7 +618,6 @@ func TestReconcile_StatusUpdateConflict_ReturnsNoError(t *testing.T) {
 // extracted from ServiceAccountsRef and passed through to the manifest build.
 func TestReconcile_WithServiceAccountsRef(t *testing.T) {
 	clusterID := "cluster-wif"
-	mwName := clusterID + "-hc-controller"
 	mcName := "mc-cluster-1"
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
@@ -625,7 +636,7 @@ func TestReconcile_WithServiceAccountsRef(t *testing.T) {
 	}
 
 	tr := mock.New()
-	tr.StatusOverrides[mcName+"/"+mwName] = &transport.ManifestWorkStatus{
+	tr.StatusOverrides[mcName+"/"+clusterID] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
@@ -635,7 +646,7 @@ func TestReconcile_WithServiceAccountsRef(t *testing.T) {
 
 	result, err := r.Reconcile(context.Background(), clusterReq(clusterID))
 	require.NoError(t, err)
-	require.Equal(t, 5*time.Minute, result.RequeueAfter) // ManifestWorkApplied=True → requeueStable
+	require.Equal(t, 5*time.Minute, result.RequeueAfter) // ResourcesApplied=True → requeueStable
 	require.Len(t, tr.ApplyCalls, 1)
 	require.True(t, storeClient.statusWriter.called)
 }
@@ -644,13 +655,12 @@ func TestReconcile_WithServiceAccountsRef(t *testing.T) {
 // Status.Update after applyStatusConditions is propagated.
 func TestReconcile_StatusUpdateError_ReturnsError(t *testing.T) {
 	clusterID := "cluster-abc"
-	mwName := clusterID + "-hc-controller"
 	mcName := "mc-cluster-1"
 
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 
 	tr := mock.New()
-	tr.StatusOverrides[mcName+"/"+mwName] = &transport.ManifestWorkStatus{
+	tr.StatusOverrides[mcName+"/"+clusterID] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
@@ -662,4 +672,164 @@ func TestReconcile_StatusUpdateError_ReturnsError(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "update cluster status")
 	require.True(t, storeClient.statusWriter.called)
+}
+
+// ---------------------------------------------------------------------------
+// Test cases – finalizer management
+// ---------------------------------------------------------------------------
+
+// TestReconcile_AddsFinalizer verifies that a cluster without the finalizer gets it added
+// and the reconciler returns immediately to re-reconcile.
+func TestReconcile_AddsFinalizer(t *testing.T) {
+	clusterID := "cluster-abc"
+	cluster := buildReadyCluster(clusterID, "4.15.0")
+	cluster.SetFinalizers(nil) // no finalizer yet
+
+	tr := mock.New()
+	r, storeClient := buildReconciler(t, cluster, nil, tr, nil)
+
+	result, err := r.Reconcile(context.Background(), clusterReq(clusterID))
+	require.NoError(t, err)
+	require.Zero(t, result.RequeueAfter)
+	require.True(t, storeClient.updateCalled, "expected Update to be called to add finalizer")
+	require.Empty(t, tr.ApplyCalls, "should not Apply before finalizer is persisted")
+
+	updated := storeClient.updated.(*privatev1.Cluster)
+	require.Contains(t, updated.Finalizers, constants.FinalizerCluster)
+}
+
+// TestReconcile_AddFinalizer_UpdateError verifies that an Update error when adding the
+// finalizer is propagated.
+func TestReconcile_AddFinalizer_UpdateError(t *testing.T) {
+	clusterID := "cluster-abc"
+	cluster := buildReadyCluster(clusterID, "4.15.0")
+	cluster.SetFinalizers(nil) // no finalizer yet
+
+	tr := mock.New()
+	r, _ := buildReconciler(t, cluster, nil, tr, nil, func(m *mockStoreClient) {
+		m.updateErr = fmt.Errorf("etcd write error")
+	})
+
+	_, err := r.Reconcile(context.Background(), clusterReq(clusterID))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "add finalizer")
+}
+
+// ---------------------------------------------------------------------------
+// Test cases – deletion
+// ---------------------------------------------------------------------------
+
+// TestReconcile_Deletion_HappyPath verifies that when a cluster has a DeletionTimestamp,
+// transport.Delete is called and the finalizer is removed.
+func TestReconcile_Deletion_HappyPath(t *testing.T) {
+	clusterID := "cluster-abc"
+	mcName := "mc-cluster-1"
+	cluster := buildReadyCluster(clusterID, "4.15.0")
+	cluster.Status.Conditions = append(cluster.Status.Conditions, metav1.Condition{
+		Type: "ResourcesApplied", Status: metav1.ConditionTrue, Reason: "Applied",
+	})
+	now := metav1.Now()
+	cluster.SetDeletionTimestamp(&now)
+
+	tr := mock.New()
+	r, storeClient := buildReconciler(t, cluster, nil, tr, nil)
+
+	result, err := r.Reconcile(context.Background(), clusterReq(clusterID))
+	require.NoError(t, err)
+	require.Zero(t, result.RequeueAfter)
+
+	require.Len(t, tr.DeleteCalls, 1)
+	require.Equal(t, mcName, tr.DeleteCalls[0].TargetCluster)
+	require.Equal(t, clusterID, tr.DeleteCalls[0].ClusterID)
+	require.Empty(t, tr.ApplyCalls, "should not Apply during deletion")
+
+	require.True(t, storeClient.updateCalled, "expected Update to remove finalizer")
+	updated := storeClient.updated.(*privatev1.Cluster)
+	require.NotContains(t, updated.Finalizers, constants.FinalizerCluster)
+}
+
+// TestReconcile_Deletion_NoPlacement verifies that when the cluster has no placement
+// (no resources on any MC), transport.Delete is NOT called but the finalizer is still removed.
+func TestReconcile_Deletion_NoPlacement(t *testing.T) {
+	clusterID := "cluster-abc"
+	cluster := &privatev1.Cluster{}
+	cluster.SetName(clusterID)
+	cluster.SetNamespace("hyperfleet")
+	cluster.SetFinalizers([]string{constants.FinalizerCluster})
+	now := metav1.Now()
+	cluster.SetDeletionTimestamp(&now)
+	// No PlacementResult.
+
+	tr := mock.New()
+	r, storeClient := buildReconciler(t, cluster, nil, tr, nil)
+
+	result, err := r.Reconcile(context.Background(), clusterReq(clusterID))
+	require.NoError(t, err)
+	require.Zero(t, result.RequeueAfter)
+
+	require.Empty(t, tr.DeleteCalls, "should not call Delete without placement")
+	require.True(t, storeClient.updateCalled, "expected Update to remove finalizer")
+	updated := storeClient.updated.(*privatev1.Cluster)
+	require.NotContains(t, updated.Finalizers, constants.FinalizerCluster)
+}
+
+// TestReconcile_Deletion_TransportError verifies that a transport.Delete error is
+// propagated and the finalizer is NOT removed (controller will retry).
+func TestReconcile_Deletion_TransportError(t *testing.T) {
+	clusterID := "cluster-abc"
+	cluster := buildReadyCluster(clusterID, "4.15.0")
+	cluster.Status.Conditions = append(cluster.Status.Conditions, metav1.Condition{
+		Type: "ResourcesApplied", Status: metav1.ConditionTrue, Reason: "Applied",
+	})
+	now := metav1.Now()
+	cluster.SetDeletionTimestamp(&now)
+
+	tr := &errTransport{deleteErr: fmt.Errorf("firestore unavailable")}
+	r, storeClient := buildReconciler(t, cluster, nil, tr, nil)
+
+	_, err := r.Reconcile(context.Background(), clusterReq(clusterID))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "delete resources")
+	require.False(t, storeClient.updateCalled, "finalizer should not be removed on error")
+}
+
+// TestReconcile_Deletion_NoFinalizer verifies that when the cluster has a DeletionTimestamp
+// but no finalizer, the reconciler returns immediately (nothing to do).
+func TestReconcile_Deletion_NoFinalizer(t *testing.T) {
+	clusterID := "cluster-abc"
+	cluster := buildReadyCluster(clusterID, "4.15.0")
+	cluster.SetFinalizers(nil)
+	now := metav1.Now()
+	cluster.SetDeletionTimestamp(&now)
+
+	tr := mock.New()
+	r, storeClient := buildReconciler(t, cluster, nil, tr, nil)
+
+	result, err := r.Reconcile(context.Background(), clusterReq(clusterID))
+	require.NoError(t, err)
+	require.Zero(t, result.RequeueAfter)
+	require.Empty(t, tr.DeleteCalls)
+	require.False(t, storeClient.updateCalled)
+}
+
+// TestReconcile_Deletion_RemoveFinalizerError verifies that an error removing the
+// finalizer after successful transport.Delete is propagated.
+func TestReconcile_Deletion_RemoveFinalizerError(t *testing.T) {
+	clusterID := "cluster-abc"
+	cluster := buildReadyCluster(clusterID, "4.15.0")
+	cluster.Status.Conditions = append(cluster.Status.Conditions, metav1.Condition{
+		Type: "ResourcesApplied", Status: metav1.ConditionTrue, Reason: "Applied",
+	})
+	now := metav1.Now()
+	cluster.SetDeletionTimestamp(&now)
+
+	tr := mock.New()
+	r, _ := buildReconciler(t, cluster, nil, tr, nil, func(m *mockStoreClient) {
+		m.updateErr = fmt.Errorf("etcd write error")
+	})
+
+	_, err := r.Reconcile(context.Background(), clusterReq(clusterID))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "remove finalizer")
+	require.Len(t, tr.DeleteCalls, 1, "transport.Delete should have been called before finalizer removal failed")
 }

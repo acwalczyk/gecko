@@ -1,6 +1,6 @@
 apiVersion: v2
 name: gecko-hc
-description: Gecko HC Controller - reconciles ManagedHostedCluster resources via Maestro
+description: Gecko HC Controller - reconciles ManagedHostedCluster resources via Firestore
 type: application
 version: 0.1.0
 appVersion: "0.0.1-dev"

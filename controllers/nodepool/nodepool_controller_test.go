@@ -13,7 +13,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	workv1 "open-cluster-management.io/api/work/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -21,6 +20,7 @@ import (
 
 	"github.com/openshift-online/gecko/controllers/client/transport"
 	"github.com/openshift-online/gecko/controllers/client/transport/mock"
+	"github.com/openshift-online/gecko/controllers/util/constants"
 	"github.com/openshift-online/gecko/controllers/util/logger"
 )
 
@@ -70,6 +70,9 @@ type mockStoreClient struct {
 	npGetErr     error
 	clsGetErr    error
 	statusWriter *mockStatusWriter
+	updateCalled bool
+	updateErr    error
+	updated      client.Object
 }
 
 func (m *mockStoreClient) Get(_ context.Context, _ client.ObjectKey, obj client.Object, _ ...client.GetOption) error {
@@ -108,8 +111,10 @@ func (m *mockStoreClient) Create(_ context.Context, _ client.Object, _ ...client
 func (m *mockStoreClient) Delete(_ context.Context, _ client.Object, _ ...client.DeleteOption) error {
 	return nil
 }
-func (m *mockStoreClient) Update(_ context.Context, _ client.Object, _ ...client.UpdateOption) error {
-	return nil
+func (m *mockStoreClient) Update(_ context.Context, obj client.Object, _ ...client.UpdateOption) error {
+	m.updateCalled = true
+	m.updated = obj
+	return m.updateErr
 }
 func (m *mockStoreClient) Patch(_ context.Context, _ client.Object, _ client.Patch, _ ...client.PatchOption) error {
 	return nil
@@ -131,16 +136,17 @@ func (m *mockStoreClient) IsObjectNamespaced(_ runtime.Object) (bool, error) { r
 // errTransport is a transport.Client that returns configurable errors.
 type errTransport struct {
 	applyErr    error
-	applyResult *transport.ManifestWorkStatus
+	applyResult *transport.Status
+	deleteErr   error
 }
 
-func (e *errTransport) Apply(_ context.Context, _ string, _ *workv1.ManifestWork) (*transport.ManifestWorkStatus, error) {
+func (e *errTransport) Apply(_ context.Context, _, _ string, _ [][]byte) (*transport.Status, error) {
 	return e.applyResult, e.applyErr
 }
-func (e *errTransport) GetStatus(_ context.Context, _, _ string) (*transport.ManifestWorkStatus, error) {
+func (e *errTransport) GetStatus(_ context.Context, _, _ string) (*transport.Status, error) {
 	return nil, nil
 }
-func (e *errTransport) Delete(_ context.Context, _, _ string) error { return nil }
+func (e *errTransport) Delete(_ context.Context, _, _ string) error { return e.deleteErr }
 
 // npReq returns a reconcile.Request for the given clusterID/nodepoolID pair.
 func npReq(clusterID, nodepoolID string) reconcile.Request {
@@ -159,6 +165,7 @@ func testNodePool(vrVersion string) *privatev1.NodePool {
 	np := &privatev1.NodePool{}
 	np.SetName("np-test")
 	np.SetNamespace("cluster-test")
+	np.SetFinalizers([]string{constants.FinalizerNodePool})
 	np.Spec = privatev1.NodePoolSpec{
 		ClusterID: "cluster-test",
 		Platform: privatev1.NodePoolPlatformSpec{
@@ -449,16 +456,16 @@ func TestReconcile_VRVersionMismatch_StatusUpdateError(t *testing.T) {
 // Test cases – platform field defaults
 // ---------------------------------------------------------------------------
 
-// replicasFromManifestWork parses the replica count from the raw JSON in the first manifest.
-func replicasFromManifestWork(t *testing.T, mw *workv1.ManifestWork) int32 {
+// replicasFromManifests parses the replica count from the raw JSON in the first manifest.
+func replicasFromManifests(t *testing.T, manifests [][]byte) int32 {
 	t.Helper()
-	require.NotEmpty(t, mw.Spec.Workload.Manifests)
+	require.NotEmpty(t, manifests)
 	var obj struct {
 		Spec struct {
 			Replicas int32 `json:"replicas"`
 		} `json:"spec"`
 	}
-	require.NoError(t, json.Unmarshal(mw.Spec.Workload.Manifests[0].Raw, &obj))
+	require.NoError(t, json.Unmarshal(manifests[0], &obj))
 	return obj.Spec.Replicas
 }
 
@@ -470,14 +477,14 @@ func TestReconcile_NodeCountHonored(t *testing.T) {
 	np.Spec.NodeCount = &count
 	cluster := testCluster(true, true)
 
-	mwName := np.Name + "-" + adapterName
+	npKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/nodepools/clusters-%s/%s", np.Spec.ClusterID, np.Name)
 	tr := mock.New()
-	tr.StatusOverrides["mc-us-c1/"+mwName] = &transport.ManifestWorkStatus{
+	tr.StatusOverrides["mc-us-c1/np-test"] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
-		ResourceStatuses: []map[string]string{
-			{"readyCondition": "True", "allNodesHealthyCondition": "True"},
+		ResourceStatuses: map[string]map[string]string{
+			npKey: {"readyCondition": "True", "allNodesHealthyCondition": "True"},
 		},
 	}
 
@@ -486,7 +493,7 @@ func TestReconcile_NodeCountHonored(t *testing.T) {
 	_, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
 	require.NoError(t, err)
 	require.Len(t, tr.ApplyCalls, 1)
-	require.Equal(t, int32(3), replicasFromManifestWork(t, tr.ApplyCalls[0].Work))
+	require.Equal(t, int32(3), replicasFromManifests(t, tr.ApplyCalls[0].Manifests))
 }
 
 // TestReconcile_DefaultNodeCount verifies that when Spec.NodeCount is nil, defaultReplicas is used.
@@ -495,14 +502,14 @@ func TestReconcile_DefaultNodeCount(t *testing.T) {
 	np.Spec.NodeCount = nil
 	cluster := testCluster(true, true)
 
-	mwName := np.Name + "-" + adapterName
+	npKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/nodepools/clusters-%s/%s", np.Spec.ClusterID, np.Name)
 	tr := mock.New()
-	tr.StatusOverrides["mc-us-c1/"+mwName] = &transport.ManifestWorkStatus{
+	tr.StatusOverrides["mc-us-c1/np-test"] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
-		ResourceStatuses: []map[string]string{
-			{"readyCondition": "True", "allNodesHealthyCondition": "True"},
+		ResourceStatuses: map[string]map[string]string{
+			npKey: {"readyCondition": "True", "allNodesHealthyCondition": "True"},
 		},
 	}
 
@@ -511,7 +518,7 @@ func TestReconcile_DefaultNodeCount(t *testing.T) {
 	_, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
 	require.NoError(t, err)
 	require.Len(t, tr.ApplyCalls, 1)
-	require.Equal(t, int32(1), replicasFromManifestWork(t, tr.ApplyCalls[0].Work))
+	require.Equal(t, int32(1), replicasFromManifests(t, tr.ApplyCalls[0].Manifests))
 }
 
 // TestReconcile_DefaultPlatformValues verifies that when the NodePool has no GCP platform
@@ -523,15 +530,15 @@ func TestReconcile_DefaultPlatformValues(t *testing.T) {
 
 	cluster := testCluster(true, true) // cluster has GCP.Region = "us-central1"
 
-	mwName := np.Name + "-" + adapterName
+	npKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/nodepools/clusters-%s/%s", np.Spec.ClusterID, np.Name)
 
 	tr := mock.New()
-	tr.StatusOverrides["mc-us-c1/"+mwName] = &transport.ManifestWorkStatus{
+	tr.StatusOverrides["mc-us-c1/np-test"] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
-		ResourceStatuses: []map[string]string{
-			{"readyCondition": "True", "allNodesHealthyCondition": "True"},
+		ResourceStatuses: map[string]map[string]string{
+			npKey: {"readyCondition": "True", "allNodesHealthyCondition": "True"},
 		},
 	}
 
@@ -553,15 +560,15 @@ func TestReconcile_ZoneDerivedFromRegion(t *testing.T) {
 
 	cluster := testCluster(true, true) // cluster region = "us-central1"
 
-	mwName := np.Name + "-" + adapterName
+	npKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/nodepools/clusters-%s/%s", np.Spec.ClusterID, np.Name)
 
 	tr := mock.New()
-	tr.StatusOverrides["mc-us-c1/"+mwName] = &transport.ManifestWorkStatus{
+	tr.StatusOverrides["mc-us-c1/np-test"] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
-		ResourceStatuses: []map[string]string{
-			{"readyCondition": "True", "allNodesHealthyCondition": "True"},
+		ResourceStatuses: map[string]map[string]string{
+			npKey: {"readyCondition": "True", "allNodesHealthyCondition": "True"},
 		},
 	}
 
@@ -586,17 +593,17 @@ func TestReconcile_TransportApplyError(t *testing.T) {
 
 	_, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "apply manifest work")
+	require.Contains(t, err.Error(), "apply resources")
 }
 
 // TestReconcile_MWStatusNil_RequeuesPending verifies that when Apply returns nil status
-// (ManifestWork not yet processed), both conditions are set to False and the reconciler
+// (resources not yet processed), both conditions are set to False and the reconciler
 // requeues with the pending interval.
 func TestReconcile_MWStatusNil_RequeuesPending(t *testing.T) {
 	np := testNodePool("4.16.0")
 	cluster := testCluster(true, true)
 
-	// Apply returns nil status to simulate the ManifestWork not yet having a status.
+	// Apply returns nil status to simulate the resources not yet having a status.
 	tr := &errTransport{}
 	r, storeClient := buildReconciler(t, np, cluster, tr, nil, nil, nil)
 
@@ -609,7 +616,7 @@ func TestReconcile_MWStatusNil_RequeuesPending(t *testing.T) {
 	available := meta.FindStatusCondition(captured.Status.Conditions, "NodePoolAvailable")
 	require.NotNil(t, available)
 	require.Equal(t, metav1.ConditionFalse, available.Status)
-	require.Equal(t, "ManifestWorkNotFound", available.Reason)
+	require.Equal(t, "ResourcesNotFound", available.Reason)
 }
 
 // ---------------------------------------------------------------------------
@@ -621,13 +628,14 @@ func TestReconcile_HappyPath(t *testing.T) {
 	cluster := testCluster(true, true)
 
 	tr := mock.New()
-	mwName := np.Name + "-" + adapterName
-	tr.StatusOverrides["mc-us-c1/"+mwName] = &transport.ManifestWorkStatus{
+	nodepoolID := "np-test"
+	npKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/nodepools/clusters-%s/%s", np.Spec.ClusterID, np.Name)
+	tr.StatusOverrides["mc-us-c1/"+nodepoolID] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
-		ResourceStatuses: []map[string]string{
-			{
+		ResourceStatuses: map[string]map[string]string{
+			npKey: {
 				"readyCondition":           "True",
 				"allNodesHealthyCondition": "True",
 				"replicas":                 "2",
@@ -644,7 +652,7 @@ func TestReconcile_HappyPath(t *testing.T) {
 
 	require.Len(t, tr.ApplyCalls, 1)
 	require.Equal(t, "mc-us-c1", tr.ApplyCalls[0].TargetCluster)
-	require.Equal(t, mwName, tr.ApplyCalls[0].Work.Name)
+	require.Equal(t, "np-test", tr.ApplyCalls[0].ClusterID)
 	require.True(t, storeClient.statusWriter.called, "expected Status().Update to be called")
 
 	captured := storeClient.statusWriter.captured.(*privatev1.NodePool)
@@ -664,14 +672,14 @@ func TestReconcile_MWNotApplied_RequeuesPending(t *testing.T) {
 	np := testNodePool("4.16.0")
 	cluster := testCluster(true, true)
 
-	mwName := np.Name + "-" + adapterName
+	npKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/nodepools/clusters-%s/%s", np.Spec.ClusterID, np.Name)
 	tr := mock.New()
-	tr.StatusOverrides["mc-us-c1/"+mwName] = &transport.ManifestWorkStatus{
+	tr.StatusOverrides["mc-us-c1/np-test"] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionFalse, Reason: "ApplyFailed"},
 		},
-		ResourceStatuses: []map[string]string{
-			{"readyCondition": "False"},
+		ResourceStatuses: map[string]map[string]string{
+			npKey: {"readyCondition": "False"},
 		},
 	}
 
@@ -698,14 +706,14 @@ func TestReconcile_StatusUpdateConflict_ReturnsNoError(t *testing.T) {
 	np := testNodePool("4.16.0")
 	cluster := testCluster(true, true)
 
-	mwName := np.Name + "-" + adapterName
+	npKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/nodepools/clusters-%s/%s", np.Spec.ClusterID, np.Name)
 	tr := mock.New()
-	tr.StatusOverrides["mc-us-c1/"+mwName] = &transport.ManifestWorkStatus{
+	tr.StatusOverrides["mc-us-c1/np-test"] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
-		ResourceStatuses: []map[string]string{
-			{"readyCondition": "True", "allNodesHealthyCondition": "True"},
+		ResourceStatuses: map[string]map[string]string{
+			npKey: {"readyCondition": "True", "allNodesHealthyCondition": "True"},
 		},
 	}
 
@@ -723,9 +731,8 @@ func TestReconcile_StatusUpdateError_ReturnsError(t *testing.T) {
 	np := testNodePool("4.16.0")
 	cluster := testCluster(true, true)
 
-	mwName := np.Name + "-" + adapterName
 	tr := mock.New()
-	tr.StatusOverrides["mc-us-c1/"+mwName] = &transport.ManifestWorkStatus{
+	tr.StatusOverrides["mc-us-c1/np-test"] = &transport.Status{
 		Conditions: []metav1.Condition{
 			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully"},
 		},
@@ -737,4 +744,187 @@ func TestReconcile_StatusUpdateError_ReturnsError(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "update nodepool status")
 	require.True(t, storeClient.statusWriter.called)
+}
+
+// ---------------------------------------------------------------------------
+// Test cases – finalizer management
+// ---------------------------------------------------------------------------
+
+// TestReconcile_AddsFinalizer verifies that a nodepool without the finalizer gets it added
+// and the reconciler returns immediately to re-reconcile.
+func TestReconcile_AddsFinalizer(t *testing.T) {
+	np := testNodePool("4.16.0")
+	np.SetFinalizers(nil) // no finalizer yet
+	cluster := testCluster(true, true)
+
+	tr := mock.New()
+	r, storeClient := buildReconciler(t, np, cluster, tr, nil, nil, nil)
+
+	result, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
+	require.NoError(t, err)
+	require.Zero(t, result.RequeueAfter)
+	require.True(t, storeClient.updateCalled, "expected Update to be called to add finalizer")
+	require.Empty(t, tr.ApplyCalls, "should not Apply before finalizer is persisted")
+
+	updated := storeClient.updated.(*privatev1.NodePool)
+	require.Contains(t, updated.Finalizers, constants.FinalizerNodePool)
+}
+
+// TestReconcile_AddFinalizer_UpdateError verifies that an Update error when adding the
+// finalizer is propagated.
+func TestReconcile_AddFinalizer_UpdateError(t *testing.T) {
+	np := testNodePool("4.16.0")
+	np.SetFinalizers(nil)
+	cluster := testCluster(true, true)
+
+	tr := mock.New()
+	storeClient := &mockStoreClient{
+		nodepool:     np,
+		cluster:      cluster,
+		statusWriter: &mockStatusWriter{},
+		updateErr:    fmt.Errorf("etcd write error"),
+	}
+	r := New(tr, newTestLogger(t), storeClient)
+
+	_, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "add finalizer")
+}
+
+// ---------------------------------------------------------------------------
+// Test cases – deletion
+// ---------------------------------------------------------------------------
+
+// TestReconcile_Deletion_HappyPath verifies that when a nodepool has a DeletionTimestamp,
+// transport.Delete is called with the nodepoolID and the finalizer is removed.
+func TestReconcile_Deletion_HappyPath(t *testing.T) {
+	np := testNodePool("4.16.0")
+	np.Status.Conditions = append(np.Status.Conditions, metav1.Condition{
+		Type: "NodePoolResourcesApplied", Status: metav1.ConditionTrue, Reason: "Applied",
+	})
+	now := metav1.Now()
+	np.SetDeletionTimestamp(&now)
+	cluster := testCluster(true, true)
+
+	tr := mock.New()
+	r, storeClient := buildReconciler(t, np, cluster, tr, nil, nil, nil)
+
+	result, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
+	require.NoError(t, err)
+	require.Zero(t, result.RequeueAfter)
+
+	require.Len(t, tr.DeleteCalls, 1)
+	require.Equal(t, "mc-us-c1", tr.DeleteCalls[0].TargetCluster)
+	require.Equal(t, "np-test", tr.DeleteCalls[0].ClusterID)
+	require.Empty(t, tr.ApplyCalls, "should not Apply during deletion")
+
+	require.True(t, storeClient.updateCalled, "expected Update to remove finalizer")
+	updated := storeClient.updated.(*privatev1.NodePool)
+	require.NotContains(t, updated.Finalizers, constants.FinalizerNodePool)
+}
+
+// TestReconcile_Deletion_ClusterNotFound verifies that when the parent cluster is gone,
+// transport.Delete is NOT called but the finalizer is still removed.
+func TestReconcile_Deletion_ClusterNotFound(t *testing.T) {
+	np := testNodePool("4.16.0")
+	now := metav1.Now()
+	np.SetDeletionTimestamp(&now)
+
+	tr := mock.New()
+	r, storeClient := buildReconciler(t, np, nil, tr, nil, nil, nil) // nil cluster → NotFound
+
+	result, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
+	require.NoError(t, err)
+	require.Zero(t, result.RequeueAfter)
+
+	require.Empty(t, tr.DeleteCalls, "should not call Delete when cluster not found")
+	require.True(t, storeClient.updateCalled, "expected Update to remove finalizer")
+	updated := storeClient.updated.(*privatev1.NodePool)
+	require.NotContains(t, updated.Finalizers, constants.FinalizerNodePool)
+}
+
+// TestReconcile_Deletion_NoPlacement verifies that when the parent cluster has no placement,
+// transport.Delete is NOT called but the finalizer is still removed.
+func TestReconcile_Deletion_NoPlacement(t *testing.T) {
+	np := testNodePool("4.16.0")
+	now := metav1.Now()
+	np.SetDeletionTimestamp(&now)
+	cluster := testCluster(false, false) // no placement
+
+	tr := mock.New()
+	r, storeClient := buildReconciler(t, np, cluster, tr, nil, nil, nil)
+
+	result, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
+	require.NoError(t, err)
+	require.Zero(t, result.RequeueAfter)
+
+	require.Empty(t, tr.DeleteCalls, "should not call Delete without placement")
+	require.True(t, storeClient.updateCalled, "expected Update to remove finalizer")
+	updated := storeClient.updated.(*privatev1.NodePool)
+	require.NotContains(t, updated.Finalizers, constants.FinalizerNodePool)
+}
+
+// TestReconcile_Deletion_TransportError verifies that a transport.Delete error is
+// propagated and the finalizer is NOT removed (controller will retry).
+func TestReconcile_Deletion_TransportError(t *testing.T) {
+	np := testNodePool("4.16.0")
+	np.Status.Conditions = append(np.Status.Conditions, metav1.Condition{
+		Type: "NodePoolResourcesApplied", Status: metav1.ConditionTrue, Reason: "Applied",
+	})
+	now := metav1.Now()
+	np.SetDeletionTimestamp(&now)
+	cluster := testCluster(true, true)
+
+	tr := &errTransport{deleteErr: fmt.Errorf("firestore unavailable")}
+	r, storeClient := buildReconciler(t, np, cluster, tr, nil, nil, nil)
+
+	_, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "delete resources")
+	require.False(t, storeClient.updateCalled, "finalizer should not be removed on error")
+}
+
+// TestReconcile_Deletion_NoFinalizer verifies that when the nodepool has a DeletionTimestamp
+// but no finalizer, the reconciler returns immediately (nothing to do).
+func TestReconcile_Deletion_NoFinalizer(t *testing.T) {
+	np := testNodePool("4.16.0")
+	np.SetFinalizers(nil)
+	now := metav1.Now()
+	np.SetDeletionTimestamp(&now)
+	cluster := testCluster(true, true)
+
+	tr := mock.New()
+	r, storeClient := buildReconciler(t, np, cluster, tr, nil, nil, nil)
+
+	result, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
+	require.NoError(t, err)
+	require.Zero(t, result.RequeueAfter)
+	require.Empty(t, tr.DeleteCalls)
+	require.False(t, storeClient.updateCalled)
+}
+
+// TestReconcile_Deletion_RemoveFinalizerError verifies that an error removing the
+// finalizer after successful transport.Delete is propagated.
+func TestReconcile_Deletion_RemoveFinalizerError(t *testing.T) {
+	np := testNodePool("4.16.0")
+	np.Status.Conditions = append(np.Status.Conditions, metav1.Condition{
+		Type: "NodePoolResourcesApplied", Status: metav1.ConditionTrue, Reason: "Applied",
+	})
+	now := metav1.Now()
+	np.SetDeletionTimestamp(&now)
+	cluster := testCluster(true, true)
+
+	tr := mock.New()
+	storeClient := &mockStoreClient{
+		nodepool:     np,
+		cluster:      cluster,
+		statusWriter: &mockStatusWriter{},
+		updateErr:    fmt.Errorf("etcd write error"),
+	}
+	r := New(tr, newTestLogger(t), storeClient)
+
+	_, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "remove finalizer")
+	require.Len(t, tr.DeleteCalls, 1, "transport.Delete should have been called before finalizer removal failed")
 }

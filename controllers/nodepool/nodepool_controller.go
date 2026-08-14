@@ -11,12 +11,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	privatev1 "github.com/openshift-online/gecko/platform-api/api/private/v1"
 
 	"github.com/openshift-online/gecko/controllers/client/transport"
 	"github.com/openshift-online/gecko/controllers/nodepool/manifest"
+	"github.com/openshift-online/gecko/controllers/util/constants"
 	"github.com/openshift-online/gecko/controllers/util/logger"
 )
 
@@ -62,13 +64,33 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	clusterID := np.Spec.ClusterID
 	log = log.With("clusterID", clusterID)
 	var cluster privatev1.Cluster
+	clusterFound := true
 	clusterKey := types.NamespacedName{Namespace: req.Namespace, Name: clusterID}
 	if err := r.client.Get(ctx, clusterKey, &cluster); err != nil {
-		if apierrors.IsNotFound(err) {
-			log.Infof(ctx, "cluster %s not found for nodepool %s, skipping", clusterID, nodepoolID)
-			return reconcile.Result{}, nil
+		if !apierrors.IsNotFound(err) {
+			return reconcile.Result{}, fmt.Errorf("nodepool reconciler: get cluster: %w", err)
 		}
-		return reconcile.Result{}, fmt.Errorf("nodepool reconciler: get cluster: %w", err)
+		clusterFound = false
+	}
+
+	// Handle deletion.
+	if !np.DeletionTimestamp.IsZero() {
+		return r.handleDeletion(ctx, &np, &cluster, clusterFound, log)
+	}
+
+	// If cluster not found, nothing to reconcile.
+	if !clusterFound {
+		log.Infof(ctx, "cluster %s not found for nodepool %s, skipping", clusterID, nodepoolID)
+		return reconcile.Result{}, nil
+	}
+
+	// Ensure finalizer is present.
+	if !controllerutil.ContainsFinalizer(&np, constants.FinalizerNodePool) {
+		controllerutil.AddFinalizer(&np, constants.FinalizerNodePool)
+		if err := r.client.Update(ctx, &np); err != nil {
+			return reconcile.Result{}, fmt.Errorf("nodepool reconciler: add finalizer: %w", err)
+		}
+		return reconcile.Result{}, nil // re-reconcile with finalizer in place
 	}
 
 	// Gate: cluster placement must be ready.
@@ -153,7 +175,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		replicas = *np.Spec.NodeCount
 	}
 
-	mw, err := manifest.Build(manifest.Input{
+	manifests, err := manifest.Build(manifest.Input{
 		NodePoolID:         nodepoolID,
 		NodePoolName:       np.Name,
 		NodePoolGeneration: np.Generation,
@@ -169,14 +191,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		ReleaseImage:       np.Status.VersionResolution.ReleaseImage,
 	})
 	if err != nil {
-		return reconcile.Result{}, fmt.Errorf("nodepool reconciler: build manifest work: %w", err)
+		return reconcile.Result{}, fmt.Errorf("nodepool reconciler: build manifests: %w", err)
 	}
 
 	managementCluster := cluster.Status.PlacementResult.ManagementClusterName
 
-	mwStatus, err := r.transport.Apply(ctx, managementCluster, mw)
+	mwStatus, err := r.transport.Apply(ctx, managementCluster, nodepoolID, manifests)
 	if err != nil {
-		return reconcile.Result{}, fmt.Errorf("nodepool reconciler: apply manifest work: %w", err)
+		return reconcile.Result{}, fmt.Errorf("nodepool reconciler: apply resources: %w", err)
 	}
 
 	// Write nodepool status conditions — only update if something changed.
@@ -189,20 +211,50 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		}
 	}
 
-	if !meta.IsStatusConditionTrue(np.Status.Conditions, "NodePoolManifestWorkApplied") {
-		log.Infof(ctx, "nodepool reconciler: nodepool %s MW not yet applied, requeueing after %s", nodepoolID, requeuePending)
+	if !meta.IsStatusConditionTrue(np.Status.Conditions, "NodePoolResourcesApplied") {
+		log.Infof(ctx, "nodepool reconciler: nodepool %s resources not yet applied, requeueing after %s", nodepoolID, requeuePending)
 		return reconcile.Result{RequeueAfter: requeuePending}, nil
 	}
 	log.Infof(ctx, "nodepool reconciler: nodepool %s reconciled, requeueing after %s", nodepoolID, requeueStable)
 	return reconcile.Result{RequeueAfter: requeueStable}, nil
 }
 
-// setWaitingNPConditions sets NodePoolManifestWorkApplied and NodePoolAvailable to Unknown.
+// handleDeletion cleans up management-cluster resources and removes the finalizer.
+func (r *Reconciler) handleDeletion(ctx context.Context, np *privatev1.NodePool, cluster *privatev1.Cluster, clusterFound bool, log logger.Logger) (reconcile.Result, error) {
+	if !controllerutil.ContainsFinalizer(np, constants.FinalizerNodePool) {
+		return reconcile.Result{}, nil
+	}
+
+	nodepoolID := np.Name
+
+	// Only call transport.Delete if resources were applied to an MC.
+	if clusterFound &&
+		meta.FindStatusCondition(np.Status.Conditions, "NodePoolResourcesApplied") != nil &&
+		cluster.Status.PlacementResult != nil && cluster.Status.PlacementResult.ManagementClusterName != "" {
+		mcName := cluster.Status.PlacementResult.ManagementClusterName
+		log.Infof(ctx, "nodepool reconciler: deleting resources for nodepool %s from %s", nodepoolID, mcName)
+		if err := r.transport.Delete(ctx, mcName, nodepoolID); err != nil {
+			return reconcile.Result{}, fmt.Errorf("nodepool reconciler: delete resources: %w", err)
+		}
+	} else {
+		log.Infof(ctx, "nodepool reconciler: parent cluster not available for nodepool %s, skipping transport cleanup", nodepoolID)
+	}
+
+	controllerutil.RemoveFinalizer(np, constants.FinalizerNodePool)
+	if err := r.client.Update(ctx, np); err != nil {
+		return reconcile.Result{}, fmt.Errorf("nodepool reconciler: remove finalizer: %w", err)
+	}
+
+	log.Infof(ctx, "nodepool reconciler: finalizer removed for nodepool %s", nodepoolID)
+	return reconcile.Result{}, nil
+}
+
+// setWaitingNPConditions sets NodePoolResourcesApplied and NodePoolAvailable to Unknown.
 // Returns true if either condition changed.
 func setWaitingNPConditions(np *privatev1.NodePool, reason, message string) bool {
 	gen := np.Generation
 	a := meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
-		Type:               "NodePoolManifestWorkApplied",
+		Type:               "NodePoolResourcesApplied",
 		Status:             metav1.ConditionUnknown,
 		Reason:             reason,
 		Message:            message,
@@ -218,28 +270,28 @@ func setWaitingNPConditions(np *privatev1.NodePool, reason, message string) bool
 	return a || b
 }
 
-// applyStatusConditions derives conditions from the ManifestWork status and writes them to the nodepool.
+// applyStatusConditions derives conditions from the resource status and writes them to the nodepool.
 // Returns true if any condition changed.
-func (r *Reconciler) applyStatusConditions(np *privatev1.NodePool, mwStatus *transport.ManifestWorkStatus) bool {
+func (r *Reconciler) applyStatusConditions(np *privatev1.NodePool, mwStatus *transport.Status) bool {
 	gen := np.Generation
 
 	if mwStatus == nil {
 		a := meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
-			Type:               "NodePoolManifestWorkApplied",
+			Type:               "NodePoolResourcesApplied",
 			Status:             metav1.ConditionFalse,
-			Reason:             "ManifestWorkNotFound",
+			Reason:             "ResourcesNotFound",
 			ObservedGeneration: gen,
 		})
 		b := meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
 			Type:               "NodePoolAvailable",
 			Status:             metav1.ConditionFalse,
-			Reason:             "ManifestWorkNotFound",
+			Reason:             "ResourcesNotFound",
 			ObservedGeneration: gen,
 		})
 		return a || b
 	}
 
-	// Extract conditions from top-level ManifestWork conditions.
+	// Extract conditions from top-level applied conditions.
 	appliedStatus := metav1.ConditionStatus("False")
 	appliedReason := "Unknown"
 	for _, c := range mwStatus.Conditions {
@@ -250,11 +302,12 @@ func (r *Reconciler) applyStatusConditions(np *privatev1.NodePool, mwStatus *tra
 		}
 	}
 
-	// Extract resource status from manifest index 0 (the NodePool).
+	// Extract resource status by NodePool resource identity key.
+	npKey := transport.ResourceKey(constants.HyperShiftGroup, constants.HyperShiftVersion, "nodepools",
+		fmt.Sprintf("clusters-%s", np.Spec.ClusterID), np.Name)
 	availableStatus := "False"
 	allNodesHealthy := "False"
-	if len(mwStatus.ResourceStatuses) > 0 {
-		rs := mwStatus.ResourceStatuses[0]
+	if rs, ok := mwStatus.ResourceStatuses[npKey]; ok {
 		if v, ok := rs["readyCondition"]; ok {
 			availableStatus = v
 		}
@@ -276,7 +329,7 @@ func (r *Reconciler) applyStatusConditions(np *privatev1.NodePool, mwStatus *tra
 	}
 
 	a := meta.SetStatusCondition(&np.Status.Conditions, metav1.Condition{
-		Type:               "NodePoolManifestWorkApplied",
+		Type:               "NodePoolResourcesApplied",
 		Status:             appliedStatus,
 		Reason:             appliedReason,
 		ObservedGeneration: gen,

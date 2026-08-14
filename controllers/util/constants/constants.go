@@ -1,65 +1,74 @@
 package constants
 
-// HyperFleet Kubernetes Resource Annotations and Labels
-// These constants define standard annotations and labels used across HyperFleet resources
+// GCP HCP Kubernetes Resource Annotations and Labels
+// These constants define standard annotations and labels used across GCP HCP resources
 // for tracking, management, and identification purposes.
 
 const (
 	// AnnotationGeneration is the annotation key for tracking resource generation.
 	// This is used to track changes and ensure resources are updated with the correct generation.
-	// Format: "hyperfleet.io/generation"
+	// Format: "gcp.managed.openshift.io/generation"
 	// Example value: "5" (integer as string)
-	AnnotationGeneration = "hyperfleet.io/generation"
+	AnnotationGeneration = "gcp.managed.openshift.io/generation"
 
 	// LabelGeneration is the label key for tracking resource generation.
 	// Used for label-based filtering and selection of resources by generation.
-	// Format: "hyperfleet.io/generation"
+	// Format: "gcp.managed.openshift.io/generation"
 	// Example value: "5" (integer as string)
-	LabelGeneration = "hyperfleet.io/generation"
+	LabelGeneration = "gcp.managed.openshift.io/generation"
 
 	// AnnotationClusterID is the annotation key for cluster identification.
 	// Links resources to their target cluster.
-	// Format: "hyperfleet.io/cluster-id"
-	AnnotationClusterID = "hyperfleet.io/cluster-id"
+	// Format: "gcp.managed.openshift.io/cluster-id"
+	AnnotationClusterID = "gcp.managed.openshift.io/cluster-id"
 
 	// LabelClusterID is the label key for cluster identification.
 	// Used for label-based filtering and selection of resources by cluster.
-	// Format: "hyperfleet.io/cluster-id"
-	LabelClusterID = "hyperfleet.io/cluster-id"
+	// Format: "gcp.managed.openshift.io/cluster-id"
+	LabelClusterID = "gcp.managed.openshift.io/cluster-id"
 
 	// AnnotationController is the annotation key for controller identification.
 	// Identifies which controller created or manages the resource.
-	// Format: "hyperfleet.io/controller"
-	AnnotationController = "hyperfleet.io/controller"
+	// Format: "gcp.managed.openshift.io/controller"
+	AnnotationController = "gcp.managed.openshift.io/controller"
 
 	// LabelController is the label key for controller identification.
 	// Used for label-based filtering and selection of resources by controller.
-	// Format: "hyperfleet.io/controller"
-	LabelController = "hyperfleet.io/controller"
+	// Format: "gcp.managed.openshift.io/controller"
+	LabelController = "gcp.managed.openshift.io/controller"
 
 	// AnnotationManagedBy identifies the entity managing the resource.
-	// Format: "hyperfleet.io/managed-by"
+	// Format: "gcp.managed.openshift.io/managed-by"
 	// Example value: "gecko-controllers"
-	AnnotationManagedBy = "hyperfleet.io/managed-by"
+	AnnotationManagedBy = "gcp.managed.openshift.io/managed-by"
 
 	// LabelManagedBy is the label key for managed-by identification.
-	// Format: "hyperfleet.io/managed-by"
-	LabelManagedBy = "hyperfleet.io/managed-by"
+	// Format: "gcp.managed.openshift.io/managed-by"
+	LabelManagedBy = "gcp.managed.openshift.io/managed-by"
 
 	// AnnotationCreatedBy identifies the entity that created the resource.
-	// Format: "hyperfleet.io/created-by"
+	// Format: "gcp.managed.openshift.io/created-by"
 	// Example value: "gecko-controllers"
-	AnnotationCreatedBy = "hyperfleet.io/created-by"
+	AnnotationCreatedBy = "gcp.managed.openshift.io/created-by"
 )
 
-// OCM ManifestWork GVK constants
+// Finalizer constants for deletion handling.
 const (
-	// ManifestWorkGroup is the API group for OCM ManifestWork resources.
-	ManifestWorkGroup = "work.open-cluster-management.io"
+	// FinalizerCluster is the finalizer added by the hc-controller to ensure
+	// management-cluster resources are cleaned up before a Cluster CR is deleted.
+	FinalizerCluster = "gcp.managed.openshift.io/cluster-finalizer"
 
-	// ManifestWorkVersion is the API version for OCM ManifestWork resources.
-	ManifestWorkVersion = "v1"
-
-	// ManifestWorkKind is the Kind for OCM ManifestWork resources.
-	ManifestWorkKind = "ManifestWork"
+	// FinalizerNodePool is the finalizer added by the nodepool-controller to ensure
+	// management-cluster resources are cleaned up before a NodePool CR is deleted.
+	FinalizerNodePool = "gcp.managed.openshift.io/nodepool-finalizer"
 )
+
+// HyperShift API constants
+const (
+	// HyperShiftGroup is the API group for HyperShift resources (HostedCluster, NodePool, etc.).
+	HyperShiftGroup = "hypershift.openshift.io"
+
+	// HyperShiftVersion is the API version for HyperShift resources.
+	HyperShiftVersion = "v1beta1"
+)
+
