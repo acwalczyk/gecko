@@ -654,3 +654,592 @@ func TestConverter_FilterPrivateConditions(t *testing.T) {
 		})
 	}
 }
+
+func TestConverter_StripPrivateStatusFields(t *testing.T) {
+	converter := NewConverter(
+		makeTestScheme(),
+		makeTestScheme(),
+		"private.orlop.gcp.managed.openshift.io/",
+	)
+
+	tests := []struct {
+		name     string
+		status   map[string]interface{}
+		validate func(t *testing.T, status map[string]interface{})
+	}{
+		{
+			name: "strips private-prefixed conditions",
+			status: map[string]interface{}{
+				"conditions": []interface{}{
+					map[string]interface{}{
+						"type":   "Ready",
+						"status": "True",
+					},
+					map[string]interface{}{
+						"type":   "private.orlop.gcp.managed.openshift.io/InternalSync",
+						"status": "True",
+					},
+					map[string]interface{}{
+						"type":   "Available",
+						"status": "True",
+					},
+				},
+			},
+			validate: func(t *testing.T, status map[string]interface{}) {
+				conditions := status["conditions"].([]interface{})
+				if len(conditions) != 2 {
+					t.Errorf("Expected 2 conditions, got %d", len(conditions))
+				}
+				for _, c := range conditions {
+					cm := c.(map[string]interface{})
+					if cm["type"] == "private.orlop.gcp.managed.openshift.io/InternalSync" {
+						t.Error("Private condition should have been stripped")
+					}
+				}
+			},
+		},
+		{
+			name: "preserves all public conditions",
+			status: map[string]interface{}{
+				"conditions": []interface{}{
+					map[string]interface{}{"type": "Ready", "status": "True"},
+					map[string]interface{}{"type": "Progressing", "status": "False"},
+				},
+			},
+			validate: func(t *testing.T, status map[string]interface{}) {
+				conditions := status["conditions"].([]interface{})
+				if len(conditions) != 2 {
+					t.Errorf("Expected 2 conditions, got %d", len(conditions))
+				}
+			},
+		},
+		{
+			name:   "handles missing conditions",
+			status: map[string]interface{}{"phase": "Running"},
+			validate: func(t *testing.T, status map[string]interface{}) {
+				// Should not panic, phase preserved
+				if status["phase"] != "Running" {
+					t.Error("Phase should be preserved")
+				}
+			},
+		},
+		{
+			name: "handles empty conditions",
+			status: map[string]interface{}{
+				"conditions": []interface{}{},
+			},
+			validate: func(t *testing.T, status map[string]interface{}) {
+				conditions := status["conditions"].([]interface{})
+				if len(conditions) != 0 {
+					t.Error("Expected empty conditions")
+				}
+			},
+		},
+		{
+			name: "strips private-prefixed string conditions",
+			status: map[string]interface{}{
+				"conditions": []interface{}{
+					"Ready",
+					"private.orlop.gcp.managed.openshift.io/InternalSync",
+					"Available",
+				},
+			},
+			validate: func(t *testing.T, status map[string]interface{}) {
+				conditions := status["conditions"].([]interface{})
+				if len(conditions) != 2 {
+					t.Errorf("Expected 2 conditions, got %d", len(conditions))
+				}
+				for _, c := range conditions {
+					if c == "private.orlop.gcp.managed.openshift.io/InternalSync" {
+						t.Error("Private string condition should have been stripped")
+					}
+				}
+			},
+		},
+		{
+			name: "handles non-map condition entries gracefully",
+			status: map[string]interface{}{
+				"conditions": []interface{}{
+					"some-string-condition",
+					map[string]interface{}{"type": "Ready", "status": "True"},
+				},
+			},
+			validate: func(t *testing.T, status map[string]interface{}) {
+				conditions := status["conditions"].([]interface{})
+				if len(conditions) != 2 {
+					t.Errorf("Expected 2 conditions (string preserved as-is), got %d", len(conditions))
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			converter.StripPrivateStatusFields(tt.status)
+			tt.validate(t, tt.status)
+		})
+	}
+}
+
+func TestConverter_StripPrivateFieldsFromPublicInput_NoMutation(t *testing.T) {
+	converter := NewConverter(
+		makeTestScheme(),
+		makeTestScheme(),
+		"private.orlop.gcp.managed.openshift.io/",
+	)
+
+	// Create object with mixed labels and annotations
+	originalLabels := map[string]string{
+		"app":                         "test",
+		"private.orlop.gcp.managed.openshift.io/internal": "secret",
+	}
+	originalAnnotations := map[string]string{
+		"note":                        "public",
+		"private.orlop.gcp.managed.openshift.io/sync": "done",
+	}
+
+	obj := newTestObject(
+		withLabels(originalLabels),
+		withAnnotations(originalAnnotations),
+		withMetadata(map[string]interface{}{
+			"finalizers": []interface{}{"test.example.com/finalizer"},
+		}),
+	)
+
+	// Save references to original maps
+	labelsBefore := obj.GetLabels()
+	annotationsBefore := obj.GetAnnotations()
+
+	// Verify private entries exist before stripping
+	if _, ok := labelsBefore["private.orlop.gcp.managed.openshift.io/internal"]; !ok {
+		t.Fatal("Setup error: private label should exist before strip")
+	}
+	if _, ok := annotationsBefore["private.orlop.gcp.managed.openshift.io/sync"]; !ok {
+		t.Fatal("Setup error: private annotation should exist before strip")
+	}
+
+	converter.stripPrivateFieldsFromPublicInput(obj)
+
+	// After stripping: object should not have private labels/annotations
+	strippedLabels := obj.GetLabels()
+	if _, ok := strippedLabels["private.orlop.gcp.managed.openshift.io/internal"]; ok {
+		t.Error("Private label should have been stripped from object")
+	}
+	if strippedLabels["app"] != "test" {
+		t.Error("Public label should be preserved")
+	}
+
+	strippedAnnotations := obj.GetAnnotations()
+	if _, ok := strippedAnnotations["private.orlop.gcp.managed.openshift.io/sync"]; ok {
+		t.Error("Private annotation should have been stripped from object")
+	}
+	if strippedAnnotations["note"] != "public" {
+		t.Error("Public annotation should be preserved")
+	}
+
+	// Finalizers should be nil
+	if obj.GetFinalizers() != nil {
+		t.Error("Finalizers should be nil after stripping")
+	}
+}
+
+func TestConverter_ExtractPrivateConditions(t *testing.T) {
+	converter := NewConverter(makeTestScheme(), makeTestScheme(), "")
+
+	tests := []struct {
+		name     string
+		obj      *unstructured.Unstructured
+		wantLen  int
+		wantType []string // expected condition types (string or .type field)
+	}{
+		{
+			name: "extracts private object conditions",
+			obj: newTestObject(
+				withStatus(map[string]interface{}{
+					"conditions": []interface{}{
+						map[string]interface{}{"type": "Ready", "status": "True"},
+						map[string]interface{}{"type": "private.orlop.gcp.managed.openshift.io/Sync", "status": "True"},
+						map[string]interface{}{"type": "Available", "status": "True"},
+						map[string]interface{}{"type": "private.orlop.gcp.managed.openshift.io/Reconcile", "status": "False"},
+					},
+				}),
+			),
+			wantLen:  2,
+			wantType: []string{"private.orlop.gcp.managed.openshift.io/Sync", "private.orlop.gcp.managed.openshift.io/Reconcile"},
+		},
+		{
+			name: "extracts private string conditions",
+			obj: newTestObject(
+				withStatus(map[string]interface{}{
+					"conditions": []interface{}{
+						"Ready",
+						"private.orlop.gcp.managed.openshift.io/InternalCheck",
+						"Available",
+					},
+				}),
+			),
+			wantLen:  1,
+			wantType: []string{"private.orlop.gcp.managed.openshift.io/InternalCheck"},
+		},
+		{
+			name: "returns nil when no private conditions",
+			obj: newTestObject(
+				withStatus(map[string]interface{}{
+					"conditions": []interface{}{
+						map[string]interface{}{"type": "Ready", "status": "True"},
+					},
+				}),
+			),
+			wantLen: 0,
+		},
+		{
+			name:    "returns nil when no status",
+			obj:     newTestObject(),
+			wantLen: 0,
+		},
+		{
+			name: "returns nil when no conditions",
+			obj: newTestObject(
+				withStatus(map[string]interface{}{
+					"phase": "Running",
+				}),
+			),
+			wantLen: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := converter.extractPrivateConditions(tt.obj)
+			if len(result) != tt.wantLen {
+				t.Errorf("extractPrivateConditions() returned %d conditions, want %d", len(result), tt.wantLen)
+			}
+			for i, wantType := range tt.wantType {
+				if i >= len(result) {
+					break
+				}
+				// Check string condition
+				if condStr, ok := result[i].(string); ok {
+					if condStr != wantType {
+						t.Errorf("condition[%d] = %s, want %s", i, condStr, wantType)
+					}
+					continue
+				}
+				// Check object condition
+				condMap, ok := result[i].(map[string]interface{})
+				if !ok {
+					t.Errorf("condition[%d] unexpected type %T", i, result[i])
+					continue
+				}
+				if condMap["type"] != wantType {
+					t.Errorf("condition[%d].type = %v, want %s", i, condMap["type"], wantType)
+				}
+			}
+		})
+	}
+}
+
+func TestConverter_PublicToPrivate_PreservesPrivateConditions(t *testing.T) {
+	converter := NewConverter(makeTestScheme(), makeTestScheme(), "")
+	gvk := schema.GroupVersionKind{Group: "test.example.com", Version: "v1", Kind: "TestObject"}
+
+	tests := []struct {
+		name           string
+		publicObj      *unstructured.Unstructured
+		existing       *unstructured.Unstructured
+		wantConditions []string // expected condition types in result
+	}{
+		{
+			name: "preserves private conditions when public has conditions",
+			publicObj: newTestObject(
+				withStatus(map[string]interface{}{
+					"conditions": []interface{}{
+						map[string]interface{}{"type": "Ready", "status": "True"},
+					},
+				}),
+			),
+			existing: newTestObject(
+				withStatus(map[string]interface{}{
+					"conditions": []interface{}{
+						map[string]interface{}{"type": "Ready", "status": "True"},
+						map[string]interface{}{"type": "private.orlop.gcp.managed.openshift.io/Sync", "status": "True"},
+					},
+				}),
+			),
+			wantConditions: []string{"Ready", "private.orlop.gcp.managed.openshift.io/Sync"},
+		},
+		{
+			name: "preserves multiple private conditions",
+			publicObj: newTestObject(
+				withStatus(map[string]interface{}{
+					"conditions": []interface{}{
+						map[string]interface{}{"type": "Ready", "status": "True"},
+						map[string]interface{}{"type": "Available", "status": "True"},
+					},
+				}),
+			),
+			existing: newTestObject(
+				withStatus(map[string]interface{}{
+					"conditions": []interface{}{
+						map[string]interface{}{"type": "Ready", "status": "False"},
+						map[string]interface{}{"type": "private.orlop.gcp.managed.openshift.io/Sync", "status": "True"},
+						map[string]interface{}{"type": "Available", "status": "False"},
+						map[string]interface{}{"type": "private.orlop.gcp.managed.openshift.io/Reconcile", "status": "False"},
+					},
+				}),
+			),
+			wantConditions: []string{"Ready", "Available", "private.orlop.gcp.managed.openshift.io/Sync", "private.orlop.gcp.managed.openshift.io/Reconcile"},
+		},
+		{
+			name: "no-op when existing has no private conditions",
+			publicObj: newTestObject(
+				withStatus(map[string]interface{}{
+					"conditions": []interface{}{
+						map[string]interface{}{"type": "Ready", "status": "True"},
+					},
+				}),
+			),
+			existing: newTestObject(
+				withStatus(map[string]interface{}{
+					"conditions": []interface{}{
+						map[string]interface{}{"type": "Ready", "status": "False"},
+					},
+				}),
+			),
+			wantConditions: []string{"Ready"},
+		},
+		{
+			name: "no-op when no existing object",
+			publicObj: newTestObject(
+				withStatus(map[string]interface{}{
+					"conditions": []interface{}{
+						map[string]interface{}{"type": "Ready", "status": "True"},
+					},
+				}),
+			),
+			existing:       nil,
+			wantConditions: []string{"Ready"},
+		},
+		{
+			name: "preserves private conditions via Patch round-trip simulation",
+			// Simulates the Patch flow: PrivateToPublic strips private conditions,
+			// then PublicToPrivate must restore them from existing.
+			publicObj: newTestObject(
+				withStatus(map[string]interface{}{
+					// After PrivateToPublic, only public conditions remain
+					"conditions": []interface{}{
+						map[string]interface{}{"type": "Ready", "status": "True"},
+					},
+				}),
+			),
+			existing: newTestObject(
+				withStatus(map[string]interface{}{
+					"conditions": []interface{}{
+						map[string]interface{}{"type": "Ready", "status": "True"},
+						map[string]interface{}{"type": "private.orlop.gcp.managed.openshift.io/Sync", "status": "True"},
+						map[string]interface{}{"type": "private.orlop.gcp.managed.openshift.io/Reconcile", "status": "False"},
+					},
+				}),
+			),
+			// All private conditions from existing must be preserved alongside
+			// the public conditions from the client's patch.
+			wantConditions: []string{
+				"Ready",
+				"private.orlop.gcp.managed.openshift.io/Sync",
+				"private.orlop.gcp.managed.openshift.io/Reconcile",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.publicObj.SetGroupVersionKind(gvk)
+			if tt.existing != nil {
+				tt.existing.SetGroupVersionKind(gvk)
+			}
+
+			result, err := converter.PublicToPrivate(tt.publicObj, tt.existing)
+			if err != nil {
+				t.Fatalf("PublicToPrivate() error = %v", err)
+			}
+
+			u := result.(*unstructured.Unstructured)
+			status, ok := u.Object["status"].(map[string]interface{})
+			if !ok {
+				if len(tt.wantConditions) > 0 {
+					t.Fatalf("No status in result, expected conditions: %v", tt.wantConditions)
+				}
+				return
+			}
+
+			conditions, ok := status["conditions"].([]interface{})
+			if !ok {
+				if len(tt.wantConditions) > 0 {
+					t.Fatalf("No conditions in result, expected: %v", tt.wantConditions)
+				}
+				return
+			}
+
+			// Collect condition types from result
+			var gotTypes []string
+			for _, cond := range conditions {
+				if condMap, ok := cond.(map[string]interface{}); ok {
+					if ct, ok := condMap["type"].(string); ok {
+						gotTypes = append(gotTypes, ct)
+					}
+				}
+			}
+
+			if len(gotTypes) != len(tt.wantConditions) {
+				t.Errorf("Got %d conditions %v, want %d %v", len(gotTypes), gotTypes, len(tt.wantConditions), tt.wantConditions)
+				return
+			}
+
+			// Check each expected condition is present
+			for _, want := range tt.wantConditions {
+				found := false
+				for _, got := range gotTypes {
+					if got == want {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("Missing expected condition %q in result %v", want, gotTypes)
+				}
+			}
+		})
+	}
+}
+
+func TestConverter_PreservePrivateStatusConditions(t *testing.T) {
+	converter := NewConverter(makeTestScheme(), makeTestScheme(), "")
+
+	tests := []struct {
+		name           string
+		existingStatus map[string]interface{}
+		incomingStatus map[string]interface{}
+		wantConditions int
+		wantPrivate    []string
+	}{
+		{
+			name: "preserves private conditions from existing",
+			existingStatus: map[string]interface{}{
+				"conditions": []interface{}{
+					map[string]interface{}{"type": "Ready", "status": "True"},
+					map[string]interface{}{"type": "private.orlop.gcp.managed.openshift.io/Sync", "status": "True"},
+				},
+			},
+			incomingStatus: map[string]interface{}{
+				"conditions": []interface{}{
+					map[string]interface{}{"type": "Ready", "status": "False"},
+				},
+			},
+			wantConditions: 2,
+			wantPrivate:    []string{"private.orlop.gcp.managed.openshift.io/Sync"},
+		},
+		{
+			name: "preserves multiple private conditions",
+			existingStatus: map[string]interface{}{
+				"conditions": []interface{}{
+					map[string]interface{}{"type": "private.orlop.gcp.managed.openshift.io/Sync", "status": "True"},
+					map[string]interface{}{"type": "private.orlop.gcp.managed.openshift.io/Reconcile", "status": "False"},
+					map[string]interface{}{"type": "Ready", "status": "True"},
+				},
+			},
+			incomingStatus: map[string]interface{}{
+				"conditions": []interface{}{
+					map[string]interface{}{"type": "Ready", "status": "False"},
+				},
+			},
+			wantConditions: 3,
+			wantPrivate:    []string{"private.orlop.gcp.managed.openshift.io/Sync", "private.orlop.gcp.managed.openshift.io/Reconcile"},
+		},
+		{
+			name: "no-op when no private conditions in existing",
+			existingStatus: map[string]interface{}{
+				"conditions": []interface{}{
+					map[string]interface{}{"type": "Ready", "status": "True"},
+				},
+			},
+			incomingStatus: map[string]interface{}{
+				"conditions": []interface{}{
+					map[string]interface{}{"type": "Ready", "status": "False"},
+				},
+			},
+			wantConditions: 1,
+			wantPrivate:    nil,
+		},
+		{
+			name:           "no-op when existing has no conditions",
+			existingStatus: map[string]interface{}{"phase": "Running"},
+			incomingStatus: map[string]interface{}{
+				"conditions": []interface{}{
+					map[string]interface{}{"type": "Ready", "status": "True"},
+				},
+			},
+			wantConditions: 1,
+			wantPrivate:    nil,
+		},
+		{
+			name: "creates conditions in incoming when incoming has none",
+			existingStatus: map[string]interface{}{
+				"conditions": []interface{}{
+					map[string]interface{}{"type": "private.orlop.gcp.managed.openshift.io/Sync", "status": "True"},
+				},
+			},
+			incomingStatus: map[string]interface{}{
+				"phase": "Running",
+			},
+			wantConditions: 1,
+			wantPrivate:    []string{"private.orlop.gcp.managed.openshift.io/Sync"},
+		},
+		{
+			name: "handles private string conditions",
+			existingStatus: map[string]interface{}{
+				"conditions": []interface{}{
+					"Ready",
+					"private.orlop.gcp.managed.openshift.io/InternalCheck",
+				},
+			},
+			incomingStatus: map[string]interface{}{
+				"conditions": []interface{}{
+					"Ready",
+				},
+			},
+			wantConditions: 2,
+			wantPrivate:    []string{"private.orlop.gcp.managed.openshift.io/InternalCheck"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			converter.PreservePrivateStatusConditions(tt.existingStatus, tt.incomingStatus)
+
+			conditions, _ := tt.incomingStatus["conditions"].([]interface{})
+			if len(conditions) != tt.wantConditions {
+				t.Errorf("Got %d conditions, want %d", len(conditions), tt.wantConditions)
+			}
+
+			// Verify private conditions are present
+			for _, wantPrivate := range tt.wantPrivate {
+				found := false
+				for _, cond := range conditions {
+					if condStr, ok := cond.(string); ok && condStr == wantPrivate {
+						found = true
+						break
+					}
+					if condMap, ok := cond.(map[string]interface{}); ok {
+						if condMap["type"] == wantPrivate {
+							found = true
+							break
+						}
+					}
+				}
+				if !found {
+					t.Errorf("Private condition %q not found in result", wantPrivate)
+				}
+			}
+		})
+	}
+}

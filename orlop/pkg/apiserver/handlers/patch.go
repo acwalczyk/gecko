@@ -12,6 +12,8 @@ import (
 	"github.com/evanphx/json-patch/v5"
 	"github.com/go-chi/chi/v5"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -165,6 +167,47 @@ func (h *ResourceHandler) processPatchedObject(w http.ResponseWriter, r *http.Re
 	if err := validateMetadata(clientObj); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid metadata: %v", err))
 		return
+	}
+
+	// Preserve deletionTimestamp — it cannot be changed via Patch.
+	// Only Delete sets it, only finalizer removal clears it (via hard-delete).
+	// Without this, a merge patch omitting metadata.deletionTimestamp would
+	// leave the field as zero-value (nil), clearing the soft-delete marker.
+	existingAccessor, _ := meta.Accessor(existing)
+	patchedAccessor, _ := meta.Accessor(clientObj)
+	if dt := existingAccessor.GetDeletionTimestamp(); dt != nil {
+		patchedAccessor.SetDeletionTimestamp(dt)
+
+		// If object is being deleted and all finalizers are removed, perform hard delete
+		if len(patchedAccessor.GetFinalizers()) == 0 {
+			if err := h.store.Delete(r.Context(), namespace, name); err != nil {
+				h.logger.Error(err, "Failed to hard delete after finalizers removed",
+					"kind", h.gvk.Kind, "namespace", namespace, "name", name)
+				if errors.IsNotFound(err) {
+					writeError(w, http.StatusNotFound, err.Error())
+				} else {
+					writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to delete object: %v", err))
+				}
+				return
+			}
+
+			h.logger.Info("Hard deleted after finalizers removed",
+				"kind", h.gvk.Kind, "namespace", namespace, "name", name)
+
+			status := metav1.Status{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: constants.APIVersionV1,
+					Kind:       constants.KindStatus,
+				},
+				Status: metav1.StatusSuccess,
+				Code:   http.StatusOK,
+			}
+
+			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(status)
+			return
+		}
 	}
 
 	// Set GVK

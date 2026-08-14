@@ -183,8 +183,11 @@ func (r *ResourceRegistry) CreateConvertingHandler(converter interface{}, privat
 		return nil, fmt.Errorf("no store found for resource %s", gk)
 	}
 
-	// Create schema processor
-	processor, err := r.createProcessor(info.SchemaYAML)
+	// Create schema processor with public API metadata constraints.
+	// Unlike CreateHandler (private API), this injects explicit metadata
+	// properties so pruning.Prune() strips private fields like finalizers,
+	// ownerReferences, managedFields, etc. from public API inputs.
+	processor, err := r.createPublicProcessor(info.SchemaYAML)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create processor for %s: %w", info.Plural, err)
 	}
@@ -205,25 +208,79 @@ func (r *ResourceRegistry) CreateConvertingHandler(converter interface{}, privat
 }
 
 // createProcessor creates a schema processor from YAML schema.
+// Used by CreateHandler (private API) — no metadata field restrictions.
 func (r *ResourceRegistry) createProcessor(schemaYAML string) (*pkgschema.Processor, error) {
-	// Parse YAML to v1 JSONSchemaProps
-	var propsV1 apiextv1.JSONSchemaProps
-	if err := yaml.Unmarshal([]byte(schemaYAML), &propsV1); err != nil {
-		return nil, err
-	}
-
-	// Convert to internal JSONSchemaProps
-	var props apiext.JSONSchemaProps
-	if err := apiextv1.Convert_v1_JSONSchemaProps_To_apiextensions_JSONSchemaProps(&propsV1, &props, nil); err != nil {
-		return nil, err
-	}
-
-	// Create structural schema
-	structural, err := schema.NewStructural(&props)
+	structural, props, err := r.parseSchema(schemaYAML)
 	if err != nil {
 		return nil, err
 	}
+	return pkgschema.NewProcessor(structural, props)
+}
 
-	// Create processor
-	return pkgschema.NewProcessor(structural, &props)
+// createPublicProcessor creates a schema processor with public API metadata constraints.
+// Injects explicit metadata properties so pruning.Prune() strips private fields
+// (finalizers, ownerReferences, managedFields, deletionTimestamp, etc.) from inputs.
+// Used by CreateConvertingHandler (public API) only.
+func (r *ResourceRegistry) createPublicProcessor(schemaYAML string) (*pkgschema.Processor, error) {
+	structural, props, err := r.parseSchema(schemaYAML)
+	if err != nil {
+		return nil, err
+	}
+	injectPublicMetadataSchema(structural)
+	return pkgschema.NewProcessor(structural, props)
+}
+
+// parseSchema parses YAML schema into structural schema and internal JSONSchemaProps.
+func (r *ResourceRegistry) parseSchema(schemaYAML string) (*schema.Structural, *apiext.JSONSchemaProps, error) {
+	var propsV1 apiextv1.JSONSchemaProps
+	if err := yaml.Unmarshal([]byte(schemaYAML), &propsV1); err != nil {
+		return nil, nil, err
+	}
+
+	var props apiext.JSONSchemaProps
+	if err := apiextv1.Convert_v1_JSONSchemaProps_To_apiextensions_JSONSchemaProps(&propsV1, &props, nil); err != nil {
+		return nil, nil, err
+	}
+
+	structural, err := schema.NewStructural(&props)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return structural, &props, nil
+}
+
+// injectPublicMetadataSchema constrains the metadata property of a structural schema
+// to only allow public-facing ObjectMeta fields. Fields not listed here are pruned
+// by K8s pruning.Prune(), preventing clients from setting internal fields like
+// finalizers, ownerReferences, managedFields, deletionTimestamp, etc.
+func injectPublicMetadataSchema(s *schema.Structural) {
+	if s == nil || s.Properties == nil {
+		return
+	}
+
+	stringType := schema.Structural{
+		Generic: schema.Generic{Type: "string"},
+	}
+
+	stringMapType := schema.Structural{
+		Generic:              schema.Generic{Type: "object"},
+		AdditionalProperties: &schema.StructuralOrBool{
+			Structural: &schema.Structural{
+				Generic: schema.Generic{Type: "string"},
+			},
+		},
+	}
+
+	s.Properties["metadata"] = schema.Structural{
+		Generic: schema.Generic{Type: "object"},
+		Properties: map[string]schema.Structural{
+			"name":            stringType,
+			"namespace":       stringType,
+			"generateName":    stringType,
+			"resourceVersion": stringType,
+			"labels":          stringMapType,
+			"annotations":     stringMapType,
+		},
+	}
 }
