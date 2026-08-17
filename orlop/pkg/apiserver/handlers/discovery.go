@@ -24,17 +24,31 @@ type ResourceProvider interface {
 
 // DiscoveryHandler handles API discovery requests.
 type DiscoveryHandler struct {
-	resources     []types.ResourceInfo
-	openAPIV2Spec *openapispec.Swagger
-	openAPIV2Once sync.Once
-	v2JSONCache   []byte
-	v2ProtoCache  []byte
+	resources           []types.ResourceInfo
+	advertiseStatus     bool // whether to advertise /status subresource in discovery
+	openAPIV2Spec       *openapispec.Swagger
+	openAPIV2Once       sync.Once
+	v2JSONCache         []byte
+	v2ProtoCache        []byte
+}
+
+// DiscoveryOptions configures discovery behavior.
+type DiscoveryOptions struct {
+	// AdvertiseStatus controls whether the /status subresource is advertised
+	// in discovery responses. Defaults to true if not explicitly set to false.
+	AdvertiseStatus *bool
 }
 
 // NewDiscoveryHandler creates a new discovery handler.
-func NewDiscoveryHandler(provider ResourceProvider) *DiscoveryHandler {
+// If opts is nil or AdvertiseStatus is nil, status subresource is advertised by default.
+func NewDiscoveryHandler(provider ResourceProvider, opts *DiscoveryOptions) *DiscoveryHandler {
+	advertiseStatus := true
+	if opts != nil && opts.AdvertiseStatus != nil {
+		advertiseStatus = *opts.AdvertiseStatus
+	}
 	return &DiscoveryHandler{
-		resources: provider.Resources(),
+		resources:       provider.Resources(),
+		advertiseStatus: advertiseStatus,
 	}
 }
 
@@ -168,15 +182,17 @@ func (h *DiscoveryHandler) APIResourceList(w http.ResponseWriter, r *http.Reques
 			// Add main resource
 			resourceList.APIResources = append(resourceList.APIResources, resource)
 
-			// Add status subresource
-			statusResource := metav1.APIResource{
-				Name:         res.Plural + "/status",
-				SingularName: res.Singular,
-				Kind:         res.GVK.Kind,
-				Namespaced:   res.Namespaced,
-				Verbs:        metav1.Verbs{"get", "patch", "update"},
+			// Add status subresource only if advertised
+			if h.advertiseStatus {
+				statusResource := metav1.APIResource{
+					Name:         res.Plural + "/status",
+					SingularName: res.Singular,
+					Kind:         res.GVK.Kind,
+					Namespaced:   res.Namespaced,
+					Verbs:        metav1.Verbs{"get", "patch", "update"},
+				}
+				resourceList.APIResources = append(resourceList.APIResources, statusResource)
 			}
-			resourceList.APIResources = append(resourceList.APIResources, statusResource)
 		}
 	}
 

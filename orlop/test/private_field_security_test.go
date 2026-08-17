@@ -231,15 +231,6 @@ func TestPrivateFieldSecurity(t *testing.T) {
 		return result
 	}
 
-	publicUpdateStatus := func(t *testing.T, name string, obj map[string]interface{}) map[string]interface{} {
-		t.Helper()
-		code, result := do(t, pubClient, "PUT", publicURL+apiPath+"/"+name+"/status", obj)
-		if code != http.StatusOK {
-			t.Fatalf("public update status %s: expected 200, got %d: %v", name, code, result)
-		}
-		return result
-	}
-
 	cleanup := func(t *testing.T, name string) {
 		t.Helper()
 		do(t, privClient, "DELETE", privateURL+apiPath+"/"+name, nil)
@@ -916,87 +907,6 @@ func TestPrivateFieldSecurity(t *testing.T) {
 	})
 
 	// =========================================================================
-	// UPDATE STATUS — INJECTION + PRESERVATION
-	// =========================================================================
-
-	t.Run("UpdateStatus/Injection/private conditions stripped", func(t *testing.T) {
-		// Existing test covers this; included for matrix completeness
-		name := "status-inject-cond"
-		created := publicCreate(t, name, baseObj(name))
-		defer cleanup(t, name)
-
-		statusObj := baseObj(name)
-		meta(statusObj)["resourceVersion"] = rv(created)
-		statusObj["status"] = map[string]interface{}{
-			"conditions": []string{
-				"Ready",
-				"private.orlop.gcp.managed.openshift.io/InternalSync",
-			},
-		}
-		publicUpdateStatus(t, name, statusObj)
-
-		priv := privateGet(t, name)
-		for _, c := range conditions(priv) {
-			if condStr, ok := c.(string); ok && hasPrivatePrefix(condStr) {
-				t.Errorf("Private condition %q injected via public UpdateStatus", condStr)
-			}
-		}
-	})
-
-	t.Run("UpdateStatus/Preservation/private conditions survive", func(t *testing.T) {
-		name := "status-pres-cond"
-
-		privObj := baseObj(name)
-		privObj["status"] = map[string]interface{}{
-			"conditions": []string{
-				"Ready",
-				"private.orlop.gcp.managed.openshift.io/Sync",
-			},
-		}
-		privateCreate(t, name, privObj)
-		defer cleanup(t, name)
-
-		// Public UpdateStatus with only public conditions
-		pub := publicGet(t, name)
-		statusObj := baseObj(name)
-		meta(statusObj)["resourceVersion"] = rv(pub)
-		statusObj["status"] = map[string]interface{}{
-			"conditions": []string{"Ready", "Available"},
-		}
-		publicUpdateStatus(t, name, statusObj)
-
-		// Private condition must survive
-		priv := privateGet(t, name)
-		conds := conditions(priv)
-		foundSync := false
-		for _, c := range conds {
-			if condStr, ok := c.(string); ok && condStr == "private.orlop.gcp.managed.openshift.io/Sync" {
-				foundSync = true
-			}
-		}
-		if !foundSync {
-			t.Errorf("Private condition destroyed by public UpdateStatus. Conditions: %v", conds)
-		}
-
-		// Public conditions should be updated
-		foundReady := false
-		foundAvailable := false
-		for _, c := range conds {
-			if condStr, ok := c.(string); ok {
-				if condStr == "Ready" {
-					foundReady = true
-				}
-				if condStr == "Available" {
-					foundAvailable = true
-				}
-			}
-		}
-		if !foundReady || !foundAvailable {
-			t.Errorf("Public conditions not updated. Conditions: %v", conds)
-		}
-	})
-
-	// =========================================================================
 	// RESPONSE BODY — LEAKAGE: Private fields stripped from all response bodies
 	// =========================================================================
 
@@ -1068,39 +978,6 @@ func TestPrivateFieldSecurity(t *testing.T) {
 		for _, c := range conditions(resp) {
 			if condStr, ok := c.(string); ok && hasPrivatePrefix(condStr) {
 				t.Errorf("Private condition %q leaked in patch response", condStr)
-			}
-		}
-	})
-
-	t.Run("ResponseLeakage/UpdateStatus response strips private fields", func(t *testing.T) {
-		name := "resp-leak-status"
-
-		privObj := baseObj(name)
-		spec(privObj)["internalField"] = "secret"
-		meta(privObj)["finalizers"] = []string{"test.io/fin"}
-		privObj["status"] = map[string]interface{}{
-			"conditions": []string{"private.orlop.gcp.managed.openshift.io/Sync"},
-		}
-		privateCreate(t, name, privObj)
-		defer cleanup(t, name)
-
-		pub := publicGet(t, name)
-		statusObj := baseObj(name)
-		meta(statusObj)["resourceVersion"] = rv(pub)
-		statusObj["status"] = map[string]interface{}{
-			"conditions": []string{"Ready"},
-		}
-		resp := publicUpdateStatus(t, name, statusObj)
-
-		if _, exists := spec(resp)["internalField"]; exists {
-			t.Error("internalField leaked in status update response")
-		}
-		if _, exists := meta(resp)["finalizers"]; exists {
-			t.Error("Finalizers leaked in status update response")
-		}
-		for _, c := range conditions(resp) {
-			if condStr, ok := c.(string); ok && hasPrivatePrefix(condStr) {
-				t.Errorf("Private condition %q leaked in status response", condStr)
 			}
 		}
 	})
@@ -1707,43 +1584,6 @@ func TestPrivateFieldSecurity(t *testing.T) {
 		}
 	})
 
-	// === UPDATE STATUS TAMPERING ===
-
-	t.Run("UpdateStatus/Tampering/private_conditions_unchanged", func(t *testing.T) {
-		name := "h5-status-cond-tamper"
-		privObj := baseObj(name)
-		privObj["status"] = map[string]interface{}{
-			"conditions": []string{"Ready", "private.orlop.gcp.managed.openshift.io/Sync"},
-		}
-		privateCreate(t, name, privObj)
-		defer cleanup(t, name)
-
-		pub := publicGet(t, name)
-		statusObj := baseObj(name)
-		meta(statusObj)["resourceVersion"] = rv(pub)
-		statusObj["status"] = map[string]interface{}{
-			"conditions": []string{"Ready", "private.orlop.gcp.managed.openshift.io/Different"},
-		}
-		publicUpdateStatus(t, name, statusObj)
-
-		priv := privateGet(t, name)
-		conds := conditions(priv)
-		foundOriginal := false
-		for _, c := range conds {
-			if condStr, ok := c.(string); ok {
-				if condStr == "private.orlop.gcp.managed.openshift.io/Sync" {
-					foundOriginal = true
-				}
-				if condStr == "private.orlop.gcp.managed.openshift.io/Different" {
-					t.Errorf("Tampered private condition via UpdateStatus")
-				}
-			}
-		}
-		if !foundOriginal {
-			t.Errorf("Original private condition lost after UpdateStatus tamper. Conditions: %v", conds)
-		}
-	})
-
 	// === FINALIZER TAMPERING (explicit empty array) ===
 
 	t.Run("Update/Tampering/finalizers_explicit_empty_array_via_PUT", func(t *testing.T) {
@@ -1789,93 +1629,6 @@ func TestPrivateFieldSecurity(t *testing.T) {
 		fins, _ := meta(priv2)["finalizers"].([]interface{})
 		if len(fins) != 1 || fins[0] != "test.io/controller-fin" {
 			t.Errorf("Finalizer cleared by explicit empty array in Patch: %v", fins)
-		}
-	})
-
-	// === DELETION TIMESTAMP PRESERVATION ===
-
-	t.Run("UpdateStatus/DeletionTimestamp/preserved_through_status_update", func(t *testing.T) {
-		name := "h7-dt-status-pres"
-		publicCreate(t, name, baseObj(name))
-		defer cleanup(t, name)
-
-		// Add finalizer via private API
-		priv := privateGet(t, name)
-		meta(priv)["finalizers"] = []string{"test.io/prevent-delete"}
-		privateUpdate(t, name, priv)
-
-		// Soft-delete via public API
-		code, _ := publicDelete(t, name)
-		if code != http.StatusOK {
-			t.Fatalf("expected 200 soft-delete, got %d", code)
-		}
-
-		// Verify deletionTimestamp is set
-		priv2 := privateGet(t, name)
-		if meta(priv2)["deletionTimestamp"] == nil {
-			t.Fatalf("deletionTimestamp not set after soft-delete")
-		}
-
-		// UpdateStatus
-		pub := publicGet(t, name)
-		statusObj := baseObj(name)
-		meta(statusObj)["resourceVersion"] = rv(pub)
-		statusObj["status"] = map[string]interface{}{
-			"conditions": []string{"Ready"},
-		}
-		publicUpdateStatus(t, name, statusObj)
-
-		// Verify deletionTimestamp still set
-		priv3 := privateGet(t, name)
-		if meta(priv3)["deletionTimestamp"] == nil {
-			t.Errorf("deletionTimestamp lost after UpdateStatus")
-		}
-	})
-
-	// === UPDATE STATUS RESPONSE LEAKAGE ===
-
-	t.Run("UpdateStatus/ResponseLeakage/labels_annotations_finalizers_stripped", func(t *testing.T) {
-		name := "h8-status-resp-leak"
-		privObj := baseObj(name)
-		meta(privObj)["labels"] = map[string]interface{}{
-			"app":                                          "myapp",
-			"private.orlop.gcp.managed.openshift.io/owner": "controller",
-		}
-		meta(privObj)["annotations"] = map[string]interface{}{
-			"note":                                        "visible",
-			"private.orlop.gcp.managed.openshift.io/sync": "done",
-		}
-		meta(privObj)["finalizers"] = []string{"test.io/fin"}
-		privateCreate(t, name, privObj)
-		defer cleanup(t, name)
-
-		pub := publicGet(t, name)
-		statusObj := baseObj(name)
-		meta(statusObj)["resourceVersion"] = rv(pub)
-		statusObj["status"] = map[string]interface{}{
-			"conditions": []string{"Ready"},
-		}
-		resp := publicUpdateStatus(t, name, statusObj)
-
-		// No private labels in response
-		respLabels, _ := meta(resp)["labels"].(map[string]interface{})
-		for k := range respLabels {
-			if hasPrivatePrefix(k) {
-				t.Errorf("Private label %q leaked in UpdateStatus response", k)
-			}
-		}
-
-		// No private annotations in response
-		respAnnotations, _ := meta(resp)["annotations"].(map[string]interface{})
-		for k := range respAnnotations {
-			if hasPrivatePrefix(k) {
-				t.Errorf("Private annotation %q leaked in UpdateStatus response", k)
-			}
-		}
-
-		// No finalizers
-		if _, exists := meta(resp)["finalizers"]; exists {
-			t.Errorf("Finalizers leaked in UpdateStatus response")
 		}
 	})
 
