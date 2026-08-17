@@ -254,7 +254,9 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		}
 		var privateObj map[string]interface{}
 		json.NewDecoder(privateGetResp.Body).Decode(&privateObj)
-		privateGetResp.Body.Close()
+		if err := privateGetResp.Body.Close(); err != nil {
+			t.Logf("warning: failed to close response body: %v", err)
+		}
 
 		privateMetadata := privateObj["metadata"].(map[string]interface{})
 		privateMetadata["finalizers"] = []string{"test.orlop.gcp.managed.openshift.io/my-finalizer"}
@@ -272,7 +274,9 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		}
 		var updateResult map[string]interface{}
 		json.NewDecoder(updateResp.Body).Decode(&updateResult)
-		updateResp.Body.Close()
+		if err := updateResp.Body.Close(); err != nil {
+			t.Logf("warning: failed to close response body: %v", err)
+		}
 		
 		// Debug: check if finalizer was actually set
 		updateMeta := updateResult["metadata"].(map[string]interface{})
@@ -289,7 +293,9 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		}
 		var publicObj map[string]interface{}
 		json.NewDecoder(getResp.Body).Decode(&publicObj)
-		getResp.Body.Close()
+		if err := getResp.Body.Close(); err != nil {
+			t.Logf("warning: failed to close response body: %v", err)
+		}
 
 		publicMetadata := publicObj["metadata"].(map[string]interface{})
 		if _, exists := publicMetadata["finalizers"]; exists {
@@ -303,7 +309,9 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		}
 		var privateObj2 map[string]interface{}
 		json.NewDecoder(privateGetResp2.Body).Decode(&privateObj2)
-		privateGetResp2.Body.Close()
+		if err := privateGetResp2.Body.Close(); err != nil {
+			t.Logf("warning: failed to close response body: %v", err)
+		}
 
 		privateMetadata2 := privateObj2["metadata"].(map[string]interface{})
 		finalizers, exists := privateMetadata2["finalizers"]
@@ -322,7 +330,9 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		if err != nil {
 			t.Fatalf("HTTP request failed: %v", err)
 		}
-		cleanupResp.Body.Close()
+		if err := cleanupResp.Body.Close(); err != nil {
+			t.Logf("warning: failed to close response body: %v", err)
+		}
 	})
 
 	t.Run("Public API: Delete without finalizers - immediate deletion", func(t *testing.T) {
@@ -430,7 +440,9 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		}
 		var privateObj map[string]interface{}
 		json.NewDecoder(privateGetResp.Body).Decode(&privateObj)
-		privateGetResp.Body.Close()
+		if err := privateGetResp.Body.Close(); err != nil {
+			t.Logf("warning: failed to close response body: %v", err)
+		}
 
 		privateMetadata := privateObj["metadata"].(map[string]interface{})
 		privateMetadata["finalizers"] = []string{
@@ -445,7 +457,9 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to add finalizers via private API: %v", err)
 		}
-		updateResp.Body.Close()
+		if err := updateResp.Body.Close(); err != nil {
+			t.Logf("warning: failed to close response body: %v", err)
+		}
 
 		if updateResp.StatusCode != http.StatusOK {
 			t.Fatalf("Expected 200 OK adding finalizers via private API, got %d", updateResp.StatusCode)
@@ -543,7 +557,9 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		}
 		var privateObj map[string]interface{}
 		json.NewDecoder(privateGetResp.Body).Decode(&privateObj)
-		privateGetResp.Body.Close()
+		if err := privateGetResp.Body.Close(); err != nil {
+			t.Logf("warning: failed to close response body: %v", err)
+		}
 
 		privateMetadata := privateObj["metadata"].(map[string]interface{})
 		privateMetadata["finalizers"] = []string{
@@ -557,7 +573,9 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to add finalizer via private API: %v", err)
 		}
-		addFinResp.Body.Close()
+		if err := addFinResp.Body.Close(); err != nil {
+			t.Logf("warning: failed to close response body: %v", err)
+		}
 
 		// Step 3: Soft delete via public API (set deletionTimestamp)
 		req, _ := http.NewRequest(
@@ -569,7 +587,9 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Delete request failed: %v", err)
 		}
-		resp.Body.Close()
+		if err := resp.Body.Close(); err != nil {
+			t.Logf("warning: failed to close response body: %v", err)
+		}
 
 		// Get the object to verify soft deletion
 		getResp, err := publicClient.Get(publicURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + name)
@@ -578,7 +598,9 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		}
 		var softDeleted map[string]interface{}
 		json.NewDecoder(getResp.Body).Decode(&softDeleted)
-		getResp.Body.Close()
+		if err := getResp.Body.Close(); err != nil {
+			t.Logf("warning: failed to close response body: %v", err)
+		}
 
 		metadata := softDeleted["metadata"].(map[string]interface{})
 		if metadata["deletionTimestamp"] == nil {
@@ -592,7 +614,9 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		}
 		var privateObj2 map[string]interface{}
 		json.NewDecoder(privateGetResp2.Body).Decode(&privateObj2)
-		privateGetResp2.Body.Close()
+		if err := privateGetResp2.Body.Close(); err != nil {
+			t.Logf("warning: failed to close response body: %v", err)
+		}
 
 		// Remove finalizers
 		privateMetadata2 := privateObj2["metadata"].(map[string]interface{})
@@ -657,7 +681,9 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Create request failed: %v", err)
 		}
-		createResp.Body.Close()
+		if err := createResp.Body.Close(); err != nil {
+			t.Logf("warning: failed to close response body: %v", err)
+		}
 
 		// Step 2: Add finalizer via private API (mimicking controller behavior)
 		privateURL := fmt.Sprintf("https://localhost%s", testServer.PrivateAddress())
@@ -667,11 +693,13 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		}
 		var privateObj map[string]interface{}
 		json.NewDecoder(privateGetResp.Body).Decode(&privateObj)
-		privateGetResp.Body.Close()
+		if err := privateGetResp.Body.Close(); err != nil {
+			t.Logf("warning: failed to close response body: %v", err)
+		}
 
 		privateMetadata := privateObj["metadata"].(map[string]interface{})
 		privateMetadata["finalizers"] = []string{
-			"test.orlop.gcp.managed.openshift.io/finalizer",
+			"test.orlop.gcp.managed.openshift.io/my-finalizer",
 		}
 
 		addFinJSON, _ := json.Marshal(privateObj)
@@ -681,7 +709,9 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		if err != nil {
 			t.Fatalf("HTTP request failed: %v", err)
 		}
-		addFinResp.Body.Close()
+		if err := addFinResp.Body.Close(); err != nil {
+			t.Logf("warning: failed to close response body: %v", err)
+		}
 
 		// Step 3: First delete via public API
 		req1, _ := http.NewRequest(
@@ -693,7 +723,9 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		if err != nil {
 			t.Fatalf("First delete request failed: %v", err)
 		}
-		resp1.Body.Close()
+		if err := resp1.Body.Close(); err != nil {
+			t.Logf("warning: failed to close response body: %v", err)
+		}
 
 		// Step 4: Second delete (should still succeed but not change anything)
 		req2, _ := http.NewRequest(
@@ -868,7 +900,9 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Create request failed: %v", err)
 		}
-		createResp.Body.Close()
+		if err := createResp.Body.Close(); err != nil {
+			t.Logf("warning: failed to close response body: %v", err)
+		}
 
 		// Step 2: Add finalizer via private API
 		privateURL := fmt.Sprintf("https://localhost%s", testServer.PrivateAddress())
@@ -878,7 +912,9 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		}
 		var privateObj map[string]interface{}
 		json.NewDecoder(privateGetResp.Body).Decode(&privateObj)
-		privateGetResp.Body.Close()
+		if err := privateGetResp.Body.Close(); err != nil {
+			t.Logf("warning: failed to close response body: %v", err)
+		}
 
 		privateMetadata := privateObj["metadata"].(map[string]interface{})
 		privateMetadata["finalizers"] = []string{
@@ -892,7 +928,9 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		if err != nil {
 			t.Fatalf("HTTP request failed: %v", err)
 		}
-		addFinResp.Body.Close()
+		if err := addFinResp.Body.Close(); err != nil {
+			t.Logf("warning: failed to close response body: %v", err)
+		}
 
 		// Step 3: Soft delete via public API
 		delReq, _ := http.NewRequest("DELETE", publicURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects/"+name, nil)
@@ -900,7 +938,9 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		if err != nil {
 			t.Fatalf("HTTP request failed: %v", err)
 		}
-		delResp.Body.Close()
+		if err := delResp.Body.Close(); err != nil {
+			t.Logf("warning: failed to close response body: %v", err)
+		}
 
 		// Step 4: Patch the object via public API — should preserve deletionTimestamp
 		patchBody := map[string]interface{}{
@@ -933,7 +973,9 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		}
 		var privateObj2 map[string]interface{}
 		json.NewDecoder(privateGetResp2.Body).Decode(&privateObj2)
-		privateGetResp2.Body.Close()
+		if err := privateGetResp2.Body.Close(); err != nil {
+			t.Logf("warning: failed to close response body: %v", err)
+		}
 
 		privateMeta2 := privateObj2["metadata"].(map[string]interface{})
 		if privateMeta2["deletionTimestamp"] == nil {
@@ -949,7 +991,9 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		if err != nil {
 			t.Fatalf("HTTP request failed: %v", err)
 		}
-		removeFinResp.Body.Close()
+		if err := removeFinResp.Body.Close(); err != nil {
+			t.Logf("warning: failed to close response body: %v", err)
+		}
 
 		// Step 7: Verify hard deletion
 		finalGetResp, err := publicClient.Get(publicURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + name)

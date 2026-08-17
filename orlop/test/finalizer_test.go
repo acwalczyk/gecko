@@ -219,13 +219,17 @@ func TestFinalizerDeletion(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Delete request failed: %v", err)
 		}
-		resp.Body.Close()
+		if err := resp.Body.Close(); err != nil {
+			t.Logf("warning: failed to close response body: %v", err)
+		}
 
 		// Get the object to verify soft deletion
 		getResp, _ := insecureClient.Get(baseURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + name)
 		var softDeleted map[string]interface{}
 		json.NewDecoder(getResp.Body).Decode(&softDeleted)
-		getResp.Body.Close()
+		if err := getResp.Body.Close(); err != nil {
+			t.Logf("warning: failed to close response body: %v", err)
+		}
 
 		metadata := softDeleted["metadata"].(map[string]interface{})
 		if metadata["deletionTimestamp"] == nil {
@@ -317,7 +321,9 @@ func TestFinalizerDeletion(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Create request failed: %v", err)
 		}
-		createResp.Body.Close()
+		if err := createResp.Body.Close(); err != nil {
+			t.Logf("warning: failed to close response body: %v", err)
+		}
 
 		if createResp.StatusCode != http.StatusCreated {
 			t.Fatalf("Expected 201, got %d", createResp.StatusCode)
@@ -333,13 +339,17 @@ func TestFinalizerDeletion(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Delete request failed: %v", err)
 		}
-		delResp.Body.Close()
+		if err := delResp.Body.Close(); err != nil {
+			t.Logf("warning: failed to close response body: %v", err)
+		}
 
 		// Verify soft-deleted
 		getResp, _ := insecureClient.Get(baseURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + name)
 		var softDeleted map[string]interface{}
 		json.NewDecoder(getResp.Body).Decode(&softDeleted)
-		getResp.Body.Close()
+		if err := getResp.Body.Close(); err != nil {
+			t.Logf("warning: failed to close response body: %v", err)
+		}
 
 		metadata := softDeleted["metadata"].(map[string]interface{})
 		if metadata["deletionTimestamp"] == nil {
@@ -425,7 +435,9 @@ func TestFinalizerDeletion(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Create request failed: %v", err)
 		}
-		createResp.Body.Close()
+		if err := createResp.Body.Close(); err != nil {
+			t.Logf("warning: failed to close response body: %v", err)
+		}
 
 		// Soft-delete
 		delReq, _ := http.NewRequest(
@@ -437,13 +449,17 @@ func TestFinalizerDeletion(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Delete request failed: %v", err)
 		}
-		delResp.Body.Close()
+		if err := delResp.Body.Close(); err != nil {
+			t.Logf("warning: failed to close response body: %v", err)
+		}
 
 		// Verify soft-deleted
 		getResp, _ := insecureClient.Get(baseURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + name)
 		var softDeleted map[string]interface{}
 		json.NewDecoder(getResp.Body).Decode(&softDeleted)
-		getResp.Body.Close()
+		if err := getResp.Body.Close(); err != nil {
+			t.Logf("warning: failed to close response body: %v", err)
+		}
 
 		if softDeleted["metadata"].(map[string]interface{})["deletionTimestamp"] == nil {
 			t.Fatalf("Expected deletionTimestamp after soft delete")
@@ -522,7 +538,9 @@ func TestFinalizerDeletion(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Create request failed: %v", err)
 		}
-		createResp.Body.Close()
+		if err := createResp.Body.Close(); err != nil {
+			t.Logf("warning: failed to close response body: %v", err)
+		}
 
 		// First delete
 		req1, _ := http.NewRequest(
@@ -534,7 +552,9 @@ func TestFinalizerDeletion(t *testing.T) {
 		if err != nil {
 			t.Fatalf("First delete request failed: %v", err)
 		}
-		resp1.Body.Close()
+		if err := resp1.Body.Close(); err != nil {
+			t.Logf("warning: failed to close response body: %v", err)
+		}
 
 		// Second delete (should still succeed but not change anything)
 		req2, _ := http.NewRequest(
