@@ -187,6 +187,15 @@ func TestConvertingResourceHandler_Delete_NoFinalizers(t *testing.T) {
 		t.Errorf("status code = %d, want %d", rr.Code, http.StatusOK)
 	}
 	
+	// Verify response is metav1.Status (hard delete returns Status, not object)
+	var respBody map[string]interface{}
+	if err := json.Unmarshal(rr.Body.Bytes(), &respBody); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	if respBody["kind"] != "Status" {
+		t.Errorf("hard delete response kind = %v, want Status", respBody["kind"])
+	}
+	
 	// Verify object is gone
 	_, err := store.Get(ctx, "default", "test-delete")
 	if err == nil {
@@ -217,6 +226,15 @@ func TestConvertingResourceHandler_Delete_WithFinalizers_SoftDelete(t *testing.T
 	// Verify soft delete (200 with object returned)
 	if rr.Code != http.StatusOK {
 		t.Errorf("status code = %d, want %d", rr.Code, http.StatusOK)
+	}
+	
+	// Verify response is the object (soft delete returns resource, not Status)
+	var respBody map[string]interface{}
+	if err := json.Unmarshal(rr.Body.Bytes(), &respBody); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	if respBody["kind"] == "Status" {
+		t.Error("soft delete should return resource object, not Status")
 	}
 	
 	// Verify object still exists with deletionTimestamp

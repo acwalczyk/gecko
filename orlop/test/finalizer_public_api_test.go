@@ -118,6 +118,18 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 
+	// Also wait for public API listener
+	for time.Now().Before(deadline) {
+		resp, err := publicClient.Get(publicURL + "/healthz")
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				break
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
 	// Cleanup
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -250,7 +262,10 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		updateJSON, _ := json.Marshal(privateObj)
 		updateReq, _ := http.NewRequest("PUT", privateURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects/"+name, bytes.NewBuffer(updateJSON))
 		updateReq.Header.Set("Content-Type", "application/json")
-		updateResp, _ := privateClient.Do(updateReq)
+		updateResp, err := privateClient.Do(updateReq)
+		if err != nil {
+			t.Fatalf("HTTP request failed: %v", err)
+		}
 		if updateResp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(updateResp.Body)
 			t.Fatalf("Failed to add finalizer via private API: %d - %s", updateResp.StatusCode, body)
@@ -268,7 +283,10 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		}
 
 		// Now verify finalizers are NOT exposed via public API
-		getResp, _ := publicClient.Get(publicURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + name)
+		getResp, err := publicClient.Get(publicURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + name)
+		if err != nil {
+			t.Fatalf("HTTP request failed: %v", err)
+		}
 		var publicObj map[string]interface{}
 		json.NewDecoder(getResp.Body).Decode(&publicObj)
 		getResp.Body.Close()
@@ -279,7 +297,10 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		}
 
 		// Verify finalizers ARE visible in private API
-		privateGetResp2, _ := privateClient.Get(privateURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + name)
+		privateGetResp2, err := privateClient.Get(privateURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + name)
+		if err != nil {
+			t.Fatalf("HTTP request failed: %v", err)
+		}
 		var privateObj2 map[string]interface{}
 		json.NewDecoder(privateGetResp2.Body).Decode(&privateObj2)
 		privateGetResp2.Body.Close()
@@ -297,7 +318,11 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		cleanupJSON, _ := json.Marshal(privateObj2)
 		cleanupReq, _ := http.NewRequest("PUT", privateURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects/"+name, bytes.NewBuffer(cleanupJSON))
 		cleanupReq.Header.Set("Content-Type", "application/json")
-		privateClient.Do(cleanupReq)
+		cleanupResp, err := privateClient.Do(cleanupReq)
+		if err != nil {
+			t.Fatalf("HTTP request failed: %v", err)
+		}
+		cleanupResp.Body.Close()
 	})
 
 	t.Run("Public API: Delete without finalizers - immediate deletion", func(t *testing.T) {
@@ -512,7 +537,10 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 
 		// Step 2: Add finalizer via private API (mimicking controller behavior)
 		privateURL := fmt.Sprintf("https://localhost%s", testServer.PrivateAddress())
-		privateGetResp, _ := privateClient.Get(privateURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + name)
+		privateGetResp, err := privateClient.Get(privateURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + name)
+		if err != nil {
+			t.Fatalf("HTTP request failed: %v", err)
+		}
 		var privateObj map[string]interface{}
 		json.NewDecoder(privateGetResp.Body).Decode(&privateObj)
 		privateGetResp.Body.Close()
@@ -544,7 +572,10 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		resp.Body.Close()
 
 		// Get the object to verify soft deletion
-		getResp, _ := publicClient.Get(publicURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + name)
+		getResp, err := publicClient.Get(publicURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + name)
+		if err != nil {
+			t.Fatalf("HTTP request failed: %v", err)
+		}
 		var softDeleted map[string]interface{}
 		json.NewDecoder(getResp.Body).Decode(&softDeleted)
 		getResp.Body.Close()
@@ -555,7 +586,10 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		}
 
 		// Step 4: Now remove finalizers via PRIVATE API (mimicking controller behavior)
-		privateGetResp2, _ := privateClient.Get(privateURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + name)
+		privateGetResp2, err := privateClient.Get(privateURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + name)
+		if err != nil {
+			t.Fatalf("HTTP request failed: %v", err)
+		}
 		var privateObj2 map[string]interface{}
 		json.NewDecoder(privateGetResp2.Body).Decode(&privateObj2)
 		privateGetResp2.Body.Close()
@@ -627,7 +661,10 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 
 		// Step 2: Add finalizer via private API (mimicking controller behavior)
 		privateURL := fmt.Sprintf("https://localhost%s", testServer.PrivateAddress())
-		privateGetResp, _ := privateClient.Get(privateURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + name)
+		privateGetResp, err := privateClient.Get(privateURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + name)
+		if err != nil {
+			t.Fatalf("HTTP request failed: %v", err)
+		}
 		var privateObj map[string]interface{}
 		json.NewDecoder(privateGetResp.Body).Decode(&privateObj)
 		privateGetResp.Body.Close()
@@ -640,7 +677,10 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		addFinJSON, _ := json.Marshal(privateObj)
 		addFinReq, _ := http.NewRequest("PUT", privateURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects/"+name, bytes.NewBuffer(addFinJSON))
 		addFinReq.Header.Set("Content-Type", "application/json")
-		addFinResp, _ := privateClient.Do(addFinReq)
+		addFinResp, err := privateClient.Do(addFinReq)
+		if err != nil {
+			t.Fatalf("HTTP request failed: %v", err)
+		}
 		addFinResp.Body.Close()
 
 		// Step 3: First delete via public API
@@ -673,7 +713,10 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		}
 
 		// Object should still exist with deletionTimestamp
-		getResp, _ := publicClient.Get(publicURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + name)
+		getResp, err := publicClient.Get(publicURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + name)
+		if err != nil {
+			t.Fatalf("HTTP request failed: %v", err)
+		}
 		defer getResp.Body.Close()
 
 		if getResp.StatusCode != http.StatusOK {
@@ -829,7 +872,10 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 
 		// Step 2: Add finalizer via private API
 		privateURL := fmt.Sprintf("https://localhost%s", testServer.PrivateAddress())
-		privateGetResp, _ := privateClient.Get(privateURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + name)
+		privateGetResp, err := privateClient.Get(privateURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + name)
+		if err != nil {
+			t.Fatalf("HTTP request failed: %v", err)
+		}
 		var privateObj map[string]interface{}
 		json.NewDecoder(privateGetResp.Body).Decode(&privateObj)
 		privateGetResp.Body.Close()
@@ -842,12 +888,18 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		addFinJSON, _ := json.Marshal(privateObj)
 		addFinReq, _ := http.NewRequest("PUT", privateURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects/"+name, bytes.NewBuffer(addFinJSON))
 		addFinReq.Header.Set("Content-Type", "application/json")
-		addFinResp, _ := privateClient.Do(addFinReq)
+		addFinResp, err := privateClient.Do(addFinReq)
+		if err != nil {
+			t.Fatalf("HTTP request failed: %v", err)
+		}
 		addFinResp.Body.Close()
 
 		// Step 3: Soft delete via public API
 		delReq, _ := http.NewRequest("DELETE", publicURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects/"+name, nil)
-		delResp, _ := publicClient.Do(delReq)
+		delResp, err := publicClient.Do(delReq)
+		if err != nil {
+			t.Fatalf("HTTP request failed: %v", err)
+		}
 		delResp.Body.Close()
 
 		// Step 4: Patch the object via public API — should preserve deletionTimestamp
@@ -875,7 +927,10 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		}
 
 		// Step 5: Verify via private API that deletionTimestamp is still set
-		privateGetResp2, _ := privateClient.Get(privateURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + name)
+		privateGetResp2, err := privateClient.Get(privateURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + name)
+		if err != nil {
+			t.Fatalf("HTTP request failed: %v", err)
+		}
 		var privateObj2 map[string]interface{}
 		json.NewDecoder(privateGetResp2.Body).Decode(&privateObj2)
 		privateGetResp2.Body.Close()
@@ -890,11 +945,17 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		removeFinJSON, _ := json.Marshal(privateObj2)
 		removeFinReq, _ := http.NewRequest("PUT", privateURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects/"+name, bytes.NewBuffer(removeFinJSON))
 		removeFinReq.Header.Set("Content-Type", "application/json")
-		removeFinResp, _ := privateClient.Do(removeFinReq)
+		removeFinResp, err := privateClient.Do(removeFinReq)
+		if err != nil {
+			t.Fatalf("HTTP request failed: %v", err)
+		}
 		removeFinResp.Body.Close()
 
 		// Step 7: Verify hard deletion
-		finalGetResp, _ := publicClient.Get(publicURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + name)
+		finalGetResp, err := publicClient.Get(publicURL + "/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/" + namespace + "/objects/" + name)
+		if err != nil {
+			t.Fatalf("HTTP request failed: %v", err)
+		}
 		defer finalGetResp.Body.Close()
 
 		if finalGetResp.StatusCode != http.StatusNotFound {

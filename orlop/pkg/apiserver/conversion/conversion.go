@@ -18,7 +18,16 @@ func isNonNil(obj runtime.Object) bool {
 		return false
 	}
 	v := reflect.ValueOf(obj)
-	return !v.IsNil()
+	// reflect.IsNil panics on non-nilable kinds (struct, int, etc.).
+	// runtime.Object implementations are always pointer or interface,
+	// but guard defensively.
+	switch v.Kind() {
+	case reflect.Ptr, reflect.Interface, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func:
+		return !v.IsNil()
+	default:
+		// Non-nilable kind (e.g. struct value receiver) — treat as non-nil.
+		return true
+	}
 }
 
 const DefaultPrivatePrefix = "private.orlop.gcp.managed.openshift.io/"
@@ -360,9 +369,12 @@ func (c *Converter) PublicToPrivate(public runtime.Object, existing runtime.Obje
 	if hasExisting {
 		// Marshal existing to get all fields
 		existingJSON, err := json.Marshal(existing)
-		if err == nil {
-			// Unmarshal existing into private first
-			json.Unmarshal(existingJSON, private)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal existing object: %w", err)
+		}
+		// Unmarshal existing into private first — seeds internal fields
+		if err := json.Unmarshal(existingJSON, private); err != nil {
+			return nil, fmt.Errorf("failed to seed private object from existing: %w", err)
 		}
 	}
 
@@ -388,7 +400,9 @@ func (c *Converter) PublicToPrivate(public runtime.Object, existing runtime.Obje
 	// clients), so the unmarshal above replaces the conditions slice with
 	// public-only entries. We restore private conditions from the existing object.
 	if hasExisting {
-		c.preservePrivateConditions(existing, private)
+		if err := c.preservePrivateConditions(existing, private); err != nil {
+			return nil, fmt.Errorf("failed to preserve private conditions: %w", err)
+		}
 	}
 
 	// Preserve GVK
@@ -403,21 +417,21 @@ func (c *Converter) PublicToPrivate(public runtime.Object, existing runtime.Obje
 // destroys any private conditions that were seeded from the existing object.
 //
 // Uses the same JSON→map round-trip pattern as filterPrivateConditions.
-func (c *Converter) preservePrivateConditions(existing, converted runtime.Object) {
+func (c *Converter) preservePrivateConditions(existing, converted runtime.Object) error {
 	privateConditions := c.extractPrivateConditions(existing)
 	if len(privateConditions) == 0 {
-		return
+		return nil
 	}
 
 	// Get the converted object as a map
 	convertedJSON, err := json.Marshal(converted)
 	if err != nil {
-		return
+		return fmt.Errorf("failed to marshal converted object for condition preservation: %w", err)
 	}
 
 	var convertedMap map[string]interface{}
 	if err := json.Unmarshal(convertedJSON, &convertedMap); err != nil {
-		return
+		return fmt.Errorf("failed to unmarshal converted object for condition preservation: %w", err)
 	}
 
 	// Ensure status map exists
@@ -435,9 +449,12 @@ func (c *Converter) preservePrivateConditions(existing, converted runtime.Object
 	// Marshal back and unmarshal into the converted object
 	mergedJSON, err := json.Marshal(convertedMap)
 	if err != nil {
-		return
+		return fmt.Errorf("failed to marshal merged conditions: %w", err)
 	}
-	json.Unmarshal(mergedJSON, converted)
+	if err := json.Unmarshal(mergedJSON, converted); err != nil {
+		return fmt.Errorf("failed to unmarshal merged conditions into converted object: %w", err)
+	}
+	return nil
 }
 
 // extractPrivateConditions returns private-prefixed conditions from an object's

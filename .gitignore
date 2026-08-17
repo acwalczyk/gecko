@@ -46,7 +46,6 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
-tmp*
 
 # GenericAPIServer self-signed cert artifacts (created during tests)
 apiserver.local.config/

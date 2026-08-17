@@ -114,6 +114,18 @@ func TestPrivateFieldSecurity(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 
+	// Also wait for public API listener
+	for time.Now().Before(deadline) {
+		resp, err := pubClient.Get(publicURL + "/healthz")
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				break
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -150,7 +162,9 @@ func TestPrivateFieldSecurity(t *testing.T) {
 		defer resp.Body.Close()
 		respBody, _ := io.ReadAll(resp.Body)
 		var result map[string]interface{}
-		json.Unmarshal(respBody, &result)
+		if err := json.Unmarshal(respBody, &result); err != nil {
+			t.Fatalf("failed to unmarshal response (status %d): %v\nbody: %s", resp.StatusCode, err, respBody)
+		}
 		return resp.StatusCode, result
 	}
 
@@ -2113,8 +2127,7 @@ func TestPrivateFieldSecurity(t *testing.T) {
 		}
 	})
 
-	// Suppress unused variable warnings for new helpers
-	_ = publicList
-	_ = publicDelete
+	// privatePatch is defined but not yet used in tests — remove suppression
+	// when tests are added that exercise the private PATCH path.
 	_ = privatePatch
 }

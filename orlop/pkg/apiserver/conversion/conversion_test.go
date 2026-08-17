@@ -841,6 +841,16 @@ func TestConverter_StripPrivateFieldsFromPublicInput_NoMutation(t *testing.T) {
 	if obj.GetFinalizers() != nil {
 		t.Error("Finalizers should be nil after stripping")
 	}
+
+	// Verify caller's original maps were not mutated
+	// stripPrivateFieldsFromPublicInput creates new maps, so the originals
+	// should still contain private-prefixed entries.
+	if _, ok := labelsBefore["private.orlop.gcp.managed.openshift.io/internal"]; !ok {
+		t.Error("Caller's label map was mutated: private label removed from original map")
+	}
+	if _, ok := annotationsBefore["private.orlop.gcp.managed.openshift.io/sync"]; !ok {
+		t.Error("Caller's annotation map was mutated: private annotation removed from original map")
+	}
 }
 
 func TestConverter_ExtractPrivateConditions(t *testing.T) {

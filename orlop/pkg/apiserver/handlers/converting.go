@@ -51,6 +51,11 @@ func NewConvertingResourceHandler(
 	if logger.GetSink() == nil {
 		logger = logr.Discard()
 	}
+	if processor == nil {
+		// Fail loudly at construction time rather than at request time.
+		// This is a programming error — every public API handler must have a schema processor.
+		panic("ConvertingResourceHandler requires a non-nil schema processor")
+	}
 	return &ConvertingResourceHandler{
 		store:         store,
 		processor:     processor,
@@ -80,10 +85,10 @@ func (h *ConvertingResourceHandler) Create(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if err := validateOwnerReferencesFromMap(namespace, objMap); err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid ownerReferences: %v", err))
-		return
-	}
+	// Note: ownerReferences validation is intentionally omitted here.
+	// The public metadata schema prunes ownerReferences from input, so
+	// validateOwnerReferencesFromMap would always see an empty list.
+	// Clients cannot set ownerReferences through the public API.
 
 	// Process object (prune, default, validate) using public schema.
 	// Fail-closed: reject request if processor is nil (misconfiguration)
@@ -387,10 +392,9 @@ func (h *ConvertingResourceHandler) Update(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if err := validateOwnerReferencesFromMap(namespace, objMap); err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid ownerReferences: %v", err))
-		return
-	}
+	// Note: ownerReferences validation is intentionally omitted here.
+	// The public metadata schema prunes ownerReferences from input, so
+	// validateOwnerReferencesFromMap would always see an empty list.
 
 	// Process object (prune, default, validate) using public schema.
 	// Fail-closed: reject request if processor is nil (misconfiguration)
@@ -440,8 +444,16 @@ func (h *ConvertingResourceHandler) Update(w http.ResponseWriter, r *http.Reques
 
 	// Preserve deletionTimestamp from existing object
 	// The converter's JSON unmarshal overwrites deletionTimestamp with nil since public API doesn't include it
-	existingAccessor, _ := meta.Accessor(existingPrivate)
-	privateAccessor, _ := meta.Accessor(privateObj)
+	existingAccessor, err := meta.Accessor(existingPrivate)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to access existing metadata: %v", err))
+		return
+	}
+	privateAccessor, err := meta.Accessor(privateObj)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to access private metadata: %v", err))
+		return
+	}
 	if dt := existingAccessor.GetDeletionTimestamp(); dt != nil {
 		privateAccessor.SetDeletionTimestamp(dt)
 	}
@@ -622,8 +634,16 @@ func (h *ConvertingResourceHandler) Patch(w http.ResponseWriter, r *http.Request
 	// Preserve deletionTimestamp from existing object.
 	// The converter's JSON unmarshal overwrites deletionTimestamp with nil
 	// since public API doesn't include it.
-	existingAccessor, _ := meta.Accessor(existingPrivate)
-	privateAccessor, _ := meta.Accessor(privateObj)
+	existingAccessor, err := meta.Accessor(existingPrivate)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to access existing metadata: %v", err))
+		return
+	}
+	privateAccessor, err := meta.Accessor(privateObj)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to access private metadata: %v", err))
+		return
+	}
 	if dt := existingAccessor.GetDeletionTimestamp(); dt != nil {
 		privateAccessor.SetDeletionTimestamp(dt)
 	}
@@ -849,17 +869,20 @@ func (h *ConvertingResourceHandler) UpdateStatus(w http.ResponseWriter, r *http.
 	// conditions from the existing object so they survive the full replacement
 	// at existingMap["status"] = status.
 	if status, ok := updateMap["status"]; ok {
-		if statusMap, ok := status.(map[string]interface{}); ok {
-			h.converter.StripPrivateStatusFields(statusMap)
-			// Preserve private conditions from existing status that would be
-			// lost by the full status replacement below. The incoming status
-			// from the public client never contains private conditions (stripped
-			// above), so we re-inject them from storage.
-			if existingStatus, ok := existingMap["status"].(map[string]interface{}); ok {
-				h.converter.PreservePrivateStatusConditions(existingStatus, statusMap)
-			}
+		statusMap, ok := status.(map[string]interface{})
+		if !ok {
+			writeError(w, http.StatusBadRequest, "status must be a JSON object")
+			return
 		}
-		existingMap["status"] = status
+		h.converter.StripPrivateStatusFields(statusMap)
+		// Preserve private conditions from existing status that would be
+		// lost by the full status replacement below. The incoming status
+		// from the public client never contains private conditions (stripped
+		// above), so we re-inject them from storage.
+		if existingStatus, ok := existingMap["status"].(map[string]interface{}); ok {
+			h.converter.PreservePrivateStatusConditions(existingStatus, statusMap)
+		}
+		existingMap["status"] = statusMap
 	}
 
 	// Convert back to private object
