@@ -713,7 +713,7 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 			t.Logf("warning: failed to close response body: %v", err)
 		}
 
-		// Step 3: First delete via public API
+		// Step 3: First delete via public API — should soft-delete (set deletionTimestamp)
 		req1, _ := http.NewRequest(
 			"DELETE",
 			publicURL+"/apis/test.orlop.gcp.managed.openshift.io/v1/namespaces/"+namespace+"/objects/"+name,
@@ -723,8 +723,17 @@ func TestFinalizerDeletionPublicAPI(t *testing.T) {
 		if err != nil {
 			t.Fatalf("First delete request failed: %v", err)
 		}
+		var resp1Body map[string]interface{}
+		json.NewDecoder(resp1.Body).Decode(&resp1Body)
 		if err := resp1.Body.Close(); err != nil {
 			t.Logf("warning: failed to close response body: %v", err)
+		}
+		if resp1.StatusCode != http.StatusOK {
+			t.Fatalf("First delete: expected 200, got %d: %v", resp1.StatusCode, resp1Body)
+		}
+		resp1Meta, _ := resp1Body["metadata"].(map[string]interface{})
+		if resp1Meta["deletionTimestamp"] == nil {
+			t.Error("First delete response should contain deletionTimestamp (soft-delete)")
 		}
 
 		// Step 4: Second delete (should still succeed but not change anything)
