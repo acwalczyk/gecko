@@ -46,8 +46,8 @@ func setupRouter(registry *ResourceRegistry, corsOrigins []string, customMiddlew
 		r.Use(mw)
 	}
 
-	// Create discovery handler
-	discoveryHandler := handlers.NewDiscoveryHandler(registry)
+	// Create discovery handler (private API advertises status subresource)
+	discoveryHandler := handlers.NewDiscoveryHandler(registry, nil)
 
 	// Discovery endpoints (must be registered BEFORE resource routes to avoid shadowing)
 	r.Get("/apis", discoveryHandler.APIGroupList)
@@ -175,7 +175,11 @@ func setupConvertingRouter(publicRegistry *ResourceRegistry, privateRegistry *Re
 	}
 
 	// Create discovery handler using public registry (for public API types)
-	discoveryHandler := handlers.NewDiscoveryHandler(publicRegistry)
+	// Public API does not advertise status subresource (GCP-1062)
+	advertiseStatus := false
+	discoveryHandler := handlers.NewDiscoveryHandler(publicRegistry, &handlers.DiscoveryOptions{
+		AdvertiseStatus: &advertiseStatus,
+	})
 
 	// Discovery endpoints (must be registered BEFORE resource routes to avoid shadowing)
 	r.Get("/apis", discoveryHandler.APIGroupList)
@@ -218,7 +222,7 @@ func setupConvertingRouter(publicRegistry *ResourceRegistry, privateRegistry *Re
 				r.Put("/"+plural+"/{name}", handler.Update)
 				r.Patch("/"+plural+"/{name}", handler.Patch)
 				r.Delete("/"+plural+"/{name}", handler.Delete)
-				r.Put("/"+plural+"/{name}/status", handler.UpdateStatus)
+				// Status updates not allowed on public API (GCP-1062)
 			}
 
 			// Namespaced resources: LIST across all namespaces + CRUD under /namespaces/{namespace}
@@ -249,7 +253,7 @@ func setupConvertingRouter(publicRegistry *ResourceRegistry, privateRegistry *Re
 						r.Put("/"+nh.plural+"/{name}", nh.handler.Update)
 						r.Patch("/"+nh.plural+"/{name}", nh.handler.Patch)
 						r.Delete("/"+nh.plural+"/{name}", nh.handler.Delete)
-						r.Put("/"+nh.plural+"/{name}/status", nh.handler.UpdateStatus)
+						// Status updates not allowed on public API (GCP-1062)
 
 						if nh.res.ParentResource != nil {
 							parentPlural := nh.res.ParentResource.Plural
@@ -264,7 +268,7 @@ func setupConvertingRouter(publicRegistry *ResourceRegistry, privateRegistry *Re
 								r.Put("/{name}", handler.Update)
 								r.Patch("/{name}", handler.Patch)
 								r.Delete("/{name}", handler.Delete)
-								r.Put("/{name}/status", handler.UpdateStatus)
+								// Status updates not allowed on public API (GCP-1062)
 							})
 						}
 					}

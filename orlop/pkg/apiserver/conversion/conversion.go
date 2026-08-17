@@ -296,44 +296,6 @@ func (c *Converter) reconcileMetadata(public, existing, private runtime.Object) 
 	}
 }
 
-// StripPrivateStatusFields removes private-prefixed conditions from a status map.
-// Used by the public API's UpdateStatus handler to prevent clients from injecting
-// private conditions via the status subresource.
-// Handles both string conditions ([]string serialized as []interface{}) and
-// object conditions ([]map[string]interface{} with "type" field).
-func (c *Converter) StripPrivateStatusFields(statusMap map[string]interface{}) {
-	conditions, ok := statusMap["conditions"].([]interface{})
-	if !ok || len(conditions) == 0 {
-		return
-	}
-
-	filtered := make([]interface{}, 0, len(conditions))
-	for _, cond := range conditions {
-		// String condition (e.g. "Ready", "private.orlop.gcp.managed.openshift.io/Sync")
-		if condStr, ok := cond.(string); ok {
-			if !strings.HasPrefix(condStr, c.privatePrefix) {
-				filtered = append(filtered, cond)
-			}
-			continue
-		}
-
-		// Object condition with "type" field
-		condMap, ok := cond.(map[string]interface{})
-		if !ok {
-			filtered = append(filtered, cond)
-			continue
-		}
-		condType, ok := condMap["type"].(string)
-		if !ok {
-			filtered = append(filtered, cond)
-			continue
-		}
-		if !strings.HasPrefix(condType, c.privatePrefix) {
-			filtered = append(filtered, cond)
-		}
-	}
-	statusMap["conditions"] = filtered
-}
 
 // PublicToPrivate converts a public API object to its private representation.
 // Uses JSON round-trip for conversion.
@@ -507,45 +469,3 @@ func (c *Converter) extractPrivateConditions(obj runtime.Object) []interface{} {
 	return private
 }
 
-// PreservePrivateStatusConditions extracts private-prefixed conditions from
-// existingStatus and appends them to incomingStatus. Used by the UpdateStatus
-// handler where status is replaced as a whole map — the incoming status from
-// the public client lacks private conditions, so they must be re-injected
-// from the existing object's status.
-func (c *Converter) PreservePrivateStatusConditions(existingStatus, incomingStatus map[string]interface{}) {
-	existingConditions, ok := existingStatus["conditions"].([]interface{})
-	if !ok || len(existingConditions) == 0 {
-		return
-	}
-
-	// Extract private conditions from existing
-	var privateConditions []interface{}
-	for _, cond := range existingConditions {
-		if condStr, ok := cond.(string); ok {
-			if strings.HasPrefix(condStr, c.privatePrefix) {
-				privateConditions = append(privateConditions, cond)
-			}
-			continue
-		}
-		condMap, ok := cond.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		condType, ok := condMap["type"].(string)
-		if !ok {
-			continue
-		}
-		if strings.HasPrefix(condType, c.privatePrefix) {
-			privateConditions = append(privateConditions, cond)
-		}
-	}
-
-	if len(privateConditions) == 0 {
-		return
-	}
-
-	// Append to incoming conditions
-	incomingConditions, _ := incomingStatus["conditions"].([]interface{})
-	incomingConditions = append(incomingConditions, privateConditions...)
-	incomingStatus["conditions"] = incomingConditions
-}
