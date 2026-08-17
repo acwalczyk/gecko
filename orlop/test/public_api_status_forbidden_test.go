@@ -30,10 +30,14 @@ import (
 func TestPublicAPIStatusForbidden(t *testing.T) {
 	// Setup test server with private + public APIs
 	privateScheme := runtime.NewScheme()
-	privatev1.AddToScheme(privateScheme)
+	if err := privatev1.AddToScheme(privateScheme); err != nil {
+		t.Fatalf("failed to add private scheme: %v", err)
+	}
 
 	publicScheme := runtime.NewScheme()
-	publicv1.AddToScheme(publicScheme)
+	if err := publicv1.AddToScheme(publicScheme); err != nil {
+		t.Fatalf("failed to add public scheme: %v", err)
+	}
 
 	gvk := runtimeschema.GroupVersionKind{
 		Group:   "test.orlop.gcp.managed.openshift.io",
@@ -128,7 +132,9 @@ func TestPublicAPIStatusForbidden(t *testing.T) {
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		server.Shutdown(ctx)
+		if err := server.Shutdown(ctx); err != nil {
+			t.Errorf("server shutdown failed: %v", err)
+		}
 	})
 
 	const ns = "default"
@@ -175,14 +181,13 @@ func TestPublicAPIStatusForbidden(t *testing.T) {
 
 		statusResp := httpDo(t, pubClient, "PUT", statusURL, statusObj)
 
-		// Verify: status endpoint should NOT be accessible
-		// Acceptable responses: 404 Not Found or 405 Method Not Allowed
-		if statusResp.StatusCode != http.StatusNotFound && statusResp.StatusCode != http.StatusMethodNotAllowed {
-			t.Errorf("public API UpdateStatus should return 404 or 405, got %d: %s",
+		// Verify: status endpoint should return 404 Not Found
+		if statusResp.StatusCode != http.StatusNotFound {
+			t.Errorf("public API UpdateStatus should return 404, got %d: %s",
 				statusResp.StatusCode, statusResp.Body)
 		}
 
-		t.Logf("✓ Public API UpdateStatus correctly blocked with HTTP %d", statusResp.StatusCode)
+		t.Logf("✓ Public API UpdateStatus correctly blocked with HTTP 404")
 
 		// Cleanup
 		httpDo(t, privClient, "DELETE", privateURL+apiPath+"/"+name, nil)
@@ -297,9 +302,14 @@ func TestPublicAPIStatusForbidden(t *testing.T) {
 		}
 
 		var discovery map[string]interface{}
-		json.Unmarshal([]byte(discoveryResp.Body), &discovery)
+		if err := json.Unmarshal([]byte(discoveryResp.Body), &discovery); err != nil {
+			t.Fatalf("failed to unmarshal private discovery: %v", err)
+		}
 
-		resources := discovery["resources"].([]interface{})
+		resources, ok := discovery["resources"].([]interface{})
+		if !ok {
+			t.Fatalf("private discovery missing resources field")
+		}
 		foundStatus := false
 		for _, r := range resources {
 			res := r.(map[string]interface{})
