@@ -51,6 +51,11 @@ func NewConvertingResourceHandler(
 	if logger.GetSink() == nil {
 		logger = logr.Discard()
 	}
+	if processor == nil {
+		// Fail loudly at construction time rather than at request time.
+		// This is a programming error — every public API handler must have a schema processor.
+		panic("ConvertingResourceHandler requires a non-nil schema processor")
+	}
 	return &ConvertingResourceHandler{
 		store:         store,
 		processor:     processor,
@@ -80,12 +85,18 @@ func (h *ConvertingResourceHandler) Create(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if err := validateOwnerReferencesFromMap(namespace, objMap); err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid ownerReferences: %v", err))
+	// Note: ownerReferences validation is intentionally omitted here.
+	// The public metadata schema prunes ownerReferences from input, so
+	// validateOwnerReferencesFromMap would always see an empty list.
+	// Clients cannot set ownerReferences through the public API.
+
+	// Process object (prune, default, validate) using public schema.
+	// Fail-closed: reject request if processor is nil (misconfiguration)
+	// rather than silently skipping all schema processing.
+	if h.processor == nil {
+		writeError(w, http.StatusInternalServerError, "schema processor not configured")
 		return
 	}
-
-	// Process object (prune, default, validate) using public schema
 	if errs := h.processor.Process(r.Context(), objMap); len(errs) > 0 {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("validation failed: %v", errs.ToAggregate()))
 		return
@@ -381,12 +392,17 @@ func (h *ConvertingResourceHandler) Update(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if err := validateOwnerReferencesFromMap(namespace, objMap); err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid ownerReferences: %v", err))
+	// Note: ownerReferences validation is intentionally omitted here.
+	// The public metadata schema prunes ownerReferences from input, so
+	// validateOwnerReferencesFromMap would always see an empty list.
+
+	// Process object (prune, default, validate) using public schema.
+	// Fail-closed: reject request if processor is nil (misconfiguration)
+	// rather than silently skipping all schema processing.
+	if h.processor == nil {
+		writeError(w, http.StatusInternalServerError, "schema processor not configured")
 		return
 	}
-
-	// Process object (prune, default, validate) using public schema
 	if errs := h.processor.Process(r.Context(), objMap); len(errs) > 0 {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("validation failed: %v", errs.ToAggregate()))
 		return
@@ -426,6 +442,22 @@ func (h *ConvertingResourceHandler) Update(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Preserve deletionTimestamp from existing object
+	// The converter's JSON unmarshal overwrites deletionTimestamp with nil since public API doesn't include it
+	existingAccessor, err := meta.Accessor(existingPrivate)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to access existing metadata: %v", err))
+		return
+	}
+	privateAccessor, err := meta.Accessor(privateObj)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to access private metadata: %v", err))
+		return
+	}
+	if dt := existingAccessor.GetDeletionTimestamp(); dt != nil {
+		privateAccessor.SetDeletionTimestamp(dt)
+	}
+
 	if d, ok := privateObj.(types.CustomDefaulter); ok {
 		if err := d.Default(r.Context()); err != nil {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("defaulting failed: %v", err))
@@ -441,8 +473,6 @@ func (h *ConvertingResourceHandler) Update(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Check if spec changed and increment generation if so
-	existingAccessor, _ := meta.Accessor(existingPrivate)
-	privateAccessor, _ := meta.Accessor(privateObj)
 	if specChanged(existingPrivate, privateObj) {
 		privateAccessor.SetGeneration(existingAccessor.GetGeneration() + 1)
 	} else {
@@ -451,6 +481,10 @@ func (h *ConvertingResourceHandler) Update(w http.ResponseWriter, r *http.Reques
 
 	// Set GVK
 	privateObj.GetObjectKind().SetGroupVersionKind(h.gvk)
+
+	// Note: no finalizer-aware hard-delete here. Public API cannot modify finalizers
+	// (they are stripped by stripPrivateFieldsFromPublicInput), so finalizer removal
+	// only happens via the private API, which handles hard-delete in resource.go.
 
 	// Update object in storage (cast to client.Object)
 	if err := h.store.Update(r.Context(), privateObj.(client.Object)); err != nil {
@@ -468,7 +502,11 @@ func (h *ConvertingResourceHandler) Update(w http.ResponseWriter, r *http.Reques
 	h.logger.Info("Updated (converting)", "kind", h.gvk.Kind, "namespace", namespace, "name", name)
 
 	// Convert back to public for response
-	responsePublic, _ := h.converter.PrivateToPublic(privateObj)
+	responsePublic, err := h.converter.PrivateToPublic(privateObj)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to convert response: %v", err))
+		return
+	}
 
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	w.WriteHeader(http.StatusOK)
@@ -533,7 +571,13 @@ func (h *ConvertingResourceHandler) Patch(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Process object (prune, default, validate) using public schema
+	// Process object (prune, default, validate) using public schema.
+	// Fail-closed: reject request if processor is nil (misconfiguration)
+	// rather than silently skipping all schema processing.
+	if h.processor == nil {
+		writeError(w, http.StatusInternalServerError, "schema processor not configured")
+		return
+	}
 	if errs := h.processor.Process(r.Context(), objMap); len(errs) > 0 {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("validation failed: %v", errs.ToAggregate()))
 		return
@@ -587,9 +631,24 @@ func (h *ConvertingResourceHandler) Patch(w http.ResponseWriter, r *http.Request
 		}
 	}
 
+	// Preserve deletionTimestamp from existing object.
+	// The converter's JSON unmarshal overwrites deletionTimestamp with nil
+	// since public API doesn't include it.
+	existingAccessor, err := meta.Accessor(existingPrivate)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to access existing metadata: %v", err))
+		return
+	}
+	privateAccessor, err := meta.Accessor(privateObj)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to access private metadata: %v", err))
+		return
+	}
+	if dt := existingAccessor.GetDeletionTimestamp(); dt != nil {
+		privateAccessor.SetDeletionTimestamp(dt)
+	}
+
 	// Check if spec changed and increment generation if so
-	existingAccessor, _ := meta.Accessor(existingPrivate)
-	privateAccessor, _ := meta.Accessor(privateObj)
 	if specChanged(existingPrivate, privateObj) {
 		privateAccessor.SetGeneration(existingAccessor.GetGeneration() + 1)
 	} else {
@@ -598,6 +657,10 @@ func (h *ConvertingResourceHandler) Patch(w http.ResponseWriter, r *http.Request
 
 	// Set GVK
 	privateObj.GetObjectKind().SetGroupVersionKind(h.gvk)
+
+	// Note: no finalizer-aware hard-delete here. Public API cannot modify finalizers
+	// (they are stripped by stripPrivateFieldsFromPublicInput), so finalizer removal
+	// only happens via the private API, which handles hard-delete in resource.go.
 
 	// Update object in storage (cast to client.Object)
 	if err := h.store.Update(r.Context(), privateObj.(client.Object)); err != nil {
@@ -615,7 +678,11 @@ func (h *ConvertingResourceHandler) Patch(w http.ResponseWriter, r *http.Request
 	h.logger.V(1).Info("[PATCH-CONVERTING] %s namespace=%s name=%s status=patched", h.gvk.Kind, namespace, name)
 
 	// Convert back to public for response
-	responsePublic, _ := h.converter.PrivateToPublic(privateObj)
+	responsePublic, err := h.converter.PrivateToPublic(privateObj)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to convert response: %v", err))
+		return
+	}
 
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	w.WriteHeader(http.StatusOK)
@@ -650,8 +717,76 @@ func (h *ConvertingResourceHandler) Delete(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
+	// Cast to client.Object to access finalizers and deletionTimestamp
+	clientObj, ok := existing.(client.Object)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "object does not implement client.Object")
+		return
+	}
+
+	finalizers := clientObj.GetFinalizers()
+	deletionTimestamp := clientObj.GetDeletionTimestamp()
+
+	// Kubernetes finalizer deletion flow:
+	// 1. If object has finalizers and is not marked for deletion, set deletionTimestamp (soft delete)
+	// 2. If object has finalizers and is already marked for deletion, return object (idempotent)
+	// 3. If object has no finalizers, delete immediately (hard delete)
+	if len(finalizers) > 0 {
+		if deletionTimestamp == nil {
+			// First delete request - set deletionTimestamp (soft delete)
+			toStore, ok := existing.DeepCopyObject().(client.Object)
+			if !ok {
+				writeError(w, http.StatusInternalServerError, "object does not implement client.Object")
+				return
+			}
+
+			now := metav1.Now()
+			toStore.SetDeletionTimestamp(&now)
+			toStore.GetObjectKind().SetGroupVersionKind(h.gvk)
+
+			if err := h.store.Update(r.Context(), toStore); err != nil {
+				h.logger.Error(err, "Delete failed - update with deletionTimestamp", "kind", h.gvk.Kind, "namespace", namespace, "name", name)
+				if errors.IsConflict(err) {
+					writeError(w, http.StatusConflict, err.Error())
+				} else {
+					writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update object: %v", err))
+				}
+				return
+			}
+
+			h.logger.Info("Marked for deletion (finalizers present)", "kind", h.gvk.Kind, "namespace", namespace, "name", name, "finalizers", finalizers)
+
+			// Convert to public API for response
+			responsePublic, err := h.converter.PrivateToPublic(toStore)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to convert response: %v", err))
+				return
+			}
+
+			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(responsePublic)
+			return
+		}
+
+		// Already marked for deletion - return object idempotently
+		h.logger.V(1).Info("Already marked for deletion", "kind", h.gvk.Kind, "namespace", namespace, "name", name, "finalizers", finalizers)
+
+		responsePublic, err := h.converter.PrivateToPublic(existing)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to convert response: %v", err))
+			return
+		}
+
+		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(responsePublic)
+		return
+	}
+
+	// Hard delete: no finalizers
 	if err := h.store.Delete(r.Context(), namespace, name); err != nil {
-		h.logger.V(1).Info("[DELETE-CONVERTING] %s namespace=%s name=%s error=%v", h.gvk.Kind, namespace, name, err)
+		h.logger.Error(err, "Delete failed - hard delete", "kind", h.gvk.Kind, "namespace", namespace, "name", name)
 		if errors.IsNotFound(err) {
 			writeError(w, http.StatusNotFound, err.Error())
 		} else {
@@ -660,7 +795,7 @@ func (h *ConvertingResourceHandler) Delete(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	h.logger.V(1).Info("[DELETE-CONVERTING] %s namespace=%s name=%s status=deleted", h.gvk.Kind, namespace, name)
+	h.logger.Info("Deleted", "kind", h.gvk.Kind, "namespace", namespace, "name", name)
 
 	// Return success status
 	status := metav1.Status{
@@ -725,9 +860,29 @@ func (h *ConvertingResourceHandler) UpdateStatus(w http.ResponseWriter, r *http.
 	var existingMap map[string]interface{}
 	json.Unmarshal(existingJSON, &existingMap)
 
-	// Replace only the status field
+	// Replace only the status field, after stripping private-prefixed conditions
+	// from the incoming request and preserving private conditions from storage.
+	//
+	// StripPrivateStatusFields prevents clients from injecting private conditions
+	// (e.g. "private.orlop.gcp.managed.openshift.io/internal") via the public
+	// status subresource. PreservePrivateStatusConditions re-injects private
+	// conditions from the existing object so they survive the full replacement
+	// at existingMap["status"] = status.
 	if status, ok := updateMap["status"]; ok {
-		existingMap["status"] = status
+		statusMap, ok := status.(map[string]interface{})
+		if !ok {
+			writeError(w, http.StatusBadRequest, "status must be a JSON object")
+			return
+		}
+		h.converter.StripPrivateStatusFields(statusMap)
+		// Preserve private conditions from existing status that would be
+		// lost by the full status replacement below. The incoming status
+		// from the public client never contains private conditions (stripped
+		// above), so we re-inject them from storage.
+		if existingStatus, ok := existingMap["status"].(map[string]interface{}); ok {
+			h.converter.PreservePrivateStatusConditions(existingStatus, statusMap)
+		}
+		existingMap["status"] = statusMap
 	}
 
 	// Convert back to private object
@@ -762,7 +917,11 @@ func (h *ConvertingResourceHandler) UpdateStatus(w http.ResponseWriter, r *http.
 	h.logger.V(1).Info("[UPDATE-STATUS-CONVERTING] %s namespace=%s name=%s status=updated", h.gvk.Kind, namespace, name)
 
 	// Convert to public for response
-	responsePublic, _ := h.converter.PrivateToPublic(updatedPrivate)
+	responsePublic, err := h.converter.PrivateToPublic(updatedPrivate)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to convert response: %v", err))
+		return
+	}
 
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	w.WriteHeader(http.StatusOK)

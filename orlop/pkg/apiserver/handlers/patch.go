@@ -12,6 +12,7 @@ import (
 	"github.com/evanphx/json-patch/v5"
 	"github.com/go-chi/chi/v5"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -165,6 +166,78 @@ func (h *ResourceHandler) processPatchedObject(w http.ResponseWriter, r *http.Re
 	if err := validateMetadata(clientObj); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid metadata: %v", err))
 		return
+	}
+
+	// Preserve deletionTimestamp — it cannot be changed via Patch.
+	// Only Delete sets it, only finalizer removal clears it (via hard-delete).
+	// Without this, a merge patch omitting metadata.deletionTimestamp would
+	// leave the field as zero-value (nil), clearing the soft-delete marker.
+	existingAccessor, err := meta.Accessor(existing)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to access existing metadata: %v", err))
+		return
+	}
+	patchedAccessor, err := meta.Accessor(clientObj)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to access patched metadata: %v", err))
+		return
+	}
+	if dt := existingAccessor.GetDeletionTimestamp(); dt != nil {
+		patchedAccessor.SetDeletionTimestamp(dt)
+
+		// If object is being deleted and all finalizers are removed, perform hard delete
+		if len(patchedAccessor.GetFinalizers()) == 0 {
+			// Run delete validation before removing
+			if v, ok := clientObj.(types.CustomValidator); ok {
+				if err := v.ValidateDelete(r.Context()); err != nil {
+					writeError(w, http.StatusBadRequest, fmt.Sprintf("delete validation failed: %v", err))
+					return
+				}
+			}
+
+			// Re-read the object to check for concurrent modifications.
+			// Another request may have added a finalizer between our initial
+			// read and now; deleting without this check would lose that finalizer.
+			current, err := h.store.Get(r.Context(), namespace, name)
+			if err != nil {
+				if errors.IsNotFound(err) {
+					writeError(w, http.StatusNotFound, err.Error())
+				} else {
+					writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to re-read object: %v", err))
+				}
+				return
+			}
+			currentAccessor, err := meta.Accessor(current)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to access current metadata: %v", err))
+				return
+			}
+			if currentAccessor.GetResourceVersion() != existingAccessor.GetResourceVersion() {
+				writeError(w, http.StatusConflict, "object was modified concurrently, retry the patch")
+				return
+			}
+
+			if err := h.store.Delete(r.Context(), namespace, name); err != nil {
+				h.logger.Error(err, "Failed to hard delete after finalizers removed",
+					"kind", h.gvk.Kind, "namespace", namespace, "name", name)
+				if errors.IsNotFound(err) {
+					writeError(w, http.StatusNotFound, err.Error())
+				} else {
+					writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to delete object: %v", err))
+				}
+				return
+			}
+
+			h.logger.Info("Hard deleted after finalizers removed",
+				"kind", h.gvk.Kind, "namespace", namespace, "name", name)
+
+			// Return the deleted object (consistent with Update hard-delete path
+			// and Kubernetes API conventions for PATCH).
+			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(clientObj)
+			return
+		}
 	}
 
 	// Set GVK

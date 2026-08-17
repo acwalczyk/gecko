@@ -20,8 +20,12 @@ func createConvertingHandlerWithSharedStore(publicRegistry *ResourceRegistry, pr
 		return nil, fmt.Errorf("no store found for resource %s in private registry", gk)
 	}
 
-	// Create schema processor from public resource schema
-	processor, err := publicRegistry.createProcessor(publicRes.SchemaYAML)
+	// Create schema processor with public API metadata constraints.
+	// Uses createPublicProcessor (not createProcessor) so that
+	// injectPublicMetadataSchema constrains metadata to only public-facing
+	// fields — pruning.Prune() strips finalizers, ownerReferences,
+	// managedFields, deletionTimestamp, etc. from public API inputs.
+	processor, err := publicRegistry.createPublicProcessor(publicRes.SchemaYAML)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create processor for %s: %w", publicRes.Plural, err)
 	}
