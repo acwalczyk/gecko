@@ -257,7 +257,7 @@ func TestPublicAPIStatusForbidden(t *testing.T) {
 	})
 
 	t.Run("Public API discovery does not advertise status subresource", func(t *testing.T) {
-		// Fetch discovery for the API group version
+		// Verify discovery endpoint returns valid response
 		discoveryURL := publicURL + "/apis/test.orlop.gcp.managed.openshift.io/v1"
 		discoveryResp := httpDo(t, pubClient, "GET", discoveryURL, nil)
 
@@ -275,7 +275,7 @@ func TestPublicAPIStatusForbidden(t *testing.T) {
 			t.Fatalf("discovery missing resources field")
 		}
 
-		// Verify no /status subresource in discovery
+		// Verify status subresource NOT advertised (proves router uses advertiseStatus=false)
 		for _, r := range resources {
 			res := r.(map[string]interface{})
 			name := res["name"].(string)
@@ -288,7 +288,7 @@ func TestPublicAPIStatusForbidden(t *testing.T) {
 	})
 
 	t.Run("Private API discovery still advertises status subresource", func(t *testing.T) {
-		// Sanity check: private API discovery should still include status
+		// Verify discovery endpoint returns valid response
 		discoveryURL := privateURL + "/apis/test.orlop.gcp.managed.openshift.io/v1"
 		discoveryResp := httpDo(t, privClient, "GET", discoveryURL, nil)
 
