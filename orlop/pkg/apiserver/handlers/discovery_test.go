@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/types"
@@ -127,7 +128,7 @@ func TestAPIResourceList_AdvertiseStatusTrue(t *testing.T) {
 			foundStatus = true
 			// Verify status subresource has correct verbs
 			expectedVerbs := []string{"get", "patch", "update"}
-			if len(res.Verbs) != len(expectedVerbs) {
+			if !slices.Equal(res.Verbs, expectedVerbs) {
 				t.Errorf("status subresource verbs = %v, want %v", res.Verbs, expectedVerbs)
 			}
 		}
