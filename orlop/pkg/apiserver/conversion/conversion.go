@@ -8,6 +8,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/sets"
 )
 
 // isNonNil returns true if obj is a non-nil interface holding a non-nil value.
@@ -31,6 +32,18 @@ func isNonNil(obj runtime.Object) bool {
 }
 
 const DefaultPrivatePrefix = "private.orlop.gcp.managed.openshift.io/"
+
+// publicConditionTypes defines which condition types are visible on the public
+// API, keyed by resource Kind (e.g. "Cluster", "NodePool"). During
+// private-to-public conversion, only conditions whose type is in this set are
+// kept; everything else is stripped. All conditions are private by default.
+//
+// To make a new condition public, add its type string to the appropriate Kind.
+var publicConditionTypes = map[string]sets.Set[string]{
+	"Cluster":    sets.New[string]("HostedClusterAvailable"),
+	"NodePool":   sets.New[string]("NodePoolAvailable", "NodePoolHealthy"),
+	"TestObject": sets.New[string]("HostedClusterAvailable"), // for test compatibility
+}
 
 // Converter handles conversion between private and public API types using scheme conversion.
 type Converter struct {
@@ -80,8 +93,8 @@ func (c *Converter) PrivateToPublic(private runtime.Object) (runtime.Object, err
 	// Filter private labels and annotations
 	c.filterPrivateMetadata(public)
 
-	// Filter private conditions
-	c.filterPrivateConditions(public)
+	// Filter non-public conditions
+	c.filterNonPublicConditions(public, gvk.Kind)
 
 	// Filter finalizers (not exposed on public API)
 	c.filterFinalizers(public)
@@ -124,8 +137,15 @@ func (c *Converter) filterPrivateMetadata(obj runtime.Object) {
 	}
 }
 
-// filterPrivateConditions removes conditions with types matching the configured private prefix.
-func (c *Converter) filterPrivateConditions(obj runtime.Object) {
+// filterNonPublicConditions removes conditions that are not in the public allowlist
+// for the given Kind. All conditions are private by default; only explicitly
+// allowlisted conditions are kept. If the Kind is unknown (not in the allowlist),
+// all conditions are stripped (safe default).
+func (c *Converter) filterNonPublicConditions(obj runtime.Object, kind string) {
+	// Get the allowlist for this Kind
+	allowed := publicConditionTypes[kind]
+	// If Kind not in map, allowed is nil set — .Has() returns false for all conditions
+	
 	// Convert to map to access status.conditions
 	jsonData, err := json.Marshal(obj)
 	if err != nil {
@@ -153,8 +173,8 @@ func (c *Converter) filterPrivateConditions(obj runtime.Object) {
 	for _, cond := range conditions {
 		// Try as string first (simple condition type)
 		if condStr, ok := cond.(string); ok {
-			// Only include conditions that don't have the private prefix
-			if !strings.HasPrefix(condStr, c.privatePrefix) {
+			// Only include conditions in the allowlist
+			if allowed.Has(condStr) {
 				filtered = append(filtered, cond)
 			}
 			continue
@@ -169,8 +189,8 @@ func (c *Converter) filterPrivateConditions(obj runtime.Object) {
 		if !ok {
 			continue
 		}
-		// Only include conditions that don't have the private prefix
-		if !strings.HasPrefix(condType, c.privatePrefix) {
+		// Only include conditions in the allowlist
+		if allowed.Has(condType) {
 			filtered = append(filtered, cond)
 		}
 	}
@@ -202,7 +222,7 @@ func (c *Converter) filterFinalizers(obj runtime.Object) {
 //
 // Note: This creates new maps for labels/annotations rather than mutating the
 // original maps, so the caller's references remain unaffected.
-func (c *Converter) stripPrivateFieldsFromPublicInput(obj runtime.Object) {
+func (c *Converter) stripPrivateFieldsFromPublicInput(obj runtime.Object, kind string) {
 	accessor, err := meta.Accessor(obj)
 	if err != nil {
 		return
@@ -236,9 +256,9 @@ func (c *Converter) stripPrivateFieldsFromPublicInput(obj runtime.Object) {
 		accessor.SetAnnotations(filtered)
 	}
 
-	// Strip private-prefixed conditions from status — prevents clients from
+	// Strip non-public conditions from status — prevents clients from
 	// injecting internal condition state via Create/Update/Patch on public API.
-	c.filterPrivateConditions(obj)
+	c.filterNonPublicConditions(obj, kind)
 }
 
 // reconcileMetadata fixes the additive map merge problem with json.Unmarshal.
@@ -311,7 +331,7 @@ func (c *Converter) PublicToPrivate(public runtime.Object, existing runtime.Obje
 	gvk := public.GetObjectKind().GroupVersionKind()
 
 	// Strip private fields from public input before conversion
-	c.stripPrivateFieldsFromPublicInput(public)
+	c.stripPrivateFieldsFromPublicInput(public, gvk.Kind)
 
 	// Marshal public object to JSON
 	jsonData, err := json.Marshal(public)
@@ -356,14 +376,14 @@ func (c *Converter) PublicToPrivate(public runtime.Object, existing runtime.Obje
 		c.reconcileMetadata(public, existing, private)
 	}
 
-	// Re-inject private conditions that were destroyed by the slice replacement
-	// in the previous step. The public input never contains private-prefixed
-	// conditions (stripped by PrivateToPublic on read, and not settable by
-	// clients), so the unmarshal above replaces the conditions slice with
-	// public-only entries. We restore private conditions from the existing object.
+	// Re-inject non-public conditions that were destroyed by the slice replacement
+	// in the previous step. The public input never contains non-public conditions
+	// (stripped by PrivateToPublic on read, and not settable by clients), so the
+	// unmarshal above replaces the conditions slice with public-only entries.
+	// We restore non-public conditions from the existing object.
 	if hasExisting {
-		if err := c.preservePrivateConditions(existing, private); err != nil {
-			return nil, fmt.Errorf("failed to preserve private conditions: %w", err)
+		if err := c.preserveNonPublicConditions(existing, private, gvk.Kind); err != nil {
+			return nil, fmt.Errorf("failed to preserve non-public conditions: %w", err)
 		}
 	}
 
@@ -373,15 +393,15 @@ func (c *Converter) PublicToPrivate(public runtime.Object, existing runtime.Obje
 	return private, nil
 }
 
-// preservePrivateConditions re-injects private-prefixed conditions from an
+// preserveNonPublicConditions re-injects non-public conditions from an
 // existing object into a converted object. This is needed because
 // json.Unmarshal replaces slices entirely, so the public→private overlay
-// destroys any private conditions that were seeded from the existing object.
+// destroys any non-public conditions that were seeded from the existing object.
 //
-// Uses the same JSON→map round-trip pattern as filterPrivateConditions.
-func (c *Converter) preservePrivateConditions(existing, converted runtime.Object) error {
-	privateConditions := c.extractPrivateConditions(existing)
-	if len(privateConditions) == 0 {
+// Uses the same JSON→map round-trip pattern as filterNonPublicConditions.
+func (c *Converter) preserveNonPublicConditions(existing, converted runtime.Object, kind string) error {
+	nonPublicConditions := c.extractNonPublicConditions(existing, kind)
+	if len(nonPublicConditions) == 0 {
 		return nil
 	}
 
@@ -403,9 +423,9 @@ func (c *Converter) preservePrivateConditions(existing, converted runtime.Object
 		convertedMap["status"] = status
 	}
 
-	// Append private conditions to existing conditions slice
+	// Append non-public conditions to existing conditions slice
 	conditions, _ := status["conditions"].([]interface{})
-	conditions = append(conditions, privateConditions...)
+	conditions = append(conditions, nonPublicConditions...)
 	status["conditions"] = conditions
 
 	// Marshal back and unmarshal into the converted object
@@ -419,10 +439,13 @@ func (c *Converter) preservePrivateConditions(existing, converted runtime.Object
 	return nil
 }
 
-// extractPrivateConditions returns private-prefixed conditions from an object's
-// status.conditions field. Handles both string conditions and object conditions
+// extractNonPublicConditions returns conditions that are not in the public allowlist
+// for the given Kind. Handles both string conditions and object conditions
 // with a "type" field.
-func (c *Converter) extractPrivateConditions(obj runtime.Object) []interface{} {
+func (c *Converter) extractNonPublicConditions(obj runtime.Object, kind string) []interface{} {
+	// Get the allowlist for this Kind
+	allowed := publicConditionTypes[kind]
+	
 	jsonData, err := json.Marshal(obj)
 	if err != nil {
 		return nil
@@ -443,12 +466,13 @@ func (c *Converter) extractPrivateConditions(obj runtime.Object) []interface{} {
 		return nil
 	}
 
-	var private []interface{}
+	var nonPublic []interface{}
 	for _, cond := range conditions {
 		// String condition
 		if condStr, ok := cond.(string); ok {
-			if strings.HasPrefix(condStr, c.privatePrefix) {
-				private = append(private, cond)
+			// Keep conditions NOT in the allowlist
+			if !allowed.Has(condStr) {
+				nonPublic = append(nonPublic, cond)
 			}
 			continue
 		}
@@ -461,11 +485,12 @@ func (c *Converter) extractPrivateConditions(obj runtime.Object) []interface{} {
 		if !ok {
 			continue
 		}
-		if strings.HasPrefix(condType, c.privatePrefix) {
-			private = append(private, cond)
+		// Keep conditions NOT in the allowlist
+		if !allowed.Has(condType) {
+			nonPublic = append(nonPublic, cond)
 		}
 	}
 
-	return private
+	return nonPublic
 }
 
