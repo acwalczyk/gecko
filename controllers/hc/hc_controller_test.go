@@ -559,6 +559,56 @@ func TestReconcile_HCFeedback_SetsHostedClusterResult(t *testing.T) {
 	require.Equal(t, "4.15.0", captured.Status.HostedClusterResult.Version)
 }
 
+// TestReconcile_CreatedByAnnotationPropagated verifies that the created-by annotation
+// from the cluster's metadata is passed through to the manifest input.
+func TestReconcile_CreatedByAnnotationPropagated(t *testing.T) {
+	clusterID := "cluster-abc"
+	mcName := "mc-cluster-1"
+
+	cluster := buildReadyCluster(clusterID, "4.15.0")
+	cluster.SetAnnotations(map[string]string{
+		constants.AnnotationCreatedBy: "user@example.com",
+	})
+
+	tr := mock.New()
+	hcKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/hostedclusters/clusters-%s/%s", clusterID, clusterID)
+	tr.StatusOverrides[mcName+"/"+clusterID] = &transport.Status{
+		Conditions: []metav1.Condition{
+			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully", LastTransitionTime: metav1.Now()},
+		},
+		ResourceStatuses: map[string]map[string]string{
+			hcKey: {"availableCondition": "True"},
+		},
+	}
+
+	r, _ := buildReconciler(t, cluster, nil, tr, nil)
+
+	_, err := r.Reconcile(context.Background(), clusterReq(clusterID))
+	require.NoError(t, err)
+	require.Len(t, tr.ApplyCalls, 1)
+
+	// The RBAC job is the last manifest; find the Job manifest by kind.
+	var jobFound bool
+	for _, m := range tr.ApplyCalls[0].Manifests {
+		var obj map[string]any
+		require.NoError(t, json.Unmarshal(m, &obj))
+		if obj["kind"] == "Job" {
+			jobFound = true
+			// The job's script should contain the created-by email.
+			spec := obj["spec"].(map[string]any)
+			template := spec["template"].(map[string]any)
+			podSpec := template["spec"].(map[string]any)
+			containers := podSpec["containers"].([]any)
+			container := containers[0].(map[string]any)
+			command := container["command"].([]any)
+			script := command[len(command)-1].(string)
+			require.Contains(t, script, "user@example.com", "RBAC job script should contain the created-by email")
+			break
+		}
+	}
+	require.True(t, jobFound, "expected a Job manifest in the apply call")
+}
+
 // TestReconcile_MWNoAppliedCondition_RequeuesPending verifies that when the resources
 // status has no "Applied" condition, the reconciler requeues with the pending interval.
 // This also exercises the mwCondition default return path.

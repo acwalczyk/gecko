@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/google/uuid"
+	"github.com/openshift-online/gecko/orlop/pkg/apiserver/constants"
 	pkgschema "github.com/openshift-online/gecko/orlop/pkg/apiserver/schema"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/storage"
 	"github.com/openshift-online/gecko/orlop/pkg/apiserver/types"
@@ -16,6 +17,7 @@ import (
 	runtimeschema "k8s.io/apimachinery/pkg/runtime/schema"
 	k8stypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -77,6 +79,18 @@ func (s *ResourceStrategy) PrepareForCreate(ctx context.Context, obj runtime.Obj
 	clientObj.SetCreationTimestamp(metav1.Now())
 	clientObj.SetGeneration(1)
 
+	// Set the created-by annotation from the authenticated user identity.
+	if userInfo, ok := request.UserFrom(ctx); ok {
+		if email := userInfo.GetName(); email != "" {
+			annotations := clientObj.GetAnnotations()
+			if annotations == nil {
+				annotations = make(map[string]string)
+			}
+			annotations[constants.AnnotationCreatedBy] = email
+			clientObj.SetAnnotations(annotations)
+		}
+	}
+
 	if defaulter, ok := obj.(types.CustomDefaulter); ok {
 		if err := defaulter.Default(ctx); err != nil {
 			s.logger.Error(err, "custom defaulter failed during create")
@@ -124,6 +138,16 @@ func (s *ResourceStrategy) PrepareForUpdate(ctx context.Context, obj, old runtim
 
 	newObj.SetCreationTimestamp(oldObj.GetCreationTimestamp())
 	newObj.SetUID(oldObj.GetUID())
+
+	// Preserve the created-by annotation — it is immutable after creation.
+	if createdBy := oldObj.GetAnnotations()[constants.AnnotationCreatedBy]; createdBy != "" {
+		annotations := newObj.GetAnnotations()
+		if annotations == nil {
+			annotations = make(map[string]string)
+		}
+		annotations[constants.AnnotationCreatedBy] = createdBy
+		newObj.SetAnnotations(annotations)
+	}
 
 	// Preserve deletionTimestamp — it cannot be changed via Update.
 	if deletionTimestamp := oldObj.GetDeletionTimestamp(); deletionTimestamp != nil {
