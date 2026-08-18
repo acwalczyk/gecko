@@ -22,6 +22,16 @@ type Status struct {
 	ResourceStatuses map[string]map[string]string
 }
 
+// DeleteStatus holds the aggregated status of delete operations.
+type DeleteStatus struct {
+	// AllSuccessful is true when all DeleteDesires have Successful=True condition.
+	AllSuccessful bool
+	// PendingCount is the number of DeleteDesires without Successful=True.
+	PendingCount int
+	// TotalCount is the total number of DeleteDesires found.
+	TotalCount int
+}
+
 // Client abstracts the transport layer for delivering resources to management clusters.
 type Client interface {
 	// Apply creates or updates resources on the target cluster and returns current status.
@@ -30,4 +40,8 @@ type Client interface {
 	GetStatus(ctx context.Context, targetCluster, clusterID string) (*Status, error)
 	// Delete removes all resources for the given clusterID from the target cluster.
 	Delete(ctx context.Context, targetCluster, clusterID string) error
+	// GetDeleteStatus checks the status of delete operations for the given clusterID.
+	GetDeleteStatus(ctx context.Context, targetCluster, clusterID string) (*DeleteStatus, error)
+	// CleanupDeleteDesires removes all DeleteDesire documents for the given clusterID.
+	CleanupDeleteDesires(ctx context.Context, targetCluster, clusterID string) error
 }

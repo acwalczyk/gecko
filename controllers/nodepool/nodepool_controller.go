@@ -220,6 +220,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 }
 
 // handleDeletion cleans up management-cluster resources and removes the finalizer.
+// Deletion flow:
+// 1. Call transport.Delete to enqueue DeleteDesires (async)
+// 2. Requeue, wait for kube-applier-gcp to process (poll GetDeleteStatus)
+// 3. Once all DeleteDesires report Successful=True, cleanup DeleteDesires
+// 4. Remove finalizer
 func (r *Reconciler) handleDeletion(ctx context.Context, np *privatev1.NodePool, cluster *privatev1.Cluster, clusterFound bool, log logger.Logger) (reconcile.Result, error) {
 	if !controllerutil.ContainsFinalizer(np, constants.FinalizerNodePool) {
 		return reconcile.Result{}, nil
@@ -232,9 +237,36 @@ func (r *Reconciler) handleDeletion(ctx context.Context, np *privatev1.NodePool,
 		meta.FindStatusCondition(np.Status.Conditions, "NodePoolResourcesApplied") != nil &&
 		cluster.Status.PlacementResult != nil && cluster.Status.PlacementResult.ManagementClusterName != "" {
 		mcName := cluster.Status.PlacementResult.ManagementClusterName
-		log.Infof(ctx, "nodepool reconciler: deleting resources for nodepool %s from %s", nodepoolID, mcName)
-		if err := r.transport.Delete(ctx, mcName, nodepoolID); err != nil {
-			return reconcile.Result{}, fmt.Errorf("nodepool reconciler: delete resources: %w", err)
+
+		// Check if deletion already in progress by querying delete status first.
+		deleteStatus, err := r.transport.GetDeleteStatus(ctx, mcName, nodepoolID)
+		if err != nil {
+			return reconcile.Result{}, fmt.Errorf("nodepool reconciler: get delete status: %w", err)
+		}
+
+		if deleteStatus.TotalCount == 0 {
+			// No DeleteDesires exist yet — initiate deletion.
+			log.Infof(ctx, "nodepool reconciler: deleting resources for nodepool %s from %s", nodepoolID, mcName)
+			if err := r.transport.Delete(ctx, mcName, nodepoolID); err != nil {
+				return reconcile.Result{}, fmt.Errorf("nodepool reconciler: delete resources: %w", err)
+			}
+			// Requeue immediately to check status.
+			log.Infof(ctx, "nodepool reconciler: delete initiated for nodepool %s, requeueing to poll status", nodepoolID)
+			return reconcile.Result{RequeueAfter: requeuePending}, nil
+		}
+
+		if !deleteStatus.AllSuccessful {
+			// Deletion in progress — wait for completion.
+			log.Infof(ctx, "nodepool reconciler: deletion in progress for nodepool %s (%d/%d pending), requeueing",
+				nodepoolID, deleteStatus.PendingCount, deleteStatus.TotalCount)
+			return reconcile.Result{RequeueAfter: requeuePending}, nil
+		}
+
+		// All DeleteDesires successful — cleanup before removing finalizer.
+		log.Infof(ctx, "nodepool reconciler: deletion complete for nodepool %s, cleaning up %d DeleteDesires",
+			nodepoolID, deleteStatus.TotalCount)
+		if err := r.transport.CleanupDeleteDesires(ctx, mcName, nodepoolID); err != nil {
+			return reconcile.Result{}, fmt.Errorf("nodepool reconciler: cleanup delete desires: %w", err)
 		}
 	} else {
 		log.Infof(ctx, "nodepool reconciler: parent cluster not available for nodepool %s, skipping transport cleanup", nodepoolID)

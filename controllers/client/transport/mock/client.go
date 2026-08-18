@@ -20,6 +20,12 @@ type DeleteCall struct {
 	ClusterID     string
 }
 
+// CleanupDeleteDesiresCall records arguments from a CleanupDeleteDesires call.
+type CleanupDeleteDesiresCall struct {
+	TargetCluster string
+	ClusterID     string
+}
+
 // Client is an in-memory implementation of transport.Client for use in tests.
 type Client struct {
 	mu sync.RWMutex
@@ -28,14 +34,24 @@ type Client struct {
 	// Key format: "targetCluster/clusterID".
 	StatusOverrides map[string]*transport.Status
 
+	// DeleteStatusOverrides allows tests to inject a specific delete status.
+	// Key format: "targetCluster/clusterID".
+	DeleteStatusOverrides map[string]*transport.DeleteStatus
+
 	// ApplyCalls records all Apply invocations for test assertions.
 	ApplyCalls []ApplyCall
 
 	// DeleteCalls records all Delete invocations for test assertions.
 	DeleteCalls []DeleteCall
 
+	// CleanupDeleteDesiresCalls records all CleanupDeleteDesires invocations.
+	CleanupDeleteDesiresCalls []CleanupDeleteDesiresCall
+
 	// DeleteErr, if non-nil, is returned by Delete.
 	DeleteErr error
+
+	// CleanupDeleteDesiresErr, if non-nil, is returned by CleanupDeleteDesires.
+	CleanupDeleteDesiresErr error
 }
 
 // Ensure Client implements transport.Client.
@@ -44,7 +60,8 @@ var _ transport.Client = (*Client)(nil)
 // New creates a new in-memory mock Client.
 func New() *Client {
 	return &Client{
-		StatusOverrides: make(map[string]*transport.Status),
+		StatusOverrides:       make(map[string]*transport.Status),
+		DeleteStatusOverrides: make(map[string]*transport.DeleteStatus),
 	}
 }
 
@@ -94,13 +111,41 @@ func (c *Client) Delete(ctx context.Context, targetCluster, clusterID string) er
 	return c.DeleteErr
 }
 
+// GetDeleteStatus returns any configured delete status override, or AllSuccessful=true by default.
+func (c *Client) GetDeleteStatus(ctx context.Context, targetCluster, clusterID string) (*transport.DeleteStatus, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	key := storeKey(targetCluster, clusterID)
+	if override, ok := c.DeleteStatusOverrides[key]; ok {
+		return override, nil
+	}
+	// Default: all successful (no pending deletes).
+	return &transport.DeleteStatus{AllSuccessful: true, PendingCount: 0, TotalCount: 0}, nil
+}
+
+// CleanupDeleteDesires records the call and returns any configured error.
+func (c *Client) CleanupDeleteDesires(ctx context.Context, targetCluster, clusterID string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.CleanupDeleteDesiresCalls = append(c.CleanupDeleteDesiresCalls, CleanupDeleteDesiresCall{
+		TargetCluster: targetCluster,
+		ClusterID:     clusterID,
+	})
+	return c.CleanupDeleteDesiresErr
+}
+
 // Reset clears all stored state and recorded calls. Useful between test cases.
 func (c *Client) Reset() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	c.StatusOverrides = make(map[string]*transport.Status)
+	c.DeleteStatusOverrides = make(map[string]*transport.DeleteStatus)
 	c.ApplyCalls = nil
 	c.DeleteCalls = nil
+	c.CleanupDeleteDesiresCalls = nil
 	c.DeleteErr = nil
+	c.CleanupDeleteDesiresErr = nil
 }

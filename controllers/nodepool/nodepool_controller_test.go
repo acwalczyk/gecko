@@ -147,6 +147,10 @@ func (e *errTransport) GetStatus(_ context.Context, _, _ string) (*transport.Sta
 	return nil, nil
 }
 func (e *errTransport) Delete(_ context.Context, _, _ string) error { return e.deleteErr }
+func (e *errTransport) GetDeleteStatus(_ context.Context, _, _ string) (*transport.DeleteStatus, error) {
+	return &transport.DeleteStatus{AllSuccessful: true}, nil
+}
+func (e *errTransport) CleanupDeleteDesires(_ context.Context, _, _ string) error { return nil }
 
 // npReq returns a reconcile.Request for the given clusterID/nodepoolID pair.
 func npReq(clusterID, nodepoolID string) reconcile.Request {
@@ -795,8 +799,9 @@ func TestReconcile_AddFinalizer_UpdateError(t *testing.T) {
 // Test cases – deletion
 // ---------------------------------------------------------------------------
 
-// TestReconcile_Deletion_HappyPath verifies that when a nodepool has a DeletionTimestamp,
-// transport.Delete is called with the nodepoolID and the finalizer is removed.
+// TestReconcile_Deletion_HappyPath verifies the async deletion flow:
+// 1. First reconcile: calls transport.Delete, requeues
+// 2. Second reconcile: polls GetDeleteStatus (AllSuccessful=true), cleans up, removes finalizer
 func TestReconcile_Deletion_HappyPath(t *testing.T) {
 	np := testNodePool("4.16.0")
 	np.Status.Conditions = append(np.Status.Conditions, metav1.Condition{
@@ -809,14 +814,27 @@ func TestReconcile_Deletion_HappyPath(t *testing.T) {
 	tr := mock.New()
 	r, storeClient := buildReconciler(t, np, cluster, tr, nil, nil, nil)
 
+	// First reconcile: initiate deletion.
 	result, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
 	require.NoError(t, err)
-	require.Zero(t, result.RequeueAfter)
-
+	require.Equal(t, 15*time.Second, result.RequeueAfter, "should requeue after initiating delete")
 	require.Len(t, tr.DeleteCalls, 1)
 	require.Equal(t, "mc-us-c1", tr.DeleteCalls[0].TargetCluster)
 	require.Equal(t, "np-test", tr.DeleteCalls[0].ClusterID)
-	require.Empty(t, tr.ApplyCalls, "should not Apply during deletion")
+	require.False(t, storeClient.updateCalled, "finalizer not removed yet")
+
+	// Simulate kube-applier-gcp completing deletion.
+	key := "mc-us-c1/np-test"
+	tr.DeleteStatusOverrides[key] = &transport.DeleteStatus{AllSuccessful: true, TotalCount: 2, PendingCount: 0}
+
+	// Second reconcile: check status, cleanup, remove finalizer.
+	storeClient.updateCalled = false
+	result, err = r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
+	require.NoError(t, err)
+	require.Zero(t, result.RequeueAfter)
+	require.Len(t, tr.CleanupDeleteDesiresCalls, 1, "should cleanup DeleteDesires")
+	require.Equal(t, "mc-us-c1", tr.CleanupDeleteDesiresCalls[0].TargetCluster)
+	require.Equal(t, "np-test", tr.CleanupDeleteDesiresCalls[0].ClusterID)
 
 	require.True(t, storeClient.updateCalled, "expected Update to remove finalizer")
 	updated := storeClient.updated.(*privatev1.NodePool)
@@ -904,7 +922,7 @@ func TestReconcile_Deletion_NoFinalizer(t *testing.T) {
 }
 
 // TestReconcile_Deletion_RemoveFinalizerError verifies that an error removing the
-// finalizer after successful transport.Delete is propagated.
+// finalizer after successful deletion/cleanup is propagated.
 func TestReconcile_Deletion_RemoveFinalizerError(t *testing.T) {
 	np := testNodePool("4.16.0")
 	np.Status.Conditions = append(np.Status.Conditions, metav1.Condition{
@@ -923,8 +941,20 @@ func TestReconcile_Deletion_RemoveFinalizerError(t *testing.T) {
 	}
 	r := New(tr, newTestLogger(t), storeClient)
 
-	_, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
+	// First reconcile: initiate deletion, requeues.
+	result, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
+	require.NoError(t, err)
+	require.Equal(t, 15*time.Second, result.RequeueAfter)
+	require.Len(t, tr.DeleteCalls, 1)
+
+	// Simulate completion.
+	key := "mc-us-c1/np-test"
+	tr.DeleteStatusOverrides[key] = &transport.DeleteStatus{AllSuccessful: true, TotalCount: 2, PendingCount: 0}
+
+	// Second reconcile: cleanup succeeds, but finalizer removal fails.
+	_, err = r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "remove finalizer")
-	require.Len(t, tr.DeleteCalls, 1, "transport.Delete should have been called before finalizer removal failed")
+	require.Len(t, tr.CleanupDeleteDesiresCalls, 1, "cleanup should have been called before finalizer removal failed")
+	require.True(t, storeClient.updateCalled)
 }
