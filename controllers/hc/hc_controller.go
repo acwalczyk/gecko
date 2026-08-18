@@ -74,30 +74,28 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 	// Check placement readiness.
 	if cluster.Status.PlacementResult == nil || cluster.Status.PlacementResult.ManagementClusterName == "" {
-		log.Infof(ctx, "placement not ready, waiting for next event")
 		if r.setWaitingConditions(&cluster, "PlacementNotReady", "Waiting for placement to select a management cluster") {
 			if err := r.client.Status().Update(ctx, &cluster); err != nil && !apierrors.IsConflict(err) {
 				return reconcile.Result{}, fmt.Errorf("%s: update cluster status: %w", adapterName, err)
 			}
 		}
-		return reconcile.Result{}, nil
+		log.Infof(ctx, "placement not ready, requeueing after %s", requeuePending)
+		return reconcile.Result{RequeueAfter: requeuePending}, nil
 	}
 
 	// Check version-resolution readiness.
 	if cluster.Status.VersionResolution == nil {
-		log.Infof(ctx, "version resolution not ready, waiting for next event")
 		if r.setWaitingConditions(&cluster, "VersionResolutionNotReady", "Waiting for version resolution") {
 			if err := r.client.Status().Update(ctx, &cluster); err != nil && !apierrors.IsConflict(err) {
 				return reconcile.Result{}, fmt.Errorf("%s: update cluster status: %w", adapterName, err)
 			}
 		}
-		return reconcile.Result{}, nil
+		log.Infof(ctx, "version resolution not ready, requeueing after %s", requeuePending)
+		return reconcile.Result{RequeueAfter: requeuePending}, nil
 	}
 
 	// Check version match.
 	if cluster.Status.VersionResolution.ReleaseVersion != cluster.Spec.Release.Version {
-		log.Infof(ctx, "vr version %q does not match spec version %q, waiting for next event",
-			cluster.Status.VersionResolution.ReleaseVersion, cluster.Spec.Release.Version)
 		msg := fmt.Sprintf("VR version %q does not match spec version %q",
 			cluster.Status.VersionResolution.ReleaseVersion, cluster.Spec.Release.Version)
 		if r.setWaitingConditions(&cluster, "VersionMismatch", msg) {
@@ -105,7 +103,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 				return reconcile.Result{}, fmt.Errorf("%s: update cluster status: %w", adapterName, err)
 			}
 		}
-		return reconcile.Result{}, nil
+		log.Infof(ctx, "vr version %q does not match spec version %q, requeueing after %s",
+			cluster.Status.VersionResolution.ReleaseVersion, cluster.Spec.Release.Version, requeuePending)
+		return reconcile.Result{RequeueAfter: requeuePending}, nil
 	}
 
 	placement := cluster.Status.PlacementResult

@@ -253,7 +253,7 @@ func TestReconcile_DependenciesNotReady_NoPlacement(t *testing.T) {
 
 	result, err := r.Reconcile(context.Background(), clusterReq(clusterID))
 	require.NoError(t, err)
-	require.Equal(t, time.Duration(0), result.RequeueAfter)
+	require.Equal(t, 15*time.Second, result.RequeueAfter, "should requeue while placement is not ready")
 	require.Empty(t, tr.ApplyCalls)
 }
 
@@ -272,7 +272,7 @@ func TestReconcile_PlacementNotReady_StatusUpdateConflict(t *testing.T) {
 
 	result, err := r.Reconcile(context.Background(), clusterReq(clusterID))
 	require.NoError(t, err)
-	require.Zero(t, result.RequeueAfter)
+	require.Equal(t, 15*time.Second, result.RequeueAfter)
 	require.True(t, storeClient.statusWriter.called, "expected Status.Update to be called")
 	require.Empty(t, tr.ApplyCalls)
 }
@@ -313,7 +313,7 @@ func TestReconcile_VRNil_SetsWaitingConditions(t *testing.T) {
 
 	result, err := r.Reconcile(context.Background(), clusterReq(clusterID))
 	require.NoError(t, err)
-	require.Zero(t, result.RequeueAfter)
+	require.Equal(t, 15*time.Second, result.RequeueAfter, "should requeue while VR is not ready")
 	require.True(t, storeClient.statusWriter.called)
 	require.Empty(t, tr.ApplyCalls)
 }
@@ -333,7 +333,7 @@ func TestReconcile_VRNil_StatusUpdateConflict(t *testing.T) {
 
 	result, err := r.Reconcile(context.Background(), clusterReq(clusterID))
 	require.NoError(t, err)
-	require.Zero(t, result.RequeueAfter)
+	require.Equal(t, 15*time.Second, result.RequeueAfter)
 	require.True(t, storeClient.statusWriter.called)
 }
 
@@ -368,7 +368,7 @@ func TestReconcile_DependenciesNotReady_VRVersionMismatch(t *testing.T) {
 
 	result, err := r.Reconcile(context.Background(), clusterReq(clusterID))
 	require.NoError(t, err)
-	require.Equal(t, time.Duration(0), result.RequeueAfter)
+	require.Equal(t, 15*time.Second, result.RequeueAfter, "should requeue while VR version mismatches")
 	require.Empty(t, tr.ApplyCalls)
 }
 
@@ -384,7 +384,7 @@ func TestReconcile_VRVersionMismatch_StatusUpdateConflict(t *testing.T) {
 
 	result, err := r.Reconcile(context.Background(), clusterReq(clusterID))
 	require.NoError(t, err)
-	require.Zero(t, result.RequeueAfter)
+	require.Equal(t, 15*time.Second, result.RequeueAfter)
 	require.True(t, storeClient.statusWriter.called)
 }
 
