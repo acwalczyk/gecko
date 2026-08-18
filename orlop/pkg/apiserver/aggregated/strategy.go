@@ -186,7 +186,6 @@ func (s *ResourceStrategy) ValidateUpdate(ctx context.Context, obj, old runtime.
 	}
 
 	allErrs = append(allErrs, validateOwnerReferences(obj)...)
-	allErrs = append(allErrs, validateCreatedByImmutable(obj, old)...)
 
 	if validator, ok := obj.(types.CustomValidator); ok {
 		if err := validator.ValidateUpdate(ctx, old); err != nil {
@@ -224,30 +223,6 @@ func toMap(obj runtime.Object) (map[string]interface{}, error) {
 	var m map[string]interface{}
 	err = json.Unmarshal(data, &m)
 	return m, err
-}
-
-// validateCreatedByImmutable rejects updates that attempt to change the
-// created-by annotation. The annotation is set at creation time and must
-// not be modified.
-func validateCreatedByImmutable(obj, old runtime.Object) field.ErrorList {
-	newObj, ok := obj.(client.Object)
-	if !ok {
-		return nil
-	}
-	oldObj, ok := old.(client.Object)
-	if !ok {
-		return nil
-	}
-
-	oldVal := oldObj.GetAnnotations()[constants.AnnotationCreatedBy]
-	newVal := newObj.GetAnnotations()[constants.AnnotationCreatedBy]
-	if oldVal != newVal {
-		return field.ErrorList{field.Forbidden(
-			field.NewPath("metadata", "annotations", constants.AnnotationCreatedBy),
-			"annotation is immutable after creation",
-		)}
-	}
-	return nil
 }
 
 // validateOwnerReferences validates that owner references have required fields
