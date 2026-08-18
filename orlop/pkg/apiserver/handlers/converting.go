@@ -556,6 +556,17 @@ func (h *ConvertingResourceHandler) Patch(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Status is controller-managed; strip from patch before applying.
+	// We strip from the patch itself (not from the merged result) to preserve
+	// existing controller-set status from existingPublic.
+	var patchMap map[string]interface{}
+	if err := json.Unmarshal(patchBytes, &patchMap); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid patch JSON: %v", err))
+		return
+	}
+	delete(patchMap, "status")
+	patchBytes, _ = json.Marshal(patchMap)
+
 	// Convert existing public object to JSON
 	existingJSON, err := json.Marshal(existingPublic)
 	if err != nil {
@@ -576,9 +587,6 @@ func (h *ConvertingResourceHandler) Patch(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to unmarshal patched object: %v", err))
 		return
 	}
-
-	// Status is controller-managed; strip from public input.
-	delete(objMap, "status")
 
 	// Process object (prune, default, validate) using public schema.
 	// Fail-closed: reject request if processor is nil (misconfiguration)

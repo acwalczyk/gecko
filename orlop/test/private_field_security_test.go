@@ -1753,10 +1753,10 @@ func TestPrivateFieldSecurity(t *testing.T) {
 		}
 	})
 
-	// === PATCH with status conditions — private condition preservation (M2) ===
+	// === PATCH with status conditions — status writes blocked (M2 + GCP-1062) ===
 
-	t.Run("Patch/Conditions/private_conditions_preserved_when_public_patched", func(t *testing.T) {
-		name := "m2-patch-cond-pres"
+	t.Run("Patch/Conditions/status_patch_ignored_preserves_existing", func(t *testing.T) {
+		name := "m2-patch-cond-blocked"
 		privObj := baseObj(name)
 		privObj["status"] = map[string]interface{}{
 			"conditions": []string{"Ready", "private.orlop.gcp.managed.openshift.io/Sync"},
@@ -1764,7 +1764,7 @@ func TestPrivateFieldSecurity(t *testing.T) {
 		privateCreate(t, name, privObj)
 		defer cleanup(t, name)
 
-		// Patch with only public conditions
+		// Attempt to patch status via public API (should be ignored/stripped)
 		publicPatch(t, name, map[string]interface{}{
 			"status": map[string]interface{}{
 				"conditions": []string{"Ready", "Available"},
@@ -1774,13 +1774,17 @@ func TestPrivateFieldSecurity(t *testing.T) {
 		priv := privateGet(t, name)
 		conds := conditions(priv)
 
-		// Private condition preserved
+		// Original controller-set conditions preserved (patch ignored)
 		foundPrivate := false
+		foundReady := false
 		foundAvailable := false
 		for _, c := range conds {
 			if condStr, ok := c.(string); ok {
 				if condStr == "private.orlop.gcp.managed.openshift.io/Sync" {
 					foundPrivate = true
+				}
+				if condStr == "Ready" {
+					foundReady = true
 				}
 				if condStr == "Available" {
 					foundAvailable = true
@@ -1788,10 +1792,13 @@ func TestPrivateFieldSecurity(t *testing.T) {
 			}
 		}
 		if !foundPrivate {
-			t.Errorf("Private condition lost when patching public conditions. Conditions: %v", conds)
+			t.Errorf("Private condition lost after public status patch attempt. Conditions: %v", conds)
 		}
-		if !foundAvailable {
-			t.Errorf("Public condition 'Available' not applied via patch. Conditions: %v", conds)
+		if !foundReady {
+			t.Errorf("Ready condition lost after public status patch attempt. Conditions: %v", conds)
+		}
+		if foundAvailable {
+			t.Errorf("Public API status patch was applied (security issue). Conditions: %v", conds)
 		}
 	})
 
