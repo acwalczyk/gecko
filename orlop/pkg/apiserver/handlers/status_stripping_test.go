@@ -19,27 +19,27 @@ import (
 )
 
 var (
-	statusTestGVK = runtimeschema.GroupVersionKind{
+	objectGVK = runtimeschema.GroupVersionKind{
 		Group:   "test.io",
 		Version: "v1",
-		Kind:    "StatusTest",
+		Kind:    "Object",
 	}
 )
 
-// statusTestObject matches public Cluster structure: has spec and status
-type statusTestObject struct {
+// object matches public Cluster structure: has spec and status
+type object struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
-	Spec              statusTestSpec   `json:"spec,omitempty"`
-	Status            statusTestStatus `json:"status,omitempty"`
+	Spec              objectSpec   `json:"spec,omitempty"`
+	Status            objectStatus `json:"status,omitempty"`
 }
 
-type statusTestSpec struct {
+type objectSpec struct {
 	Field string `json:"field,omitempty"`
 	Value int    `json:"value,omitempty"`
 }
 
-type statusTestStatus struct {
+type objectStatus struct {
 	Conditions          []metav1.Condition      `json:"conditions,omitempty"`
 	PlacementResult     *statusPlacementResult  `json:"placementResult,omitempty"`
 	HostedClusterResult *statusHostedClusterRes `json:"hostedClusterResult,omitempty"`
@@ -54,11 +54,11 @@ type statusHostedClusterRes struct {
 	Version     string `json:"version,omitempty"`
 }
 
-func (m *statusTestObject) DeepCopyObject() runtime.Object {
+func (m *object) DeepCopyObject() runtime.Object {
 	if m == nil {
 		return nil
 	}
-	out := &statusTestObject{}
+	out := &object{}
 	*out = *m
 	out.TypeMeta = m.TypeMeta
 	m.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
@@ -84,16 +84,16 @@ func (m *statusTestObject) DeepCopyObject() runtime.Object {
 	return out
 }
 
-func newStatusTestScheme() *runtime.Scheme {
+func newObjectScheme() *runtime.Scheme {
 	scheme := runtime.NewScheme()
-	scheme.AddKnownTypeWithName(statusTestGVK, &statusTestObject{})
-	metav1.AddToGroupVersion(scheme, statusTestGVK.GroupVersion())
+	scheme.AddKnownTypeWithName(objectGVK, &object{})
+	metav1.AddToGroupVersion(scheme, objectGVK.GroupVersion())
 	return scheme
 }
 
 func setupStatusStrippingTest(t *testing.T) (*ConvertingResourceHandler, *memory.MemoryStore) {
-	scheme := newStatusTestScheme()
-	store := memory.NewMemoryStore("statustests", scheme, statusTestGVK)
+	scheme := newObjectScheme()
+	store := memory.NewMemoryStore("objects", scheme, objectGVK)
 	processor := newPermissiveProcessor(t)
 	converter := conversion.NewConverter(scheme, scheme, "")
 	logger := logr.FromSlogHandler(testLogHandler{t: t})
@@ -102,8 +102,8 @@ func setupStatusStrippingTest(t *testing.T) (*ConvertingResourceHandler, *memory
 		store,
 		processor,
 		converter,
-		statusTestGVK,
-		"statustests",
+		objectGVK,
+		"objects",
 		scheme,
 		scheme,
 		logger,
@@ -129,8 +129,8 @@ func TestStatusStripping_Create_StatusNotPersisted(t *testing.T) {
 
 	// Create request body with FULL status subtree
 	createBody := map[string]interface{}{
-		"apiVersion": statusTestGVK.GroupVersion().String(),
-		"kind":       statusTestGVK.Kind,
+		"apiVersion": objectGVK.GroupVersion().String(),
+		"kind":       objectGVK.Kind,
 		"metadata": map[string]interface{}{
 			"name":      "test-create",
 			"namespace": "default",
@@ -160,7 +160,7 @@ func TestStatusStripping_Create_StatusNotPersisted(t *testing.T) {
 	}
 
 	bodyJSON := mustMarshalJSON(t, createBody)
-	req := httptest.NewRequest(http.MethodPost, "/apis/test.io/v1/namespaces/default/statustests", bytes.NewReader(bodyJSON))
+	req := httptest.NewRequest(http.MethodPost, "/apis/test.io/v1/namespaces/default/objects", bytes.NewReader(bodyJSON))
 	req.Header.Set("Content-Type", "application/json")
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add(constants.URLParamNamespace, "default")
@@ -179,7 +179,7 @@ func TestStatusStripping_Create_StatusNotPersisted(t *testing.T) {
 		t.Fatalf("failed to get stored object: %v", err)
 	}
 
-	obj, ok := stored.(*statusTestObject)
+	obj, ok := stored.(*object)
 	if !ok {
 		t.Fatal("stored object wrong type")
 	}
@@ -207,20 +207,20 @@ func TestStatusStripping_Update_ExistingStatusPreserved(t *testing.T) {
 	ctx := context.Background()
 
 	// Create object with controller-set status
-	existing := &statusTestObject{
+	existing := &object{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: statusTestGVK.GroupVersion().String(),
-			Kind:       statusTestGVK.Kind,
+			APIVersion: objectGVK.GroupVersion().String(),
+			Kind:       objectGVK.Kind,
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-update",
 			Namespace: "default",
 		},
-		Spec: statusTestSpec{
+		Spec: objectSpec{
 			Field: "original-value",
 			Value: 1,
 		},
-		Status: statusTestStatus{
+		Status: objectStatus{
 			Conditions: []metav1.Condition{
 				{
 					Type:               "Ready",
@@ -239,15 +239,15 @@ func TestStatusStripping_Update_ExistingStatusPreserved(t *testing.T) {
 			},
 		},
 	}
-	existing.SetGroupVersionKind(statusTestGVK)
+	existing.SetGroupVersionKind(objectGVK)
 	if err := store.Create(ctx, existing); err != nil {
 		t.Fatalf("failed to create existing object: %v", err)
 	}
 
 	// Client PUTs with different status values
 	updateBody := map[string]interface{}{
-		"apiVersion": statusTestGVK.GroupVersion().String(),
-		"kind":       statusTestGVK.Kind,
+		"apiVersion": objectGVK.GroupVersion().String(),
+		"kind":       objectGVK.Kind,
 		"metadata": map[string]interface{}{
 			"name":      "test-update",
 			"namespace": "default",
@@ -276,7 +276,7 @@ func TestStatusStripping_Update_ExistingStatusPreserved(t *testing.T) {
 	}
 
 	bodyJSON := mustMarshalJSON(t, updateBody)
-	req := httptest.NewRequest(http.MethodPut, "/apis/test.io/v1/namespaces/default/statustests/test-update", bytes.NewReader(bodyJSON))
+	req := httptest.NewRequest(http.MethodPut, "/apis/test.io/v1/namespaces/default/objects/test-update", bytes.NewReader(bodyJSON))
 	req.Header.Set("Content-Type", "application/json")
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add(constants.URLParamNamespace, "default")
@@ -296,7 +296,7 @@ func TestStatusStripping_Update_ExistingStatusPreserved(t *testing.T) {
 		t.Fatalf("failed to get stored object: %v", err)
 	}
 
-	obj, ok := stored.(*statusTestObject)
+	obj, ok := stored.(*object)
 	if !ok {
 		t.Fatal("stored object wrong type")
 	}
@@ -326,20 +326,20 @@ func TestStatusStripping_Patch_ExistingStatusPreserved(t *testing.T) {
 	ctx := context.Background()
 
 	// Create object with controller-set status
-	existing := &statusTestObject{
+	existing := &object{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: statusTestGVK.GroupVersion().String(),
-			Kind:       statusTestGVK.Kind,
+			APIVersion: objectGVK.GroupVersion().String(),
+			Kind:       objectGVK.Kind,
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-patch",
 			Namespace: "default",
 		},
-		Spec: statusTestSpec{
+		Spec: objectSpec{
 			Field: "original-value",
 			Value: 1,
 		},
-		Status: statusTestStatus{
+		Status: objectStatus{
 			Conditions: []metav1.Condition{
 				{
 					Type:               "Ready",
@@ -354,7 +354,7 @@ func TestStatusStripping_Patch_ExistingStatusPreserved(t *testing.T) {
 			},
 		},
 	}
-	existing.SetGroupVersionKind(statusTestGVK)
+	existing.SetGroupVersionKind(objectGVK)
 	if err := store.Create(ctx, existing); err != nil {
 		t.Fatalf("failed to create existing object: %v", err)
 	}
@@ -379,7 +379,7 @@ func TestStatusStripping_Patch_ExistingStatusPreserved(t *testing.T) {
 	}
 
 	patchJSON := mustMarshalJSON(t, patchBody)
-	req := httptest.NewRequest(http.MethodPatch, "/apis/test.io/v1/namespaces/default/statustests/test-patch", bytes.NewReader(patchJSON))
+	req := httptest.NewRequest(http.MethodPatch, "/apis/test.io/v1/namespaces/default/objects/test-patch", bytes.NewReader(patchJSON))
 	req.Header.Set("Content-Type", "application/merge-patch+json")
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add(constants.URLParamNamespace, "default")
@@ -399,7 +399,7 @@ func TestStatusStripping_Patch_ExistingStatusPreserved(t *testing.T) {
 		t.Fatalf("failed to get stored object: %v", err)
 	}
 
-	obj, ok := stored.(*statusTestObject)
+	obj, ok := stored.(*object)
 	if !ok {
 		t.Fatal("stored object wrong type")
 	}
@@ -423,30 +423,30 @@ func TestStatusStripping_Update_SpecChangedIncrementGeneration(t *testing.T) {
 	ctx := context.Background()
 
 	// Create object
-	existing := &statusTestObject{
+	existing := &object{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: statusTestGVK.GroupVersion().String(),
-			Kind:       statusTestGVK.Kind,
+			APIVersion: objectGVK.GroupVersion().String(),
+			Kind:       objectGVK.Kind,
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "test-gen",
 			Namespace:  "default",
 			Generation: 1,
 		},
-		Spec: statusTestSpec{
+		Spec: objectSpec{
 			Field: "original",
 			Value: 1,
 		},
 	}
-	existing.SetGroupVersionKind(statusTestGVK)
+	existing.SetGroupVersionKind(objectGVK)
 	if err := store.Create(ctx, existing); err != nil {
 		t.Fatalf("failed to create existing object: %v", err)
 	}
 
 	// Update with spec changes + status changes
 	updateBody := map[string]interface{}{
-		"apiVersion": statusTestGVK.GroupVersion().String(),
-		"kind":       statusTestGVK.Kind,
+		"apiVersion": objectGVK.GroupVersion().String(),
+		"kind":       objectGVK.Kind,
 		"metadata": map[string]interface{}{
 			"name":      "test-gen",
 			"namespace": "default",
@@ -463,7 +463,7 @@ func TestStatusStripping_Update_SpecChangedIncrementGeneration(t *testing.T) {
 	}
 
 	bodyJSON := mustMarshalJSON(t, updateBody)
-	req := httptest.NewRequest(http.MethodPut, "/apis/test.io/v1/namespaces/default/statustests/test-gen", bytes.NewReader(bodyJSON))
+	req := httptest.NewRequest(http.MethodPut, "/apis/test.io/v1/namespaces/default/objects/test-gen", bytes.NewReader(bodyJSON))
 	req.Header.Set("Content-Type", "application/json")
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add(constants.URLParamNamespace, "default")
@@ -483,7 +483,7 @@ func TestStatusStripping_Update_SpecChangedIncrementGeneration(t *testing.T) {
 		t.Fatalf("failed to get stored object: %v", err)
 	}
 
-	obj, ok := stored.(*statusTestObject)
+	obj, ok := stored.(*object)
 	if !ok {
 		t.Fatal("stored object wrong type")
 	}
@@ -506,8 +506,8 @@ func TestStatusStripping_Create_NoStatusField(t *testing.T) {
 	handler, _ := setupStatusStrippingTest(t)
 
 	createBody := map[string]interface{}{
-		"apiVersion": statusTestGVK.GroupVersion().String(),
-		"kind":       statusTestGVK.Kind,
+		"apiVersion": objectGVK.GroupVersion().String(),
+		"kind":       objectGVK.Kind,
 		"metadata": map[string]interface{}{
 			"name":      "test-nostatus",
 			"namespace": "default",
@@ -519,7 +519,7 @@ func TestStatusStripping_Create_NoStatusField(t *testing.T) {
 	}
 
 	bodyJSON := mustMarshalJSON(t, createBody)
-	req := httptest.NewRequest(http.MethodPost, "/apis/test.io/v1/namespaces/default/statustests", bytes.NewReader(bodyJSON))
+	req := httptest.NewRequest(http.MethodPost, "/apis/test.io/v1/namespaces/default/objects", bytes.NewReader(bodyJSON))
 	req.Header.Set("Content-Type", "application/json")
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add(constants.URLParamNamespace, "default")
@@ -538,8 +538,8 @@ func TestStatusStripping_Create_EmptyStatus(t *testing.T) {
 	handler, _ := setupStatusStrippingTest(t)
 
 	createBody := map[string]interface{}{
-		"apiVersion": statusTestGVK.GroupVersion().String(),
-		"kind":       statusTestGVK.Kind,
+		"apiVersion": objectGVK.GroupVersion().String(),
+		"kind":       objectGVK.Kind,
 		"metadata": map[string]interface{}{
 			"name":      "test-emptystatus",
 			"namespace": "default",
@@ -551,7 +551,7 @@ func TestStatusStripping_Create_EmptyStatus(t *testing.T) {
 	}
 
 	bodyJSON := mustMarshalJSON(t, createBody)
-	req := httptest.NewRequest(http.MethodPost, "/apis/test.io/v1/namespaces/default/statustests", bytes.NewReader(bodyJSON))
+	req := httptest.NewRequest(http.MethodPost, "/apis/test.io/v1/namespaces/default/objects", bytes.NewReader(bodyJSON))
 	req.Header.Set("Content-Type", "application/json")
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add(constants.URLParamNamespace, "default")
@@ -571,7 +571,7 @@ func TestStatusStripping_Create_NullStatus(t *testing.T) {
 
 	bodyJSON := []byte(`{
 		"apiVersion": "test.io/v1",
-		"kind": "StatusTest",
+		"kind": "Object",
 		"metadata": {
 			"name": "test-nullstatus",
 			"namespace": "default"
@@ -582,7 +582,7 @@ func TestStatusStripping_Create_NullStatus(t *testing.T) {
 		"status": null
 	}`)
 
-	req := httptest.NewRequest(http.MethodPost, "/apis/test.io/v1/namespaces/default/statustests", bytes.NewReader(bodyJSON))
+	req := httptest.NewRequest(http.MethodPost, "/apis/test.io/v1/namespaces/default/objects", bytes.NewReader(bodyJSON))
 	req.Header.Set("Content-Type", "application/json")
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add(constants.URLParamNamespace, "default")
@@ -613,8 +613,8 @@ func TestStatusStripping_Create_CaseVariants(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.statusKey, func(t *testing.T) {
 			bodyJSON := mustMarshalJSON(t, map[string]interface{}{
-				"apiVersion": statusTestGVK.GroupVersion().String(),
-				"kind":       statusTestGVK.Kind,
+				"apiVersion": objectGVK.GroupVersion().String(),
+				"kind":       objectGVK.Kind,
 				"metadata": map[string]interface{}{
 					"name":      "test-case-" + tc.statusKey,
 					"namespace": "default",
@@ -629,7 +629,7 @@ func TestStatusStripping_Create_CaseVariants(t *testing.T) {
 				},
 			})
 
-			req := httptest.NewRequest(http.MethodPost, "/apis/test.io/v1/namespaces/default/statustests", bytes.NewReader(bodyJSON))
+			req := httptest.NewRequest(http.MethodPost, "/apis/test.io/v1/namespaces/default/objects", bytes.NewReader(bodyJSON))
 			req.Header.Set("Content-Type", "application/json")
 			rctx := chi.NewRouteContext()
 			rctx.URLParams.Add(constants.URLParamNamespace, "default")
@@ -648,7 +648,7 @@ func TestStatusStripping_Create_CaseVariants(t *testing.T) {
 				t.Fatalf("failed to get stored object: %v", err)
 			}
 
-			obj, ok := stored.(*statusTestObject)
+			obj, ok := stored.(*object)
 			if !ok {
 				t.Fatal("stored object wrong type")
 			}
@@ -666,30 +666,30 @@ func TestStatusStripping_Update_CaseVariants(t *testing.T) {
 	ctx := context.Background()
 
 	// Create object with controller-set status
-	existing := &statusTestObject{
+	existing := &object{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: statusTestGVK.GroupVersion().String(),
-			Kind:       statusTestGVK.Kind,
+			APIVersion: objectGVK.GroupVersion().String(),
+			Kind:       objectGVK.Kind,
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-update-case",
 			Namespace: "default",
 		},
-		Spec: statusTestSpec{Field: "original"},
-		Status: statusTestStatus{
+		Spec: objectSpec{Field: "original"},
+		Status: objectStatus{
 			Conditions: []metav1.Condition{
 				{Type: "Ready", Status: metav1.ConditionTrue, Reason: "ControllerSet"},
 			},
 		},
 	}
-	existing.SetGroupVersionKind(statusTestGVK)
+	existing.SetGroupVersionKind(objectGVK)
 	if err := store.Create(ctx, existing); err != nil {
 		t.Fatalf("failed to create: %v", err)
 	}
 
 	bodyJSON := mustMarshalJSON(t, map[string]interface{}{
-		"apiVersion": statusTestGVK.GroupVersion().String(),
-		"kind":       statusTestGVK.Kind,
+		"apiVersion": objectGVK.GroupVersion().String(),
+		"kind":       objectGVK.Kind,
 		"metadata": map[string]interface{}{
 			"name":      "test-update-case",
 			"namespace": "default",
@@ -704,7 +704,7 @@ func TestStatusStripping_Update_CaseVariants(t *testing.T) {
 		},
 	})
 
-	req := httptest.NewRequest(http.MethodPut, "/apis/test.io/v1/namespaces/default/statustests/test-update-case", bytes.NewReader(bodyJSON))
+	req := httptest.NewRequest(http.MethodPut, "/apis/test.io/v1/namespaces/default/objects/test-update-case", bytes.NewReader(bodyJSON))
 	req.Header.Set("Content-Type", "application/json")
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add(constants.URLParamNamespace, "default")
@@ -724,7 +724,7 @@ func TestStatusStripping_Update_CaseVariants(t *testing.T) {
 		t.Fatalf("failed to get: %v", err)
 	}
 
-	obj := stored.(*statusTestObject)
+	obj := stored.(*object)
 	if len(obj.Status.Conditions) != 1 || obj.Status.Conditions[0].Reason != "ControllerSet" {
 		t.Error("case-variant STATUS was not stripped, controller status lost")
 	}
@@ -736,23 +736,23 @@ func TestStatusStripping_Patch_CaseVariants(t *testing.T) {
 	ctx := context.Background()
 
 	// Create object with controller-set status
-	existing := &statusTestObject{
+	existing := &object{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: statusTestGVK.GroupVersion().String(),
-			Kind:       statusTestGVK.Kind,
+			APIVersion: objectGVK.GroupVersion().String(),
+			Kind:       objectGVK.Kind,
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-patch-case",
 			Namespace: "default",
 		},
-		Spec: statusTestSpec{Field: "original"},
-		Status: statusTestStatus{
+		Spec: objectSpec{Field: "original"},
+		Status: objectStatus{
 			Conditions: []metav1.Condition{
 				{Type: "Ready", Status: metav1.ConditionTrue, Reason: "ControllerSet"},
 			},
 		},
 	}
-	existing.SetGroupVersionKind(statusTestGVK)
+	existing.SetGroupVersionKind(objectGVK)
 	if err := store.Create(ctx, existing); err != nil {
 		t.Fatalf("failed to create: %v", err)
 	}
@@ -765,7 +765,7 @@ func TestStatusStripping_Patch_CaseVariants(t *testing.T) {
 		},
 	})
 
-	req := httptest.NewRequest(http.MethodPatch, "/apis/test.io/v1/namespaces/default/statustests/test-patch-case", bytes.NewReader(patchJSON))
+	req := httptest.NewRequest(http.MethodPatch, "/apis/test.io/v1/namespaces/default/objects/test-patch-case", bytes.NewReader(patchJSON))
 	req.Header.Set("Content-Type", "application/merge-patch+json")
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add(constants.URLParamNamespace, "default")
@@ -785,7 +785,7 @@ func TestStatusStripping_Patch_CaseVariants(t *testing.T) {
 		t.Fatalf("failed to get: %v", err)
 	}
 
-	obj := stored.(*statusTestObject)
+	obj := stored.(*object)
 	if len(obj.Status.Conditions) != 1 || obj.Status.Conditions[0].Reason != "ControllerSet" {
 		t.Error("case-variant Status was not stripped, controller status lost")
 	}
@@ -797,19 +797,19 @@ func TestStatusStripping_Get_ReturnsControllerSetStatus(t *testing.T) {
 	ctx := context.Background()
 
 	// Create object with controller-set status (via private API / direct store)
-	obj := &statusTestObject{
+	obj := &object{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: statusTestGVK.GroupVersion().String(),
-			Kind:       statusTestGVK.Kind,
+			APIVersion: objectGVK.GroupVersion().String(),
+			Kind:       objectGVK.Kind,
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-get",
 			Namespace: "default",
 		},
-		Spec: statusTestSpec{
+		Spec: objectSpec{
 			Field: "value",
 		},
-		Status: statusTestStatus{
+		Status: objectStatus{
 			Conditions: []metav1.Condition{
 				{
 					Type:               "Ready",
@@ -824,13 +824,13 @@ func TestStatusStripping_Get_ReturnsControllerSetStatus(t *testing.T) {
 			},
 		},
 	}
-	obj.SetGroupVersionKind(statusTestGVK)
+	obj.SetGroupVersionKind(objectGVK)
 	if err := store.Create(ctx, obj); err != nil {
 		t.Fatalf("failed to create object: %v", err)
 	}
 
 	// GET via public API
-	req := httptest.NewRequest(http.MethodGet, "/apis/test.io/v1/namespaces/default/statustests/test-get", nil)
+	req := httptest.NewRequest(http.MethodGet, "/apis/test.io/v1/namespaces/default/objects/test-get", nil)
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add(constants.URLParamNamespace, "default")
 	rctx.URLParams.Add(constants.URLParamName, "test-get")
@@ -870,8 +870,8 @@ func TestStatusStripping_Create_ResponseShowsCorrectStatus(t *testing.T) {
 	handler, _ := setupStatusStrippingTest(t)
 
 	createBody := map[string]interface{}{
-		"apiVersion": statusTestGVK.GroupVersion().String(),
-		"kind":       statusTestGVK.Kind,
+		"apiVersion": objectGVK.GroupVersion().String(),
+		"kind":       objectGVK.Kind,
 		"metadata": map[string]interface{}{
 			"name":      "test-response",
 			"namespace": "default",
@@ -887,7 +887,7 @@ func TestStatusStripping_Create_ResponseShowsCorrectStatus(t *testing.T) {
 	}
 
 	bodyJSON := mustMarshalJSON(t, createBody)
-	req := httptest.NewRequest(http.MethodPost, "/apis/test.io/v1/namespaces/default/statustests", bytes.NewReader(bodyJSON))
+	req := httptest.NewRequest(http.MethodPost, "/apis/test.io/v1/namespaces/default/objects", bytes.NewReader(bodyJSON))
 	req.Header.Set("Content-Type", "application/json")
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add(constants.URLParamNamespace, "default")
@@ -921,19 +921,19 @@ func TestStatusStripping_Update_ResponseShowsExistingStatus(t *testing.T) {
 	ctx := context.Background()
 
 	// Create with controller-set status
-	existing := &statusTestObject{
+	existing := &object{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: statusTestGVK.GroupVersion().String(),
-			Kind:       statusTestGVK.Kind,
+			APIVersion: objectGVK.GroupVersion().String(),
+			Kind:       objectGVK.Kind,
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-update-resp",
 			Namespace: "default",
 		},
-		Spec: statusTestSpec{
+		Spec: objectSpec{
 			Field: "original",
 		},
-		Status: statusTestStatus{
+		Status: objectStatus{
 			Conditions: []metav1.Condition{
 				{
 					Type:               "Ready",
@@ -948,15 +948,15 @@ func TestStatusStripping_Update_ResponseShowsExistingStatus(t *testing.T) {
 			},
 		},
 	}
-	existing.SetGroupVersionKind(statusTestGVK)
+	existing.SetGroupVersionKind(objectGVK)
 	if err := store.Create(ctx, existing); err != nil {
 		t.Fatalf("failed to create: %v", err)
 	}
 
 	// Update with different status
 	updateBody := map[string]interface{}{
-		"apiVersion": statusTestGVK.GroupVersion().String(),
-		"kind":       statusTestGVK.Kind,
+		"apiVersion": objectGVK.GroupVersion().String(),
+		"kind":       objectGVK.Kind,
 		"metadata": map[string]interface{}{
 			"name":      "test-update-resp",
 			"namespace": "default",
@@ -975,7 +975,7 @@ func TestStatusStripping_Update_ResponseShowsExistingStatus(t *testing.T) {
 	}
 
 	bodyJSON := mustMarshalJSON(t, updateBody)
-	req := httptest.NewRequest(http.MethodPut, "/apis/test.io/v1/namespaces/default/statustests/test-update-resp", bytes.NewReader(bodyJSON))
+	req := httptest.NewRequest(http.MethodPut, "/apis/test.io/v1/namespaces/default/objects/test-update-resp", bytes.NewReader(bodyJSON))
 	req.Header.Set("Content-Type", "application/json")
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add(constants.URLParamNamespace, "default")
@@ -1023,19 +1023,19 @@ func TestStatusStripping_Patch_ResponseShowsExistingStatus(t *testing.T) {
 	ctx := context.Background()
 
 	// Create with controller-set status
-	existing := &statusTestObject{
+	existing := &object{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: statusTestGVK.GroupVersion().String(),
-			Kind:       statusTestGVK.Kind,
+			APIVersion: objectGVK.GroupVersion().String(),
+			Kind:       objectGVK.Kind,
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-patch-resp",
 			Namespace: "default",
 		},
-		Spec: statusTestSpec{
+		Spec: objectSpec{
 			Field: "original",
 		},
-		Status: statusTestStatus{
+		Status: objectStatus{
 			Conditions: []metav1.Condition{
 				{
 					Type:               "Ready",
@@ -1051,7 +1051,7 @@ func TestStatusStripping_Patch_ResponseShowsExistingStatus(t *testing.T) {
 			},
 		},
 	}
-	existing.SetGroupVersionKind(statusTestGVK)
+	existing.SetGroupVersionKind(objectGVK)
 	if err := store.Create(ctx, existing); err != nil {
 		t.Fatalf("failed to create: %v", err)
 	}
@@ -1073,7 +1073,7 @@ func TestStatusStripping_Patch_ResponseShowsExistingStatus(t *testing.T) {
 	}
 
 	patchJSON := mustMarshalJSON(t, patchBody)
-	req := httptest.NewRequest(http.MethodPatch, "/apis/test.io/v1/namespaces/default/statustests/test-patch-resp", bytes.NewReader(patchJSON))
+	req := httptest.NewRequest(http.MethodPatch, "/apis/test.io/v1/namespaces/default/objects/test-patch-resp", bytes.NewReader(patchJSON))
 	req.Header.Set("Content-Type", "application/merge-patch+json")
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add(constants.URLParamNamespace, "default")
@@ -1124,28 +1124,28 @@ func TestStatusStripping_Update_AllSubfieldsStripped(t *testing.T) {
 	ctx := context.Background()
 
 	// Create without status
-	existing := &statusTestObject{
+	existing := &object{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: statusTestGVK.GroupVersion().String(),
-			Kind:       statusTestGVK.Kind,
+			APIVersion: objectGVK.GroupVersion().String(),
+			Kind:       objectGVK.Kind,
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-update-allfields",
 			Namespace: "default",
 		},
-		Spec: statusTestSpec{
+		Spec: objectSpec{
 			Field: "original",
 		},
 	}
-	existing.SetGroupVersionKind(statusTestGVK)
+	existing.SetGroupVersionKind(objectGVK)
 	if err := store.Create(ctx, existing); err != nil {
 		t.Fatalf("failed to create: %v", err)
 	}
 
 	// Update with ALL status subfields
 	updateBody := map[string]interface{}{
-		"apiVersion": statusTestGVK.GroupVersion().String(),
-		"kind":       statusTestGVK.Kind,
+		"apiVersion": objectGVK.GroupVersion().String(),
+		"kind":       objectGVK.Kind,
 		"metadata": map[string]interface{}{
 			"name":      "test-update-allfields",
 			"namespace": "default",
@@ -1168,7 +1168,7 @@ func TestStatusStripping_Update_AllSubfieldsStripped(t *testing.T) {
 	}
 
 	bodyJSON := mustMarshalJSON(t, updateBody)
-	req := httptest.NewRequest(http.MethodPut, "/apis/test.io/v1/namespaces/default/statustests/test-update-allfields", bytes.NewReader(bodyJSON))
+	req := httptest.NewRequest(http.MethodPut, "/apis/test.io/v1/namespaces/default/objects/test-update-allfields", bytes.NewReader(bodyJSON))
 	req.Header.Set("Content-Type", "application/json")
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add(constants.URLParamNamespace, "default")
@@ -1188,7 +1188,7 @@ func TestStatusStripping_Update_AllSubfieldsStripped(t *testing.T) {
 		t.Fatalf("failed to get stored object: %v", err)
 	}
 
-	obj, ok := stored.(*statusTestObject)
+	obj, ok := stored.(*object)
 	if !ok {
 		t.Fatal("stored object wrong type")
 	}
@@ -1210,19 +1210,19 @@ func TestStatusStripping_Patch_AllSubfieldsStripped(t *testing.T) {
 	ctx := context.Background()
 
 	// Create with controller-set status
-	existing := &statusTestObject{
+	existing := &object{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: statusTestGVK.GroupVersion().String(),
-			Kind:       statusTestGVK.Kind,
+			APIVersion: objectGVK.GroupVersion().String(),
+			Kind:       objectGVK.Kind,
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-patch-allfields",
 			Namespace: "default",
 		},
-		Spec: statusTestSpec{
+		Spec: objectSpec{
 			Field: "original",
 		},
-		Status: statusTestStatus{
+		Status: objectStatus{
 			Conditions: []metav1.Condition{
 				{Type: "Ready", Status: metav1.ConditionTrue, Reason: "ControllerSet"},
 			},
@@ -1234,7 +1234,7 @@ func TestStatusStripping_Patch_AllSubfieldsStripped(t *testing.T) {
 			},
 		},
 	}
-	existing.SetGroupVersionKind(statusTestGVK)
+	existing.SetGroupVersionKind(objectGVK)
 	if err := store.Create(ctx, existing); err != nil {
 		t.Fatalf("failed to create: %v", err)
 	}
@@ -1255,7 +1255,7 @@ func TestStatusStripping_Patch_AllSubfieldsStripped(t *testing.T) {
 	}
 
 	patchJSON := mustMarshalJSON(t, patchBody)
-	req := httptest.NewRequest(http.MethodPatch, "/apis/test.io/v1/namespaces/default/statustests/test-patch-allfields", bytes.NewReader(patchJSON))
+	req := httptest.NewRequest(http.MethodPatch, "/apis/test.io/v1/namespaces/default/objects/test-patch-allfields", bytes.NewReader(patchJSON))
 	req.Header.Set("Content-Type", "application/merge-patch+json")
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add(constants.URLParamNamespace, "default")
@@ -1275,7 +1275,7 @@ func TestStatusStripping_Patch_AllSubfieldsStripped(t *testing.T) {
 		t.Fatalf("failed to get stored object: %v", err)
 	}
 
-	obj, ok := stored.(*statusTestObject)
+	obj, ok := stored.(*object)
 	if !ok {
 		t.Fatal("stored object wrong type")
 	}
