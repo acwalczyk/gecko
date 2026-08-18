@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -35,6 +36,18 @@ type ConvertingResourceHandler struct {
 	publicScheme  *runtime.Scheme // Scheme for public API types
 	privateScheme *runtime.Scheme // Scheme for private API types
 	logger        logr.Logger
+}
+
+// stripStatus removes the status field from a map, case-insensitively.
+// Defense-in-depth: while schemas should reject case variants, this ensures
+// status cannot bypass via "Status", "STATUS", etc.
+func stripStatus(m map[string]interface{}) {
+	for k := range m {
+		if strings.EqualFold(k, "status") {
+			delete(m, k)
+			return // Only one status key expected
+		}
+	}
 }
 
 // NewConvertingResourceHandler creates a new converting resource handler.
@@ -86,7 +99,7 @@ func (h *ConvertingResourceHandler) Create(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Status is controller-managed; strip from public input.
-	delete(objMap, "status")
+	stripStatus(objMap)
 
 	// Note: ownerReferences validation is intentionally omitted here.
 	// The public metadata schema prunes ownerReferences from input, so
@@ -396,7 +409,7 @@ func (h *ConvertingResourceHandler) Update(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Status is controller-managed; strip from public input.
-	delete(objMap, "status")
+	stripStatus(objMap)
 
 	// Note: ownerReferences validation is intentionally omitted here.
 	// The public metadata schema prunes ownerReferences from input, so
@@ -564,7 +577,7 @@ func (h *ConvertingResourceHandler) Patch(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid patch JSON: %v", err))
 		return
 	}
-	delete(patchMap, "status")
+	stripStatus(patchMap)
 	patchBytes, _ = json.Marshal(patchMap)
 
 	// Convert existing public object to JSON
