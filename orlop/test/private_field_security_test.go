@@ -1802,6 +1802,83 @@ func TestPrivateFieldSecurity(t *testing.T) {
 		}
 	})
 
+	// === CREATE — status write blocked (GCP-1062) ===
+
+	t.Run("Create/StatusBlocked/status_not_persisted", func(t *testing.T) {
+		name := "create-status-blocked"
+		createObj := baseObj(name)
+		createObj["status"] = map[string]interface{}{
+			"conditions": []string{"Ready", "Available"},
+		}
+		publicCreate(t, name, createObj)
+		defer cleanup(t, name)
+
+		// Verify status was not persisted
+		priv := privateGet(t, name)
+		conds := conditions(priv)
+		if len(conds) != 0 {
+			t.Errorf("Public API Create persisted status (security issue). Conditions: %v", conds)
+		}
+	})
+
+	// === UPDATE (PUT) — status write blocked (GCP-1062) ===
+
+	t.Run("Update/StatusBlocked/existing_status_preserved", func(t *testing.T) {
+		name := "update-status-blocked"
+		
+		// Create via private API with status
+		privObj := baseObj(name)
+		privObj["status"] = map[string]interface{}{
+			"conditions": []string{"Ready", "private.orlop.gcp.managed.openshift.io/Sync"},
+		}
+		privateCreate(t, name, privObj)
+		defer cleanup(t, name)
+
+		// Attempt to overwrite via public API
+		pub := publicGet(t, name)
+		updateObj := baseObj(name)
+		meta(updateObj)["resourceVersion"] = rv(pub)
+		updateObj["status"] = map[string]interface{}{
+			"conditions": []string{"Failed", "Available"},
+		}
+		publicUpdate(t, name, updateObj)
+
+		// Verify controller-set status preserved
+		priv := privateGet(t, name)
+		conds := conditions(priv)
+		
+		foundReady := false
+		foundPrivateSync := false
+		foundFailed := false
+		foundAvailable := false
+		for _, c := range conds {
+			if condStr, ok := c.(string); ok {
+				if condStr == "Ready" {
+					foundReady = true
+				}
+				if condStr == "private.orlop.gcp.managed.openshift.io/Sync" {
+					foundPrivateSync = true
+				}
+				if condStr == "Failed" {
+					foundFailed = true
+				}
+				if condStr == "Available" {
+					foundAvailable = true
+				}
+			}
+		}
+		
+		if !foundReady {
+			t.Errorf("Ready condition lost after public Update (should be preserved). Conditions: %v", conds)
+		}
+		if !foundPrivateSync {
+			t.Errorf("Private condition lost after public Update (should be preserved). Conditions: %v", conds)
+		}
+		if foundFailed || foundAvailable {
+			t.Errorf("Public API Update applied status changes (security issue). Conditions: %v", conds)
+		}
+	})
+
 	// === UPDATE (PUT) — internal spec field injection (M3) ===
 
 	t.Run("Update/Injection/internal_spec_field_pruned", func(t *testing.T) {

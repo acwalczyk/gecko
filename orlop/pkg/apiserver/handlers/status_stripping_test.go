@@ -709,3 +709,379 @@ func TestStatusStripping_Create_ResponseShowsCorrectStatus(t *testing.T) {
 		}
 	}
 }
+
+// Test: Update response shows existing status, not client-supplied
+func TestStatusStripping_Update_ResponseShowsExistingStatus(t *testing.T) {
+	handler, store := setupStatusStrippingTest(t)
+	ctx := context.Background()
+
+	// Create with controller-set status
+	existing := &statusTestObject{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: statusTestGVK.GroupVersion().String(),
+			Kind:       statusTestGVK.Kind,
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-update-resp",
+			Namespace: "default",
+		},
+		Spec: statusTestSpec{
+			Field: "original",
+		},
+		Status: statusTestStatus{
+			Conditions: []metav1.Condition{
+				{
+					Type:               "Ready",
+					Status:             metav1.ConditionTrue,
+					Reason:             "ControllerSet",
+					Message:            "Controller message",
+					LastTransitionTime: metav1.Now(),
+				},
+			},
+			PlacementResult: &statusPlacementResult{
+				ManagementClusterName: "controller-cluster",
+			},
+		},
+	}
+	existing.SetGroupVersionKind(statusTestGVK)
+	if err := store.Create(ctx, existing); err != nil {
+		t.Fatalf("failed to create: %v", err)
+	}
+
+	// Update with different status
+	updateBody := map[string]interface{}{
+		"apiVersion": statusTestGVK.GroupVersion().String(),
+		"kind":       statusTestGVK.Kind,
+		"metadata": map[string]interface{}{
+			"name":      "test-update-resp",
+			"namespace": "default",
+		},
+		"spec": map[string]interface{}{
+			"field": "updated",
+		},
+		"status": map[string]interface{}{
+			"conditions": []interface{}{
+				map[string]interface{}{"type": "Ready", "status": "False", "reason": "ClientReason"},
+			},
+			"placementResult": map[string]interface{}{
+				"managementClusterName": "evil-cluster",
+			},
+		},
+	}
+
+	bodyJSON, _ := json.Marshal(updateBody)
+	req := httptest.NewRequest(http.MethodPut, "/apis/test.io/v1/namespaces/default/statustests/test-update-resp", bytes.NewReader(bodyJSON))
+	req.Header.Set("Content-Type", "application/json")
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add(constants.URLParamNamespace, "default")
+	rctx.URLParams.Add(constants.URLParamName, "test-update-resp")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+	rr := httptest.NewRecorder()
+	handler.Update(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d, body: %s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+
+	// Verify response shows controller-set status, not client-supplied
+	var respBody map[string]interface{}
+	if err := json.Unmarshal(rr.Body.Bytes(), &respBody); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+
+	status, ok := respBody["status"].(map[string]interface{})
+	if !ok || status == nil {
+		t.Fatal("response missing status")
+	}
+
+	conditions, ok := status["conditions"].([]interface{})
+	if !ok || len(conditions) == 0 {
+		t.Fatal("response missing conditions")
+	}
+
+	// Check first condition has controller-set reason (not client-supplied)
+	cond0 := conditions[0].(map[string]interface{})
+	if cond0["reason"] != "ControllerSet" {
+		t.Errorf("response condition.reason = %q, want ControllerSet (not ClientReason)", cond0["reason"])
+	}
+
+	placementResult, ok := status["placementResult"].(map[string]interface{})
+	if !ok || placementResult["managementClusterName"] != "controller-cluster" {
+		t.Error("response placementResult should show controller-cluster, not evil-cluster")
+	}
+}
+
+// Test: Patch response shows existing status, not client-supplied
+func TestStatusStripping_Patch_ResponseShowsExistingStatus(t *testing.T) {
+	handler, store := setupStatusStrippingTest(t)
+	ctx := context.Background()
+
+	// Create with controller-set status
+	existing := &statusTestObject{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: statusTestGVK.GroupVersion().String(),
+			Kind:       statusTestGVK.Kind,
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-patch-resp",
+			Namespace: "default",
+		},
+		Spec: statusTestSpec{
+			Field: "original",
+		},
+		Status: statusTestStatus{
+			Conditions: []metav1.Condition{
+				{
+					Type:               "Ready",
+					Status:             metav1.ConditionTrue,
+					Reason:             "ControllerSet",
+					Message:            "Controller message",
+					LastTransitionTime: metav1.Now(),
+				},
+			},
+			HostedClusterResult: &statusHostedClusterRes{
+				APIEndpoint: "https://controller.example.com",
+				Version:     "4.14.0",
+			},
+		},
+	}
+	existing.SetGroupVersionKind(statusTestGVK)
+	if err := store.Create(ctx, existing); err != nil {
+		t.Fatalf("failed to create: %v", err)
+	}
+
+	// Patch with different status
+	patchBody := map[string]interface{}{
+		"spec": map[string]interface{}{
+			"value": 99,
+		},
+		"status": map[string]interface{}{
+			"conditions": []interface{}{
+				map[string]interface{}{"type": "Ready", "status": "False", "reason": "ClientReason"},
+			},
+			"hostedClusterResult": map[string]interface{}{
+				"apiEndpoint": "https://evil.example.com",
+				"version":     "4.99.0",
+			},
+		},
+	}
+
+	patchJSON, _ := json.Marshal(patchBody)
+	req := httptest.NewRequest(http.MethodPatch, "/apis/test.io/v1/namespaces/default/statustests/test-patch-resp", bytes.NewReader(patchJSON))
+	req.Header.Set("Content-Type", "application/merge-patch+json")
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add(constants.URLParamNamespace, "default")
+	rctx.URLParams.Add(constants.URLParamName, "test-patch-resp")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+	rr := httptest.NewRecorder()
+	handler.Patch(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d, body: %s", rr.Code, http.StatusOK, rr.Body.String())
+	}
+
+	// Verify response shows controller-set status, not client-supplied
+	var respBody map[string]interface{}
+	if err := json.Unmarshal(rr.Body.Bytes(), &respBody); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+
+	status, ok := respBody["status"].(map[string]interface{})
+	if !ok || status == nil {
+		t.Fatal("response missing status")
+	}
+
+	conditions, ok := status["conditions"].([]interface{})
+	if !ok || len(conditions) == 0 {
+		t.Fatal("response missing conditions")
+	}
+
+	// Check first condition has controller-set reason (not client-supplied)
+	cond0 := conditions[0].(map[string]interface{})
+	if cond0["reason"] != "ControllerSet" {
+		t.Errorf("response condition.reason = %q, want ControllerSet (not ClientReason)", cond0["reason"])
+	}
+
+	hostedClusterResult, ok := status["hostedClusterResult"].(map[string]interface{})
+	if !ok || hostedClusterResult["apiEndpoint"] != "https://controller.example.com" {
+		t.Error("response hostedClusterResult should show controller values, not client-supplied")
+	}
+	if hostedClusterResult["version"] != "4.14.0" {
+		t.Error("response hostedClusterResult.version should show 4.14.0, not 4.99.0")
+	}
+}
+
+// Test: Update strips all status subfields (placementResult, hostedClusterResult)
+func TestStatusStripping_Update_AllSubfieldsStripped(t *testing.T) {
+	handler, store := setupStatusStrippingTest(t)
+	ctx := context.Background()
+
+	// Create without status
+	existing := &statusTestObject{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: statusTestGVK.GroupVersion().String(),
+			Kind:       statusTestGVK.Kind,
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-update-allfields",
+			Namespace: "default",
+		},
+		Spec: statusTestSpec{
+			Field: "original",
+		},
+	}
+	existing.SetGroupVersionKind(statusTestGVK)
+	if err := store.Create(ctx, existing); err != nil {
+		t.Fatalf("failed to create: %v", err)
+	}
+
+	// Update with ALL status subfields
+	updateBody := map[string]interface{}{
+		"apiVersion": statusTestGVK.GroupVersion().String(),
+		"kind":       statusTestGVK.Kind,
+		"metadata": map[string]interface{}{
+			"name":      "test-update-allfields",
+			"namespace": "default",
+		},
+		"spec": map[string]interface{}{
+			"field": "updated",
+		},
+		"status": map[string]interface{}{
+			"conditions": []interface{}{
+				map[string]interface{}{"type": "Ready", "status": "True"},
+			},
+			"placementResult": map[string]interface{}{
+				"managementClusterName": "evil-placement",
+			},
+			"hostedClusterResult": map[string]interface{}{
+				"apiEndpoint": "https://evil.example.com",
+				"version":     "4.99.0",
+			},
+		},
+	}
+
+	bodyJSON, _ := json.Marshal(updateBody)
+	req := httptest.NewRequest(http.MethodPut, "/apis/test.io/v1/namespaces/default/statustests/test-update-allfields", bytes.NewReader(bodyJSON))
+	req.Header.Set("Content-Type", "application/json")
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add(constants.URLParamNamespace, "default")
+	rctx.URLParams.Add(constants.URLParamName, "test-update-allfields")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+	rr := httptest.NewRecorder()
+	handler.Update(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	// Verify ALL status subfields are empty
+	stored, err := store.Get(ctx, "default", "test-update-allfields")
+	if err != nil {
+		t.Fatalf("failed to get stored object: %v", err)
+	}
+
+	obj, ok := stored.(*statusTestObject)
+	if !ok {
+		t.Fatal("stored object wrong type")
+	}
+
+	if len(obj.Status.Conditions) != 0 {
+		t.Errorf("conditions should be empty, got %d", len(obj.Status.Conditions))
+	}
+	if obj.Status.PlacementResult != nil {
+		t.Errorf("placementResult should be nil, got %+v", obj.Status.PlacementResult)
+	}
+	if obj.Status.HostedClusterResult != nil {
+		t.Errorf("hostedClusterResult should be nil, got %+v", obj.Status.HostedClusterResult)
+	}
+}
+
+// Test: Patch strips all status subfields
+func TestStatusStripping_Patch_AllSubfieldsStripped(t *testing.T) {
+	handler, store := setupStatusStrippingTest(t)
+	ctx := context.Background()
+
+	// Create with controller-set status
+	existing := &statusTestObject{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: statusTestGVK.GroupVersion().String(),
+			Kind:       statusTestGVK.Kind,
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-patch-allfields",
+			Namespace: "default",
+		},
+		Spec: statusTestSpec{
+			Field: "original",
+		},
+		Status: statusTestStatus{
+			Conditions: []metav1.Condition{
+				{Type: "Ready", Status: metav1.ConditionTrue, Reason: "ControllerSet"},
+			},
+			PlacementResult: &statusPlacementResult{
+				ManagementClusterName: "controller-cluster",
+			},
+			HostedClusterResult: &statusHostedClusterRes{
+				APIEndpoint: "https://controller.example.com",
+			},
+		},
+	}
+	existing.SetGroupVersionKind(statusTestGVK)
+	if err := store.Create(ctx, existing); err != nil {
+		t.Fatalf("failed to create: %v", err)
+	}
+
+	// Patch attempting to change ALL status subfields
+	patchBody := map[string]interface{}{
+		"status": map[string]interface{}{
+			"conditions": []interface{}{
+				map[string]interface{}{"type": "Failed", "status": "True"},
+			},
+			"placementResult": map[string]interface{}{
+				"managementClusterName": "evil-cluster",
+			},
+			"hostedClusterResult": map[string]interface{}{
+				"apiEndpoint": "https://evil.example.com",
+			},
+		},
+	}
+
+	patchJSON, _ := json.Marshal(patchBody)
+	req := httptest.NewRequest(http.MethodPatch, "/apis/test.io/v1/namespaces/default/statustests/test-patch-allfields", bytes.NewReader(patchJSON))
+	req.Header.Set("Content-Type", "application/merge-patch+json")
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add(constants.URLParamNamespace, "default")
+	rctx.URLParams.Add(constants.URLParamName, "test-patch-allfields")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+	rr := httptest.NewRecorder()
+	handler.Patch(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d", rr.Code, http.StatusOK)
+	}
+
+	// Verify controller-set status preserved (patch ignored)
+	stored, err := store.Get(ctx, "default", "test-patch-allfields")
+	if err != nil {
+		t.Fatalf("failed to get stored object: %v", err)
+	}
+
+	obj, ok := stored.(*statusTestObject)
+	if !ok {
+		t.Fatal("stored object wrong type")
+	}
+
+	if len(obj.Status.Conditions) != 1 || obj.Status.Conditions[0].Reason != "ControllerSet" {
+		t.Error("conditions changed after patch (should be preserved)")
+	}
+	if obj.Status.PlacementResult == nil || obj.Status.PlacementResult.ManagementClusterName != "controller-cluster" {
+		t.Error("placementResult changed after patch (should be preserved)")
+	}
+	if obj.Status.HostedClusterResult == nil || obj.Status.HostedClusterResult.APIEndpoint != "https://controller.example.com" {
+		t.Error("hostedClusterResult changed after patch (should be preserved)")
+	}
+}
