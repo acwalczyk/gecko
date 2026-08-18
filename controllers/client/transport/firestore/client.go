@@ -439,32 +439,42 @@ func (c *Client) CleanupDeleteDesires(ctx context.Context, targetCluster, cluste
 	}
 
 	// Delete in batches (Firestore batch write limit = 500).
-	batch := mc.specs.BulkWriter(ctx)
-	var jobs []*firestore.BulkWriterJob
+	// Use separate BulkWriters: specs and status refs have same shortPath (deletedesires/<id>),
+	// BulkWriter rejects duplicate paths.
+	specsBatch := mc.specs.BulkWriter(ctx)
+	statusBatch := mc.status.BulkWriter(ctx)
+	var specsJobs []*firestore.BulkWriterJob
+	var statusJobs []*firestore.BulkWriterJob
 
 	for _, snap := range snaps {
 		// Delete from specs DB.
-		job, err := batch.Delete(snap.Ref)
+		job, err := specsBatch.Delete(snap.Ref)
 		if err != nil {
 			return fmt.Errorf("firestore transport: CleanupDeleteDesires %s/%s delete specs: %w", targetCluster, clusterID, err)
 		}
-		jobs = append(jobs, job)
+		specsJobs = append(specsJobs, job)
 
 		// Delete from status DB (best-effort — may not exist yet).
 		statusRef := mc.status.Collection(collectionDeleteDesires).Doc(snap.Ref.ID)
-		job, err = batch.Delete(statusRef)
+		job, err = statusBatch.Delete(statusRef)
 		if err != nil {
 			return fmt.Errorf("firestore transport: CleanupDeleteDesires %s/%s delete status: %w", targetCluster, clusterID, err)
 		}
-		jobs = append(jobs, job)
+		statusJobs = append(statusJobs, job)
 	}
 
-	batch.Flush()
+	specsBatch.Flush()
+	statusBatch.Flush()
 
 	// Check job results.
-	for _, job := range jobs {
+	for _, job := range specsJobs {
 		if _, err := job.Results(); err != nil {
-			return fmt.Errorf("firestore transport: CleanupDeleteDesires %s/%s write error: %w", targetCluster, clusterID, err)
+			return fmt.Errorf("firestore transport: CleanupDeleteDesires %s/%s specs write error: %w", targetCluster, clusterID, err)
+		}
+	}
+	for _, job := range statusJobs {
+		if _, err := job.Results(); err != nil {
+			return fmt.Errorf("firestore transport: CleanupDeleteDesires %s/%s status write error: %w", targetCluster, clusterID, err)
 		}
 	}
 
