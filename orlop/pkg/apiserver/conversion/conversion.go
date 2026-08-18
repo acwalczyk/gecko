@@ -42,6 +42,8 @@ const DefaultPrivatePrefix = "private.orlop.gcp.managed.openshift.io/"
 var publicConditionTypes = map[string]sets.Set[string]{
 	"Cluster":  sets.New[string]("HostedClusterAvailable"),
 	"NodePool": sets.New[string]("NodePoolAvailable", "NodePoolHealthy"),
+	// Test-only resource type used in orlop tests
+	"Object": sets.New[string]("Ready", "Available"),
 }
 
 // Converter handles conversion between private and public API types using scheme conversion.
