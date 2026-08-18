@@ -217,8 +217,5 @@ properties:
           version:
             type: string
         type: object
-      placementResult:
-        description: PlacementResult holds the placement controller's output.
-        type: object
     type: object
 type: object
