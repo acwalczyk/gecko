@@ -6,10 +6,13 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr"
+	"github.com/openshift-online/gecko/orlop/pkg/apiserver/constants"
 	testv1 "github.com/openshift-online/gecko/orlop/apis/private/test/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apiserver/pkg/authentication/user"
+	"k8s.io/apiserver/pkg/endpoints/request"
 )
 
 func newTestScheme(t *testing.T) *runtime.Scheme {
@@ -457,5 +460,158 @@ func TestGenerateName(t *testing.T) {
 	name2 := strategy.GenerateName("foo-")
 	if name == name2 {
 		t.Errorf("expected distinct names, got %q twice", name)
+	}
+}
+
+func TestPrepareForCreate_SetsCreatedByFromUserInfo(t *testing.T) {
+	strategy := newTestStrategy(t, true)
+
+	obj := &testv1.Object{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: testv1.GroupVersion.String(),
+			Kind:       "Object",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-obj",
+			Namespace: "default",
+		},
+	}
+
+	ctx := request.WithUser(context.Background(), &user.DefaultInfo{
+		Name: "admin@example.com",
+	})
+
+	strategy.PrepareForCreate(ctx, obj)
+
+	got := obj.GetAnnotations()[constants.AnnotationCreatedBy]
+	if got != "admin@example.com" {
+		t.Errorf("created-by annotation = %q, want %q", got, "admin@example.com")
+	}
+}
+
+func TestPrepareForCreate_NoUserInfo_NoCreatedByAnnotation(t *testing.T) {
+	strategy := newTestStrategy(t, true)
+
+	obj := &testv1.Object{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: testv1.GroupVersion.String(),
+			Kind:       "Object",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-obj",
+			Namespace: "default",
+		},
+	}
+
+	strategy.PrepareForCreate(context.Background(), obj)
+
+	annotations := obj.GetAnnotations()
+	if annotations != nil {
+		if _, ok := annotations[constants.AnnotationCreatedBy]; ok {
+			t.Error("expected no created-by annotation when no user info in context")
+		}
+	}
+}
+
+func TestPrepareForUpdate_PreservesCreatedByAnnotation(t *testing.T) {
+	strategy := newTestStrategy(t, true)
+
+	oldObj := &testv1.Object{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "test-obj",
+			Namespace:         "default",
+			UID:               "old-uid",
+			Generation:        1,
+			CreationTimestamp:  metav1.Time{Time: metav1.Now().Add(-1 * 60 * 1e9)},
+			Annotations: map[string]string{
+				constants.AnnotationCreatedBy: "original@example.com",
+			},
+		},
+		Spec: testv1.ObjectSpec{PublicField: "value"},
+	}
+
+	newObj := &testv1.Object{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-obj",
+			Namespace: "default",
+			// No annotations set — PrepareForUpdate must copy created-by from old.
+		},
+		Spec: testv1.ObjectSpec{PublicField: "value"},
+	}
+
+	strategy.PrepareForUpdate(context.Background(), newObj, oldObj)
+
+	got := newObj.GetAnnotations()[constants.AnnotationCreatedBy]
+	if got != "original@example.com" {
+		t.Errorf("created-by annotation = %q, want %q", got, "original@example.com")
+	}
+}
+
+func TestValidateUpdate_RejectsCreatedByChange(t *testing.T) {
+	strategy := newTestStrategy(t, true)
+
+	oldObj := &testv1.Object{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-obj",
+			Namespace: "default",
+			Annotations: map[string]string{
+				constants.AnnotationCreatedBy: "original@example.com",
+			},
+		},
+	}
+
+	newObj := &testv1.Object{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-obj",
+			Namespace: "default",
+			Annotations: map[string]string{
+				constants.AnnotationCreatedBy: "attacker@example.com",
+			},
+		},
+	}
+
+	errs := strategy.ValidateUpdate(context.Background(), newObj, oldObj)
+	if len(errs) == 0 {
+		t.Fatal("expected validation error when created-by annotation is changed")
+	}
+
+	found := false
+	for _, e := range errs {
+		if e.Type == "FieldValueForbidden" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected FieldValueForbidden error, got: %v", errs)
+	}
+}
+
+func TestValidateUpdate_AcceptsUnchangedCreatedBy(t *testing.T) {
+	strategy := newTestStrategy(t, true)
+
+	oldObj := &testv1.Object{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-obj",
+			Namespace: "default",
+			Annotations: map[string]string{
+				constants.AnnotationCreatedBy: "user@example.com",
+			},
+		},
+	}
+
+	newObj := &testv1.Object{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-obj",
+			Namespace: "default",
+			Annotations: map[string]string{
+				constants.AnnotationCreatedBy: "user@example.com",
+			},
+		},
+	}
+
+	errs := strategy.ValidateUpdate(context.Background(), newObj, oldObj)
+	if len(errs) != 0 {
+		t.Errorf("expected no validation errors, got: %v", errs)
 	}
 }

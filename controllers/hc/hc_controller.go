@@ -142,7 +142,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		ClusterID:            clusterID,
 		ClusterName:          cluster.Name,
 		Generation:           cluster.Generation,
-		CreatedBy:            "", // TODO: not in types
+		CreatedBy:            cluster.Annotations[constants.AnnotationCreatedBy],
 		InfraID:              cluster.Spec.InfraID,
 		IssuerURL:            cluster.Spec.IssuerURL,
 		ClusterIDUUID:        string(cluster.UID),

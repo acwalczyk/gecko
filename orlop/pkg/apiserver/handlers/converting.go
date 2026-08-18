@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -166,6 +167,21 @@ func (h *ConvertingResourceHandler) Create(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to convert to private: %v", err))
 		return
+	}
+
+	// Extract the authenticated user email from the X-Endpoint-API-UserInfo header
+	// (set by ESPv2) and store it as a private annotation. The private prefix ensures
+	// it is automatically stripped from the public API and cannot be set by clients.
+	if email := extractUserEmail(r); email != "" {
+		privateAccessor, err := meta.Accessor(privateObj)
+		if err == nil {
+			annotations := privateAccessor.GetAnnotations()
+			if annotations == nil {
+				annotations = make(map[string]string)
+			}
+			annotations[constants.AnnotationCreatedBy] = email
+			privateAccessor.SetAnnotations(annotations)
+		}
 	}
 
 	if d, ok := privateObj.(types.CustomDefaulter); ok {
@@ -840,4 +856,28 @@ func (h *ConvertingResourceHandler) Delete(w http.ResponseWriter, r *http.Reques
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(status)
+}
+
+// extractUserEmail extracts the authenticated user's email from the
+// X-Endpoint-API-UserInfo header set by ESPv2. The header value is a
+// base64url-encoded JSON object containing an "email" claim.
+// Returns empty string if the header is missing or the email cannot be extracted.
+func extractUserEmail(r *http.Request) string {
+	encoded := r.Header.Get(constants.HeaderEndpointAPIUserInfo)
+	if encoded == "" {
+		return ""
+	}
+
+	decoded, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		return ""
+	}
+
+	var claims struct {
+		Email string `json:"email"`
+	}
+	if err := json.Unmarshal(decoded, &claims); err != nil {
+		return ""
+	}
+	return claims.Email
 }

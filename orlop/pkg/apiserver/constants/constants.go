@@ -173,3 +173,14 @@ const (
 	// AnnotationInitialEventsEnd marks the end of initial events in watch.
 	AnnotationInitialEventsEnd = "k8s.io/initial-events-end"
 )
+
+// Private Annotations
+const (
+	// AnnotationCreatedBy identifies the authenticated user who created the resource.
+	// Uses the private prefix so it is automatically stripped from the public API.
+	AnnotationCreatedBy = "private.orlop.gcp.managed.openshift.io/created-by"
+
+	// HeaderEndpointAPIUserInfo is the header set by ESPv2 containing
+	// the base64url-encoded JWT payload with authenticated user info.
+	HeaderEndpointAPIUserInfo = "X-Endpoint-API-UserInfo"
+)

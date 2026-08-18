@@ -46,10 +46,12 @@ const (
 	// Format: "gcp.managed.openshift.io/managed-by"
 	LabelManagedBy = "gcp.managed.openshift.io/managed-by"
 
-	// AnnotationCreatedBy identifies the entity that created the resource.
-	// Format: "gcp.managed.openshift.io/created-by"
-	// Example value: "gecko-controllers"
-	AnnotationCreatedBy = "gcp.managed.openshift.io/created-by"
+	// AnnotationCreatedBy identifies the authenticated user who created the resource.
+	// Uses the private prefix so it is automatically stripped from the public API
+	// and cannot be set or modified by external clients.
+	// Format: "private.orlop.gcp.managed.openshift.io/created-by"
+	// Example value: "user@example.com"
+	AnnotationCreatedBy = "private.orlop.gcp.managed.openshift.io/created-by"
 )
 
 // Finalizer constants for deletion handling.
