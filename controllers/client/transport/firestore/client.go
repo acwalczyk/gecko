@@ -351,6 +351,149 @@ func (c *Client) Delete(ctx context.Context, targetCluster, clusterID string) er
 	return nil
 }
 
+// GetDeleteStatus queries all DeleteDesire documents for the given clusterID
+// and checks if all have Successful=True condition.
+func (c *Client) GetDeleteStatus(ctx context.Context, targetCluster, clusterID string) (*transport.DeleteStatus, error) {
+	mc, err := c.clients(ctx, targetCluster)
+	if err != nil {
+		return nil, err
+	}
+
+	// Query all DeleteDesires from specs DB.
+	specsSnaps, err := mc.specs.Collection(collectionDeleteDesires).
+		Where("spec.clusterID", "==", clusterID).
+		Documents(ctx).GetAll()
+	if err != nil {
+		return nil, fmt.Errorf("firestore transport: GetDeleteStatus %s/%s query specs: %w", targetCluster, clusterID, err)
+	}
+
+	// Also query ApplyDesires to distinguish "never started" from "completed".
+	applySnaps, err := mc.specs.Collection(collectionApplyDesires).
+		Where("spec.clusterID", "==", clusterID).
+		Documents(ctx).GetAll()
+	if err != nil {
+		return nil, fmt.Errorf("firestore transport: GetDeleteStatus %s/%s query apply desires: %w", targetCluster, clusterID, err)
+	}
+
+	if len(specsSnaps) == 0 {
+		// No DeleteDesires found.
+		// If ApplyDesires exist, deletion never started (controller must call Delete).
+		// If no ApplyDesires, deletion completed.
+		return &transport.DeleteStatus{
+			AllSuccessful:     len(applySnaps) == 0,
+			PendingCount:      0,
+			TotalCount:        0,
+			ApplyDesiresCount: len(applySnaps),
+		}, nil
+	}
+
+	// Fetch corresponding status documents.
+	statusRefs := make([]*firestore.DocumentRef, len(specsSnaps))
+	for i, snap := range specsSnaps {
+		statusRefs[i] = mc.status.Collection(collectionDeleteDesires).Doc(snap.Ref.ID)
+	}
+	statusSnaps, err := mc.status.GetAll(ctx, statusRefs)
+	if err != nil {
+		return nil, fmt.Errorf("firestore transport: GetDeleteStatus %s/%s fetch status: %w", targetCluster, clusterID, err)
+	}
+
+	pending := 0
+	for _, snap := range statusSnaps {
+		if !snap.Exists() {
+			// kube-applier-gcp hasn't processed this DeleteDesire yet.
+			pending++
+			continue
+		}
+		var dd kubeapplier.DeleteDesire
+		if err := snap.DataTo(&dd); err != nil {
+			return nil, fmt.Errorf("firestore transport: GetDeleteStatus %s/%s decode: %w", targetCluster, clusterID, err)
+		}
+		// Check for Successful=True condition.
+		successful := false
+		for _, cond := range dd.Status.Conditions {
+			if cond.Type == kubeapplier.ConditionTypeSuccessful && cond.Status == "True" {
+				successful = true
+				break
+			}
+		}
+		if !successful {
+			pending++
+		}
+	}
+
+	return &transport.DeleteStatus{
+		AllSuccessful:     pending == 0,
+		PendingCount:      pending,
+		TotalCount:        len(specsSnaps),
+		ApplyDesiresCount: len(applySnaps),
+	}, nil
+}
+
+// CleanupDeleteDesires removes all DeleteDesire documents for the given clusterID
+// from both specs and status DBs.
+func (c *Client) CleanupDeleteDesires(ctx context.Context, targetCluster, clusterID string) error {
+	mc, err := c.clients(ctx, targetCluster)
+	if err != nil {
+		return err
+	}
+
+	// Query DeleteDesires from specs DB.
+	snaps, err := mc.specs.Collection(collectionDeleteDesires).
+		Where("spec.clusterID", "==", clusterID).
+		Documents(ctx).GetAll()
+	if err != nil {
+		return fmt.Errorf("firestore transport: CleanupDeleteDesires %s/%s query: %w", targetCluster, clusterID, err)
+	}
+
+	if len(snaps) == 0 {
+		c.log.Infof(ctx, "firestore transport: CleanupDeleteDesires %s/%s: no delete desires found", targetCluster, clusterID)
+		return nil
+	}
+
+	// Delete in batches (Firestore batch write limit = 500).
+	// Use separate BulkWriters: specs and status refs have same shortPath (deletedesires/<id>),
+	// BulkWriter rejects duplicate paths.
+	specsBatch := mc.specs.BulkWriter(ctx)
+	statusBatch := mc.status.BulkWriter(ctx)
+	var specsJobs []*firestore.BulkWriterJob
+	var statusJobs []*firestore.BulkWriterJob
+
+	for _, snap := range snaps {
+		// Delete from specs DB.
+		job, err := specsBatch.Delete(snap.Ref)
+		if err != nil {
+			return fmt.Errorf("firestore transport: CleanupDeleteDesires %s/%s delete specs: %w", targetCluster, clusterID, err)
+		}
+		specsJobs = append(specsJobs, job)
+
+		// Delete from status DB (best-effort — may not exist yet).
+		statusRef := mc.status.Collection(collectionDeleteDesires).Doc(snap.Ref.ID)
+		job, err = statusBatch.Delete(statusRef)
+		if err != nil {
+			return fmt.Errorf("firestore transport: CleanupDeleteDesires %s/%s delete status: %w", targetCluster, clusterID, err)
+		}
+		statusJobs = append(statusJobs, job)
+	}
+
+	specsBatch.Flush()
+	statusBatch.Flush()
+
+	// Check job results.
+	for _, job := range specsJobs {
+		if _, err := job.Results(); err != nil {
+			return fmt.Errorf("firestore transport: CleanupDeleteDesires %s/%s specs write error: %w", targetCluster, clusterID, err)
+		}
+	}
+	for _, job := range statusJobs {
+		if _, err := job.Results(); err != nil {
+			return fmt.Errorf("firestore transport: CleanupDeleteDesires %s/%s status write error: %w", targetCluster, clusterID, err)
+		}
+	}
+
+	c.log.Infof(ctx, "firestore transport: cleaned up %d delete desires for %s/%s", len(snaps), targetCluster, clusterID)
+	return nil
+}
+
 // Close closes all cached Firestore clients. Call on shutdown.
 func (c *Client) Close() {
 	c.mu.Lock()

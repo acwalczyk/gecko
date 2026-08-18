@@ -134,6 +134,11 @@ func (e *errTransport) GetStatus(_ context.Context, _, _ string) (*transport.Sta
 	return nil, nil
 }
 func (e *errTransport) Delete(_ context.Context, _, _ string) error { return e.deleteErr }
+func (e *errTransport) GetDeleteStatus(_ context.Context, _, _ string) (*transport.DeleteStatus, error) {
+	// Return ApplyDesiresCount=1 to trigger Delete() call.
+	return &transport.DeleteStatus{AllSuccessful: false, TotalCount: 0, PendingCount: 0, ApplyDesiresCount: 1}, nil
+}
+func (e *errTransport) CleanupDeleteDesires(_ context.Context, _, _ string) error { return nil }
 
 // clusterReq returns a reconcile.Request for the given cluster name.
 func clusterReq(name string) reconcile.Request {
@@ -719,8 +724,9 @@ func TestReconcile_AddFinalizer_UpdateError(t *testing.T) {
 // Test cases – deletion
 // ---------------------------------------------------------------------------
 
-// TestReconcile_Deletion_HappyPath verifies that when a cluster has a DeletionTimestamp,
-// transport.Delete is called and the finalizer is removed.
+// TestReconcile_Deletion_HappyPath verifies the async deletion flow:
+// 1. First reconcile: calls transport.Delete, requeues
+// 2. Second reconcile: polls GetDeleteStatus (returns AllSuccessful=true), cleans up, removes finalizer
 func TestReconcile_Deletion_HappyPath(t *testing.T) {
 	clusterID := "cluster-abc"
 	mcName := "mc-cluster-1"
@@ -734,14 +740,35 @@ func TestReconcile_Deletion_HappyPath(t *testing.T) {
 	tr := mock.New()
 	r, storeClient := buildReconciler(t, cluster, nil, tr, nil)
 
+	// Simulate ApplyDesires exist (deletion not started).
+	key := mcName + "/" + clusterID
+	tr.DeleteStatusOverrides[key] = &transport.DeleteStatus{
+		AllSuccessful:     false,
+		TotalCount:        0,
+		PendingCount:      0,
+		ApplyDesiresCount: 5,
+	}
+
+	// First reconcile: initiate deletion.
 	result, err := r.Reconcile(context.Background(), clusterReq(clusterID))
 	require.NoError(t, err)
-	require.Zero(t, result.RequeueAfter)
-
+	require.Equal(t, 15*time.Second, result.RequeueAfter, "should requeue after initiating delete")
 	require.Len(t, tr.DeleteCalls, 1)
 	require.Equal(t, mcName, tr.DeleteCalls[0].TargetCluster)
 	require.Equal(t, clusterID, tr.DeleteCalls[0].ClusterID)
-	require.Empty(t, tr.ApplyCalls, "should not Apply during deletion")
+	require.False(t, storeClient.updateCalled, "finalizer not removed yet")
+
+	// Simulate kube-applier-gcp completing deletion.
+	tr.DeleteStatusOverrides[key] = &transport.DeleteStatus{AllSuccessful: true, TotalCount: 5, PendingCount: 0, ApplyDesiresCount: 0}
+
+	// Second reconcile: check status, cleanup, remove finalizer.
+	storeClient.updateCalled = false // reset
+	result, err = r.Reconcile(context.Background(), clusterReq(clusterID))
+	require.NoError(t, err)
+	require.Zero(t, result.RequeueAfter)
+	require.Len(t, tr.CleanupDeleteDesiresCalls, 1, "should cleanup DeleteDesires")
+	require.Equal(t, mcName, tr.CleanupDeleteDesiresCalls[0].TargetCluster)
+	require.Equal(t, clusterID, tr.CleanupDeleteDesiresCalls[0].ClusterID)
 
 	require.True(t, storeClient.updateCalled, "expected Update to remove finalizer")
 	updated := storeClient.updated.(*privatev1.Cluster)
@@ -813,9 +840,10 @@ func TestReconcile_Deletion_NoFinalizer(t *testing.T) {
 }
 
 // TestReconcile_Deletion_RemoveFinalizerError verifies that an error removing the
-// finalizer after successful transport.Delete is propagated.
+// finalizer after successful deletion/cleanup is propagated.
 func TestReconcile_Deletion_RemoveFinalizerError(t *testing.T) {
 	clusterID := "cluster-abc"
+	mcName := "mc-cluster-1"
 	cluster := buildReadyCluster(clusterID, "4.15.0")
 	cluster.Status.Conditions = append(cluster.Status.Conditions, metav1.Condition{
 		Type: "ResourcesApplied", Status: metav1.ConditionTrue, Reason: "Applied",
@@ -824,12 +852,32 @@ func TestReconcile_Deletion_RemoveFinalizerError(t *testing.T) {
 	cluster.SetDeletionTimestamp(&now)
 
 	tr := mock.New()
-	r, _ := buildReconciler(t, cluster, nil, tr, nil, func(m *mockStoreClient) {
+	r, storeClient := buildReconciler(t, cluster, nil, tr, nil, func(m *mockStoreClient) {
 		m.updateErr = fmt.Errorf("etcd write error")
 	})
 
-	_, err := r.Reconcile(context.Background(), clusterReq(clusterID))
+	// Simulate ApplyDesires exist (deletion not started).
+	key := mcName + "/" + clusterID
+	tr.DeleteStatusOverrides[key] = &transport.DeleteStatus{
+		AllSuccessful:     false,
+		TotalCount:        0,
+		PendingCount:      0,
+		ApplyDesiresCount: 3,
+	}
+
+	// First reconcile: initiate deletion, requeues.
+	result, err := r.Reconcile(context.Background(), clusterReq(clusterID))
+	require.NoError(t, err)
+	require.Equal(t, 15*time.Second, result.RequeueAfter)
+	require.Len(t, tr.DeleteCalls, 1)
+
+	// Simulate completion.
+	tr.DeleteStatusOverrides[key] = &transport.DeleteStatus{AllSuccessful: true, TotalCount: 3, PendingCount: 0, ApplyDesiresCount: 0}
+
+	// Second reconcile: cleanup succeeds, but finalizer removal fails.
+	_, err = r.Reconcile(context.Background(), clusterReq(clusterID))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "remove finalizer")
-	require.Len(t, tr.DeleteCalls, 1, "transport.Delete should have been called before finalizer removal failed")
+	require.Len(t, tr.CleanupDeleteDesiresCalls, 1, "cleanup should have been called before finalizer removal failed")
+	require.True(t, storeClient.updateCalled)
 }
