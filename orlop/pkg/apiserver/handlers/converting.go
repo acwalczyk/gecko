@@ -85,6 +85,9 @@ func (h *ConvertingResourceHandler) Create(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Status is controller-managed; strip from public input.
+	delete(objMap, "status")
+
 	// Note: ownerReferences validation is intentionally omitted here.
 	// The public metadata schema prunes ownerReferences from input, so
 	// validateOwnerReferencesFromMap would always see an empty list.
@@ -392,6 +395,9 @@ func (h *ConvertingResourceHandler) Update(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Status is controller-managed; strip from public input.
+	delete(objMap, "status")
+
 	// Note: ownerReferences validation is intentionally omitted here.
 	// The public metadata schema prunes ownerReferences from input, so
 	// validateOwnerReferencesFromMap would always see an empty list.
@@ -570,6 +576,9 @@ func (h *ConvertingResourceHandler) Patch(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to unmarshal patched object: %v", err))
 		return
 	}
+
+	// Status is controller-managed; strip from public input.
+	delete(objMap, "status")
 
 	// Process object (prune, default, validate) using public schema.
 	// Fail-closed: reject request if processor is nil (misconfiguration)
