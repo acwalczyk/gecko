@@ -112,7 +112,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 	vr := cluster.Status.VersionResolution
 
 	// Extract platform fields.
-	var gcpProjectID, gcpRegion, gcpNetwork, gcpSubnet string
+	var gcpProjectID, gcpRegion, gcpNetwork, gcpSubnet, gcpEndpointAccess string
 	var wifProjectNumber, wifPoolID, wifProviderID string
 	var nodePoolEmail, controlPlaneEmail, cloudControllerEmail string
 	var storageEmail, imageRegistryEmail, networkEmail string
@@ -121,6 +121,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		gcpRegion = gcp.Region
 		gcpNetwork = gcp.Network
 		gcpSubnet = gcp.Subnet
+		gcpEndpointAccess = gcp.EndpointAccess
 		wif := gcp.WorkloadIdentity
 		wifProjectNumber = wif.ProjectNumber
 		wifPoolID = wif.PoolID
@@ -149,6 +150,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		GCPRegion:            gcpRegion,
 		GCPNetwork:           gcpNetwork,
 		GCPSubnet:            gcpSubnet,
+		GCPEndpointAccess:    gcpEndpointAccess,
 		WIFProjectNumber:     wifProjectNumber,
 		WIFPoolID:            wifPoolID,
 		WIFProviderID:        wifProviderID,

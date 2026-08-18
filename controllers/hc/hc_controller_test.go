@@ -2,6 +2,7 @@ package hc_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -480,6 +481,41 @@ func TestReconcile_HappyPath(t *testing.T) {
 	require.Equal(t, mcName, tr.ApplyCalls[0].TargetCluster)
 	require.Equal(t, clusterID, tr.ApplyCalls[0].ClusterID)
 	require.True(t, storeClient.statusWriter.called, "expected Status().Update to be called")
+}
+
+// TestReconcile_EndpointAccessPropagated verifies that the EndpointAccess value from the
+// cluster spec is passed through to the HostedCluster manifest.
+func TestReconcile_EndpointAccessPropagated(t *testing.T) {
+	clusterID := "cluster-abc"
+	mcName := "mc-cluster-1"
+
+	cluster := buildReadyCluster(clusterID, "4.15.0")
+	cluster.Spec.Platform.GCP.EndpointAccess = "PublicAndPrivate"
+
+	tr := mock.New()
+	hcKey := fmt.Sprintf("hypershift.openshift.io/v1beta1/hostedclusters/clusters-%s/%s", clusterID, clusterID)
+	tr.StatusOverrides[mcName+"/"+clusterID] = &transport.Status{
+		Conditions: []metav1.Condition{
+			{Type: "Applied", Status: metav1.ConditionTrue, Reason: "AppliedSuccessfully", LastTransitionTime: metav1.Now()},
+		},
+		ResourceStatuses: map[string]map[string]string{
+			hcKey: {"availableCondition": "True"},
+		},
+	}
+
+	r, _ := buildReconciler(t, cluster, nil, tr, nil)
+
+	_, err := r.Reconcile(context.Background(), clusterReq(clusterID))
+	require.NoError(t, err)
+	require.Len(t, tr.ApplyCalls, 1)
+
+	// The HostedCluster manifest is the 4th manifest (index 3).
+	var obj map[string]any
+	require.NoError(t, json.Unmarshal(tr.ApplyCalls[0].Manifests[3], &obj))
+	spec := obj["spec"].(map[string]any)
+	platform := spec["platform"].(map[string]any)
+	gcp := platform["gcp"].(map[string]any)
+	require.Equal(t, "PublicAndPrivate", gcp["endpointAccess"], "EndpointAccess from cluster spec should be propagated to the HostedCluster manifest")
 }
 
 // TestReconcile_HCFeedback_SetsHostedClusterResult verifies that controlPlaneEndpoint and
