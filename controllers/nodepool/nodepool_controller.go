@@ -95,41 +95,41 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 
 	// Gate: cluster placement must be ready.
 	if cluster.Status.PlacementResult == nil || cluster.Status.PlacementResult.ManagementClusterName == "" {
-		log.Infof(ctx, "placement not ready for nodepool %s, waiting for next event", nodepoolID)
+		log.Infof(ctx, "placement not ready for nodepool %s, requeueing after %s", nodepoolID, requeuePending)
 		if setWaitingNPConditions(&np, "PlacementNotReady", "Waiting for cluster placement to select a management cluster") {
 			if err := r.client.Status().Update(ctx, &np); err != nil && !apierrors.IsConflict(err) {
 				return reconcile.Result{}, fmt.Errorf("nodepool reconciler: update nodepool status: %w", err)
 			}
 		}
-		return reconcile.Result{}, nil
+		return reconcile.Result{RequeueAfter: requeuePending}, nil
 	}
 
 	// Gate: HC must be Available (HostedClusterAvailable condition on the cluster).
 	if !meta.IsStatusConditionTrue(cluster.Status.Conditions, "HostedClusterAvailable") {
-		log.Infof(ctx, "hc not available for nodepool %s, waiting for next event", nodepoolID)
+		log.Infof(ctx, "hc not available for nodepool %s, requeueing after %s", nodepoolID, requeuePending)
 		if setWaitingNPConditions(&np, "HostedClusterNotAvailable", "Waiting for HostedCluster to become available") {
 			if err := r.client.Status().Update(ctx, &np); err != nil && !apierrors.IsConflict(err) {
 				return reconcile.Result{}, fmt.Errorf("nodepool reconciler: update nodepool status: %w", err)
 			}
 		}
-		return reconcile.Result{}, nil
+		return reconcile.Result{RequeueAfter: requeuePending}, nil
 	}
 
 	// Gate: nodepool VR must be ready.
 	if np.Status.VersionResolution == nil || np.Status.VersionResolution.ReleaseVersion == "" {
-		log.Infof(ctx, "nodepool VR not ready for nodepool %s, waiting for next event", nodepoolID)
+		log.Infof(ctx, "nodepool VR not ready for nodepool %s, requeueing after %s", nodepoolID, requeuePending)
 		if setWaitingNPConditions(&np, "VersionResolutionNotReady", "Waiting for nodepool version resolution") {
 			if err := r.client.Status().Update(ctx, &np); err != nil && !apierrors.IsConflict(err) {
 				return reconcile.Result{}, fmt.Errorf("nodepool reconciler: update nodepool status: %w", err)
 			}
 		}
-		return reconcile.Result{}, nil
+		return reconcile.Result{RequeueAfter: requeuePending}, nil
 	}
 
 	// Gate: VR version must match spec version.
 	if np.Status.VersionResolution.ReleaseVersion != np.Spec.Release.Version {
-		log.Infof(ctx, "nodepool VR version %q does not match spec version %q, waiting for next event",
-			np.Status.VersionResolution.ReleaseVersion, np.Spec.Release.Version)
+		log.Infof(ctx, "nodepool VR version %q does not match spec version %q, requeueing after %s",
+			np.Status.VersionResolution.ReleaseVersion, np.Spec.Release.Version, requeuePending)
 		msg := fmt.Sprintf("VR version %q does not match spec version %q",
 			np.Status.VersionResolution.ReleaseVersion, np.Spec.Release.Version)
 		if setWaitingNPConditions(&np, "VersionMismatch", msg) {
@@ -137,7 +137,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 				return reconcile.Result{}, fmt.Errorf("nodepool reconciler: update nodepool status: %w", err)
 			}
 		}
-		return reconcile.Result{}, nil
+		return reconcile.Result{RequeueAfter: requeuePending}, nil
 	}
 
 	// Extract nodepool GCP platform fields.

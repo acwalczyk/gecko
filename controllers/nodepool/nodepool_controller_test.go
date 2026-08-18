@@ -298,7 +298,7 @@ func TestReconcile_NoPlacement(t *testing.T) {
 
 	result, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
 	require.NoError(t, err)
-	require.Equal(t, time.Duration(0), result.RequeueAfter)
+	require.Equal(t, requeuePending, result.RequeueAfter, "should requeue while placement is not ready")
 	require.Empty(t, tr.ApplyCalls)
 }
 
@@ -311,7 +311,7 @@ func TestReconcile_NoPlacement_StatusUpdateConflict(t *testing.T) {
 
 	result, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
 	require.NoError(t, err)
-	require.Zero(t, result.RequeueAfter)
+	require.Equal(t, requeuePending, result.RequeueAfter)
 	require.True(t, storeClient.statusWriter.called)
 }
 
@@ -340,7 +340,7 @@ func TestReconcile_HCNotAvailable(t *testing.T) {
 
 	result, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
 	require.NoError(t, err)
-	require.Equal(t, time.Duration(0), result.RequeueAfter)
+	require.Equal(t, requeuePending, result.RequeueAfter, "should requeue while HC is not available")
 	require.Empty(t, tr.ApplyCalls)
 }
 
@@ -353,7 +353,7 @@ func TestReconcile_HCNotAvailable_StatusUpdateConflict(t *testing.T) {
 
 	result, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
 	require.NoError(t, err)
-	require.Zero(t, result.RequeueAfter)
+	require.Equal(t, requeuePending, result.RequeueAfter)
 	require.True(t, storeClient.statusWriter.called)
 }
 
@@ -382,7 +382,7 @@ func TestReconcile_NodePoolVRNotReady(t *testing.T) {
 
 	result, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
 	require.NoError(t, err)
-	require.Equal(t, time.Duration(0), result.RequeueAfter)
+	require.Equal(t, requeuePending, result.RequeueAfter, "should requeue while VR is not ready")
 	require.Empty(t, tr.ApplyCalls)
 }
 
@@ -395,7 +395,7 @@ func TestReconcile_VRNotReady_StatusUpdateConflict(t *testing.T) {
 
 	result, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
 	require.NoError(t, err)
-	require.Zero(t, result.RequeueAfter)
+	require.Equal(t, requeuePending, result.RequeueAfter)
 	require.True(t, storeClient.statusWriter.called)
 }
 
@@ -421,7 +421,7 @@ func TestReconcile_VRVersionMismatch(t *testing.T) {
 
 	result, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
 	require.NoError(t, err)
-	require.Zero(t, result.RequeueAfter)
+	require.Equal(t, requeuePending, result.RequeueAfter, "should requeue while VR version mismatches")
 	require.Empty(t, tr.ApplyCalls)
 }
 
@@ -435,7 +435,7 @@ func TestReconcile_VRVersionMismatch_StatusUpdateConflict(t *testing.T) {
 
 	result, err := r.Reconcile(context.Background(), npReq("cluster-test", "np-test"))
 	require.NoError(t, err)
-	require.Zero(t, result.RequeueAfter)
+	require.Equal(t, requeuePending, result.RequeueAfter)
 	require.True(t, storeClient.statusWriter.called)
 }
 
