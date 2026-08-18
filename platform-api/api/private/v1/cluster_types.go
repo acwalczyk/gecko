@@ -153,7 +153,7 @@ type ClusterStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
 	// PlacementResult is written by the placement controller.
-	// +orlop:public
+	// Not exposed on the public API.
 	PlacementResult *PlacementResult `json:"placementResult,omitempty"`
 
 	// HostedClusterResult is written by the hc-adapter.

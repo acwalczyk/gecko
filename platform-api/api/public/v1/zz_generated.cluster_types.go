@@ -141,17 +141,9 @@ type DNSSpec struct {
 type ClusterStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
-	// PlacementResult is written by the placement controller.
-
-	PlacementResult *PlacementResult `json:"placementResult,omitempty"`
-
 	// HostedClusterResult is written by the hc-adapter.
 
 	HostedClusterResult *HostedClusterResult `json:"hostedClusterResult,omitempty"`
-}
-
-// PlacementResult holds the placement controller's output.
-type PlacementResult struct {
 }
 
 // HostedClusterResult holds the hc-adapter's output from ManifestWork status feedback.

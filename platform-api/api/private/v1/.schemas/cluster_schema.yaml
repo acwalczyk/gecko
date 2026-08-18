@@ -216,7 +216,9 @@ properties:
             type: string
         type: object
       placementResult:
-        description: PlacementResult is written by the placement controller.
+        description: |-
+          PlacementResult is written by the placement controller.
+          Not exposed on the public API.
         properties:
           baseDomain:
             type: string
