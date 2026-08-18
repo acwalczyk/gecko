@@ -30,6 +30,9 @@ type DeleteStatus struct {
 	PendingCount int
 	// TotalCount is the total number of DeleteDesires found.
 	TotalCount int
+	// ApplyDesiresCount is the number of ApplyDesires still present.
+	// When > 0 and TotalCount == 0, Delete() must be called to enqueue deletion.
+	ApplyDesiresCount int
 }
 
 // Client abstracts the transport layer for delivering resources to management clusters.

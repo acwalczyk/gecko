@@ -216,14 +216,17 @@ func (r *Reconciler) handleDeletion(ctx context.Context, cluster *privatev1.Clus
 		}
 
 		if deleteStatus.TotalCount == 0 {
-			// No DeleteDesires exist yet — initiate deletion.
-			log.Infof(ctx, "%s: deleting resources for cluster %s from %s", adapterName, clusterID, mcName)
-			if err := r.transport.Delete(ctx, mcName, clusterID); err != nil {
-				return reconcile.Result{}, fmt.Errorf("%s: delete resources: %w", adapterName, err)
+			// No DeleteDesires exist.
+			if deleteStatus.ApplyDesiresCount > 0 {
+				// ApplyDesires still present → deletion never started, call Delete().
+				log.Infof(ctx, "%s: deleting resources for cluster %s from %s", adapterName, clusterID, mcName)
+				if err := r.transport.Delete(ctx, mcName, clusterID); err != nil {
+					return reconcile.Result{}, fmt.Errorf("%s: delete resources: %w", adapterName, err)
+				}
+				log.Infof(ctx, "%s: delete initiated for cluster %s, requeueing to poll status", adapterName, clusterID)
+				return reconcile.Result{RequeueAfter: requeuePending}, nil
 			}
-			// Requeue immediately to check status.
-			log.Infof(ctx, "%s: delete initiated for cluster %s, requeueing to poll status", adapterName, clusterID)
-			return reconcile.Result{RequeueAfter: requeuePending}, nil
+			// TotalCount=0 and ApplyDesiresCount=0 → deletion already complete (no-op), proceed to finalizer.
 		}
 
 		if !deleteStatus.AllSuccessful {

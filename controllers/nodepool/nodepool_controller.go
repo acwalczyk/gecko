@@ -245,14 +245,17 @@ func (r *Reconciler) handleDeletion(ctx context.Context, np *privatev1.NodePool,
 		}
 
 		if deleteStatus.TotalCount == 0 {
-			// No DeleteDesires exist yet — initiate deletion.
-			log.Infof(ctx, "nodepool reconciler: deleting resources for nodepool %s from %s", nodepoolID, mcName)
-			if err := r.transport.Delete(ctx, mcName, nodepoolID); err != nil {
-				return reconcile.Result{}, fmt.Errorf("nodepool reconciler: delete resources: %w", err)
+			// No DeleteDesires exist.
+			if deleteStatus.ApplyDesiresCount > 0 {
+				// ApplyDesires still present → deletion never started, call Delete().
+				log.Infof(ctx, "nodepool reconciler: deleting resources for nodepool %s from %s", nodepoolID, mcName)
+				if err := r.transport.Delete(ctx, mcName, nodepoolID); err != nil {
+					return reconcile.Result{}, fmt.Errorf("nodepool reconciler: delete resources: %w", err)
+				}
+				log.Infof(ctx, "nodepool reconciler: delete initiated for nodepool %s, requeueing to poll status", nodepoolID)
+				return reconcile.Result{RequeueAfter: requeuePending}, nil
 			}
-			// Requeue immediately to check status.
-			log.Infof(ctx, "nodepool reconciler: delete initiated for nodepool %s, requeueing to poll status", nodepoolID)
-			return reconcile.Result{RequeueAfter: requeuePending}, nil
+			// TotalCount=0 and ApplyDesiresCount=0 → deletion already complete (no-op), proceed to finalizer.
 		}
 
 		if !deleteStatus.AllSuccessful {

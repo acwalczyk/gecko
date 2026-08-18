@@ -120,8 +120,8 @@ func (c *Client) GetDeleteStatus(ctx context.Context, targetCluster, clusterID s
 	if override, ok := c.DeleteStatusOverrides[key]; ok {
 		return override, nil
 	}
-	// Default: all successful (no pending deletes).
-	return &transport.DeleteStatus{AllSuccessful: true, PendingCount: 0, TotalCount: 0}, nil
+	// Default: deletion complete (no DeleteDesires, no ApplyDesires).
+	return &transport.DeleteStatus{AllSuccessful: true, PendingCount: 0, TotalCount: 0, ApplyDesiresCount: 0}, nil
 }
 
 // CleanupDeleteDesires records the call and returns any configured error.

@@ -135,7 +135,8 @@ func (e *errTransport) GetStatus(_ context.Context, _, _ string) (*transport.Sta
 }
 func (e *errTransport) Delete(_ context.Context, _, _ string) error { return e.deleteErr }
 func (e *errTransport) GetDeleteStatus(_ context.Context, _, _ string) (*transport.DeleteStatus, error) {
-	return &transport.DeleteStatus{AllSuccessful: true}, nil
+	// Return ApplyDesiresCount=1 to trigger Delete() call.
+	return &transport.DeleteStatus{AllSuccessful: false, TotalCount: 0, PendingCount: 0, ApplyDesiresCount: 1}, nil
 }
 func (e *errTransport) CleanupDeleteDesires(_ context.Context, _, _ string) error { return nil }
 
@@ -739,6 +740,15 @@ func TestReconcile_Deletion_HappyPath(t *testing.T) {
 	tr := mock.New()
 	r, storeClient := buildReconciler(t, cluster, nil, tr, nil)
 
+	// Simulate ApplyDesires exist (deletion not started).
+	key := mcName + "/" + clusterID
+	tr.DeleteStatusOverrides[key] = &transport.DeleteStatus{
+		AllSuccessful:     false,
+		TotalCount:        0,
+		PendingCount:      0,
+		ApplyDesiresCount: 5,
+	}
+
 	// First reconcile: initiate deletion.
 	result, err := r.Reconcile(context.Background(), clusterReq(clusterID))
 	require.NoError(t, err)
@@ -749,8 +759,7 @@ func TestReconcile_Deletion_HappyPath(t *testing.T) {
 	require.False(t, storeClient.updateCalled, "finalizer not removed yet")
 
 	// Simulate kube-applier-gcp completing deletion.
-	key := mcName + "/" + clusterID
-	tr.DeleteStatusOverrides[key] = &transport.DeleteStatus{AllSuccessful: true, TotalCount: 5, PendingCount: 0}
+	tr.DeleteStatusOverrides[key] = &transport.DeleteStatus{AllSuccessful: true, TotalCount: 5, PendingCount: 0, ApplyDesiresCount: 0}
 
 	// Second reconcile: check status, cleanup, remove finalizer.
 	storeClient.updateCalled = false // reset
@@ -847,6 +856,15 @@ func TestReconcile_Deletion_RemoveFinalizerError(t *testing.T) {
 		m.updateErr = fmt.Errorf("etcd write error")
 	})
 
+	// Simulate ApplyDesires exist (deletion not started).
+	key := mcName + "/" + clusterID
+	tr.DeleteStatusOverrides[key] = &transport.DeleteStatus{
+		AllSuccessful:     false,
+		TotalCount:        0,
+		PendingCount:      0,
+		ApplyDesiresCount: 3,
+	}
+
 	// First reconcile: initiate deletion, requeues.
 	result, err := r.Reconcile(context.Background(), clusterReq(clusterID))
 	require.NoError(t, err)
@@ -854,8 +872,7 @@ func TestReconcile_Deletion_RemoveFinalizerError(t *testing.T) {
 	require.Len(t, tr.DeleteCalls, 1)
 
 	// Simulate completion.
-	key := mcName + "/" + clusterID
-	tr.DeleteStatusOverrides[key] = &transport.DeleteStatus{AllSuccessful: true, TotalCount: 3, PendingCount: 0}
+	tr.DeleteStatusOverrides[key] = &transport.DeleteStatus{AllSuccessful: true, TotalCount: 3, PendingCount: 0, ApplyDesiresCount: 0}
 
 	// Second reconcile: cleanup succeeds, but finalizer removal fails.
 	_, err = r.Reconcile(context.Background(), clusterReq(clusterID))

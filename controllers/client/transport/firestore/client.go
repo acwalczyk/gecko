@@ -367,12 +367,23 @@ func (c *Client) GetDeleteStatus(ctx context.Context, targetCluster, clusterID s
 		return nil, fmt.Errorf("firestore transport: GetDeleteStatus %s/%s query specs: %w", targetCluster, clusterID, err)
 	}
 
+	// Also query ApplyDesires to distinguish "never started" from "completed".
+	applySnaps, err := mc.specs.Collection(collectionApplyDesires).
+		Where("spec.clusterID", "==", clusterID).
+		Documents(ctx).GetAll()
+	if err != nil {
+		return nil, fmt.Errorf("firestore transport: GetDeleteStatus %s/%s query apply desires: %w", targetCluster, clusterID, err)
+	}
+
 	if len(specsSnaps) == 0 {
-		// No DeleteDesires found — deletion already complete or never started.
+		// No DeleteDesires found.
+		// If ApplyDesires exist, deletion never started (controller must call Delete).
+		// If no ApplyDesires, deletion completed.
 		return &transport.DeleteStatus{
-			AllSuccessful: true,
-			PendingCount:  0,
-			TotalCount:    0,
+			AllSuccessful:     len(applySnaps) == 0,
+			PendingCount:      0,
+			TotalCount:        0,
+			ApplyDesiresCount: len(applySnaps),
 		}, nil
 	}
 
@@ -411,9 +422,10 @@ func (c *Client) GetDeleteStatus(ctx context.Context, targetCluster, clusterID s
 	}
 
 	return &transport.DeleteStatus{
-		AllSuccessful: pending == 0,
-		PendingCount:  pending,
-		TotalCount:    len(specsSnaps),
+		AllSuccessful:     pending == 0,
+		PendingCount:      pending,
+		TotalCount:        len(specsSnaps),
+		ApplyDesiresCount: len(applySnaps),
 	}, nil
 }
 
