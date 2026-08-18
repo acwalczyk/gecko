@@ -40,9 +40,8 @@ const DefaultPrivatePrefix = "private.orlop.gcp.managed.openshift.io/"
 //
 // To make a new condition public, add its type string to the appropriate Kind.
 var publicConditionTypes = map[string]sets.Set[string]{
-	"Cluster":    sets.New[string]("HostedClusterAvailable"),
-	"NodePool":   sets.New[string]("NodePoolAvailable", "NodePoolHealthy"),
-	"TestObject": sets.New[string]("HostedClusterAvailable"), // for test compatibility
+	"Cluster":  sets.New[string]("HostedClusterAvailable"),
+	"NodePool": sets.New[string]("NodePoolAvailable", "NodePoolHealthy"),
 }
 
 // Converter handles conversion between private and public API types using scheme conversion.
@@ -94,7 +93,9 @@ func (c *Converter) PrivateToPublic(private runtime.Object) (runtime.Object, err
 	c.filterPrivateMetadata(public)
 
 	// Filter non-public conditions
-	c.filterNonPublicConditions(public, gvk.Kind)
+	if err := c.filterNonPublicConditions(public, gvk.Kind); err != nil {
+		return nil, fmt.Errorf("failed to filter non-public conditions: %w", err)
+	}
 
 	// Filter finalizers (not exposed on public API)
 	c.filterFinalizers(public)
@@ -141,7 +142,7 @@ func (c *Converter) filterPrivateMetadata(obj runtime.Object) {
 // for the given Kind. All conditions are private by default; only explicitly
 // allowlisted conditions are kept. If the Kind is unknown (not in the allowlist),
 // all conditions are stripped (safe default).
-func (c *Converter) filterNonPublicConditions(obj runtime.Object, kind string) {
+func (c *Converter) filterNonPublicConditions(obj runtime.Object, kind string) error {
 	// Get the allowlist for this Kind
 	allowed := publicConditionTypes[kind]
 	// If Kind not in map, allowed is nil set — .Has() returns false for all conditions
@@ -149,23 +150,23 @@ func (c *Converter) filterNonPublicConditions(obj runtime.Object, kind string) {
 	// Convert to map to access status.conditions
 	jsonData, err := json.Marshal(obj)
 	if err != nil {
-		return
+		return fmt.Errorf("failed to marshal object for condition filtering: %w", err)
 	}
 
 	var objMap map[string]interface{}
 	if err := json.Unmarshal(jsonData, &objMap); err != nil {
-		return
+		return fmt.Errorf("failed to unmarshal object for condition filtering: %w", err)
 	}
 
 	// Check if status.conditions exists
 	status, ok := objMap["status"].(map[string]interface{})
 	if !ok {
-		return
+		return nil // no status field - nothing to filter
 	}
 
 	conditions, ok := status["conditions"].([]interface{})
 	if !ok {
-		return
+		return nil // no conditions field - nothing to filter
 	}
 
 	// Filter conditions - handle both string arrays and object arrays
@@ -201,10 +202,14 @@ func (c *Converter) filterNonPublicConditions(obj runtime.Object, kind string) {
 	// Marshal back and unmarshal into the object
 	filteredJSON, err := json.Marshal(objMap)
 	if err != nil {
-		return
+		return fmt.Errorf("failed to marshal filtered conditions: %w", err)
 	}
 
-	json.Unmarshal(filteredJSON, obj)
+	if err := json.Unmarshal(filteredJSON, obj); err != nil {
+		return fmt.Errorf("failed to unmarshal filtered conditions into object: %w", err)
+	}
+	
+	return nil
 }
 
 // filterFinalizers removes all finalizers from metadata (finalizers not exposed on public API).
@@ -222,10 +227,10 @@ func (c *Converter) filterFinalizers(obj runtime.Object) {
 //
 // Note: This creates new maps for labels/annotations rather than mutating the
 // original maps, so the caller's references remain unaffected.
-func (c *Converter) stripPrivateFieldsFromPublicInput(obj runtime.Object, kind string) {
+func (c *Converter) stripPrivateFieldsFromPublicInput(obj runtime.Object, kind string) error {
 	accessor, err := meta.Accessor(obj)
 	if err != nil {
-		return
+		return err
 	}
 
 	// Strip deletionTimestamp — only the Delete handler may set it
@@ -258,7 +263,11 @@ func (c *Converter) stripPrivateFieldsFromPublicInput(obj runtime.Object, kind s
 
 	// Strip non-public conditions from status — prevents clients from
 	// injecting internal condition state via Create/Update/Patch on public API.
-	c.filterNonPublicConditions(obj, kind)
+	if err := c.filterNonPublicConditions(obj, kind); err != nil {
+		return fmt.Errorf("failed to filter non-public conditions from public input: %w", err)
+	}
+	
+	return nil
 }
 
 // reconcileMetadata fixes the additive map merge problem with json.Unmarshal.
@@ -331,7 +340,9 @@ func (c *Converter) PublicToPrivate(public runtime.Object, existing runtime.Obje
 	gvk := public.GetObjectKind().GroupVersionKind()
 
 	// Strip private fields from public input before conversion
-	c.stripPrivateFieldsFromPublicInput(public, gvk.Kind)
+	if err := c.stripPrivateFieldsFromPublicInput(public, gvk.Kind); err != nil {
+		return nil, fmt.Errorf("failed to strip private fields from public input: %w", err)
+	}
 
 	// Marshal public object to JSON
 	jsonData, err := json.Marshal(public)
@@ -423,10 +434,33 @@ func (c *Converter) preserveNonPublicConditions(existing, converted runtime.Obje
 		convertedMap["status"] = status
 	}
 
-	// Append non-public conditions to existing conditions slice
+	// Get the allowlist for this Kind to filter out any existing non-public conditions
+	// from the converted object before appending. This prevents duplicates when public
+	// input omits status.conditions (converted still has conditions from seeded existing).
+	allowed := publicConditionTypes[kind]
 	conditions, _ := status["conditions"].([]interface{})
-	conditions = append(conditions, nonPublicConditions...)
-	status["conditions"] = conditions
+	
+	// Keep only public conditions from converted
+	var publicOnly []interface{}
+	for _, cond := range conditions {
+		// Try as string
+		if condStr, ok := cond.(string); ok {
+			if allowed.Has(condStr) {
+				publicOnly = append(publicOnly, cond)
+			}
+			continue
+		}
+		// Try as object
+		if condMap, ok := cond.(map[string]interface{}); ok {
+			if condType, ok := condMap["type"].(string); ok && allowed.Has(condType) {
+				publicOnly = append(publicOnly, cond)
+			}
+		}
+	}
+	
+	// Append non-public conditions from existing
+	publicOnly = append(publicOnly, nonPublicConditions...)
+	status["conditions"] = publicOnly
 
 	// Marshal back and unmarshal into the converted object
 	mergedJSON, err := json.Marshal(convertedMap)

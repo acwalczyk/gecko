@@ -654,7 +654,9 @@ func TestConverter_FilterNonPublicConditions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			converter.filterNonPublicConditions(tt.obj, tt.kind)
+			if err := converter.filterNonPublicConditions(tt.obj, tt.kind); err != nil {
+				t.Fatalf("filterNonPublicConditions() error = %v", err)
+			}
 			tt.validate(t, tt.obj)
 		})
 	}
@@ -697,7 +699,9 @@ func TestConverter_StripPrivateFieldsFromPublicInput_NoMutation(t *testing.T) {
 		t.Fatal("Setup error: private annotation should exist before strip")
 	}
 
-	converter.stripPrivateFieldsFromPublicInput(obj, "Cluster")
+	if err := converter.stripPrivateFieldsFromPublicInput(obj, "Cluster"); err != nil {
+		t.Fatalf("stripPrivateFieldsFromPublicInput() error = %v", err)
+	}
 
 	// After stripping: object should not have private labels/annotations
 	strippedLabels := obj.GetLabels()
@@ -909,8 +913,9 @@ func TestConverter_PublicToPrivate_PreservesNonPublicConditions(t *testing.T) {
 					},
 				}),
 			),
-			existing:       nil,
-			wantConditions: []string{"HostedClusterAvailable"},
+			existing: nil,
+			// TestObject not in allowlist - all conditions non-public - stripped from input
+			wantConditions: []string{},
 		},
 		{
 			name: "preserves non-public conditions via Patch round-trip simulation",
@@ -939,6 +944,28 @@ func TestConverter_PublicToPrivate_PreservesNonPublicConditions(t *testing.T) {
 				"HostedClusterAvailable",
 				"ResourcesApplied",
 				"VersionResolved",
+			},
+		},
+		{
+			name: "no duplicate conditions when public input omits status",
+			// Regression test for CodeRabbit issue: when public input omits status.conditions,
+			// converted object is seeded from existing (including non-public conditions).
+			// preserveNonPublicConditions must not duplicate those conditions.
+			publicObj: newTestObject(
+				// Public input has no status.conditions field
+			),
+			existing: newTestObject(
+				withStatus(map[string]interface{}{
+					"conditions": []interface{}{
+						map[string]interface{}{"type": "HostedClusterAvailable", "status": "True"},
+						map[string]interface{}{"type": "ResourcesApplied", "status": "True"},
+					},
+				}),
+			),
+			// Should have both conditions once, not duplicated
+			wantConditions: []string{
+				"HostedClusterAvailable",
+				"ResourcesApplied",
 			},
 		},
 	}
